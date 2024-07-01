@@ -160,7 +160,7 @@ class InternalMetricsChannel(AsyncChannel):
             self.send_meta(samples, timestamp)
 
         self.last_timestamp = self.next_timestamp
-        self.send_data(json.dumps([data]).encode())
+        self.send_text(json.dumps([data]))
 
     async def run(self, options):
         self.metrics = []
@@ -176,10 +176,4 @@ class InternalMetricsChannel(AsyncChannel):
             samples = self.sample()
             self.send_updates(samples, last_samples)
             last_samples = samples
-
-            try:
-                await asyncio.wait_for(self.read(), self.interval / 1000)
-                return
-            except asyncio.TimeoutError:
-                # Continue the while loop, we use wait_for as an interval timer.
-                continue
+            await asyncio.sleep(self.interval / 1000)

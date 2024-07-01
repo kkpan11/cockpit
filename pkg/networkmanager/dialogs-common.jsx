@@ -215,7 +215,7 @@ export const NetworkAction = ({ buttonText, iface, connectionSettings, type }) =
                 const packagekitExits = await packagekit.detect();
                 const os_release = await read_os_release();
 
-                // RHEL/CentOS 8 does not have wireguard-tools
+                // RHEL 8 does not have wireguard-tools
                 if (packagekitExits && os_release.PLATFORM_ID !== "platform:el8")
                     await install_dialog("wireguard-tools");
             }
@@ -254,14 +254,12 @@ export const NetworkAction = ({ buttonText, iface, connectionSettings, type }) =
     }
 
     return (
-        <>
-            <Button id={"networking-" + (!iface ? "add-" : "edit-") + type}
-                    isInline={!!iface}
-                    onClick={syn_click(model, show)}
-                    variant={!iface ? "secondary" : "link"}>
-                {buttonText || _("edit")}
-            </Button>
-        </>
+        <Button id={"networking-" + (!iface ? "add-" : "edit-") + type}
+                isInline={!!iface}
+                onClick={syn_click(model, show)}
+                variant={!iface ? "secondary" : "link"}>
+            {buttonText || _("edit")}
+        </Button>
     );
 };
 

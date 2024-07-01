@@ -112,6 +112,8 @@ The following fields are defined:
  * "capabilities": Optional, array of capability strings required from the bridge
  * "session": Optional, set to "private" or "shared". Defaults to "shared"
  * "flow-control": Optional boolean whether the channel should throttle itself via flow control.
+ * "send-acks": Set to "bytes" to send "ack" messages after processing each data frame
+
 
 If "binary" is set to "raw" then this channel transfers binary messages.
 
@@ -162,7 +164,13 @@ channels in the "fence" group are closed before resuming.
 The "flow-control" option controls whether a channel should attempt to throttle
 itself via flow control when sending or receiving large amounts of data. The
 current default (when this option is not provided) is to not do flow control.
-However, this default will likely change in the future.
+However, this default will likely change in the future.  This only impacts data
+sent by the bridge to the browser.
+
+If "send-acks" is set to "bytes" then the bridge will send acknowledgement
+messages detailing the number of payload bytes that it has received and
+processed.  This mechanism is provided for senders (ie: in the browser) who
+wish to throttle the data that they're sending to the bridge.
 
 **Host values**
 
@@ -1061,6 +1069,13 @@ The following options can be specified in the "open" control message:
 
  * "path": The path name of the file to replace.
 
+ * "size": The expected size of the file content.  If set, the file is
+   allocated immediately, and the channel "open" request will fail if
+   insufficient space is available.  If this option is set, it is not
+   possible to delete the file (ie: sending immediate EOF will result in
+   a 0 byte file) This option should always be provided if possible, to
+   avoid fragmentation, but is particularly important for large files.
+
  * "tag": The expected transaction tag of the file.  When the actual
    transaction tag of the file is different, the write will fail.  If
    you don't set this field, the actual tag will not be checked.  To
@@ -1069,9 +1084,15 @@ The following options can be specified in the "open" control message:
 You should write the new content to the channel as one or more
 messages.  To indicate the end of the content, send a "done" message.
 
-If you don't send any content messages before sending "done", the file
-will be removed.  To create an empty file, send at least one content
-message of length zero.
+If you don't send any content messages before sending "done", and no
+"size" was given, the file will be removed.  To create an empty file,
+send at least one content message of length zero, or set the "size" to
+0.
+
+If "size" is given, and less data is actually sent, then the file will
+be truncated down to the size of the data that was actually sent. If
+more data is sent, the file will grow (subject to additional
+fragmentation and potential ENOSPC errors).
 
 When the file does not have the expected tag, the channel will be
 closed with a "change-conflict" problem code.
@@ -1080,6 +1101,10 @@ The new content will be written to a temporary file and the old
 content will be replaced with a "rename" syscall when the channel is
 closed without problem code.  If the channel is closed with a problem
 code (by either client or server), the file will be left untouched.
+
+If `tag` is given, file owner and mode are preserved (copied from the
+original file). Other attributes (like ACLs or locally modified SELinux
+context) are never copied.
 
 In addition to the usual "problem" field, the "close" control message
 sent by the server might have the following additional fields:

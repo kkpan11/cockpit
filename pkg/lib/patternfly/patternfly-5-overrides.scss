@@ -75,6 +75,24 @@ select.pf-v5-c-form-control {
   color: var(--pf-v5-c-form-control--Color);
 }
 
+// Fix the double-spacing issue in the non-deprecated split buttons
+// https://github.com/patternfly/patternfly/issues/6632
+.pf-m-split-button .pf-v5-c-menu-toggle__controls {
+  margin: 0;
+}
+
+// Fix the double-spacing issue for other dropdowns
+// https://github.com/patternfly/patternfly/issues/6632
+.pf-v5-c-menu-toggle__controls:last-child > .pf-v5-c-menu-toggle__toggle-icon {
+  margin-inline-end: 0;
+}
+
+// Fix menus cropping contents
+// https://github.com/patternfly/patternfly/issues/6565
+.pf-v5-c-menu__item-text {
+  overflow: visible;
+}
+
 // The default gap between the rows in horizontal lists is too large
 .pf-v5-c-description-list.pf-m-horizontal-on-sm,
 .pf-v5-c-description-list.pf-m-horizontal {

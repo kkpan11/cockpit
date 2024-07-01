@@ -38,7 +38,7 @@ import { ExclamationCircleIcon, HelpIcon, UndoIcon } from '@patternfly/react-ico
 
 import cockpit from 'cockpit';
 import { superuser } from "superuser";
-import * as timeformat from "timeformat.js";
+import * as timeformat from "timeformat";
 import { apply_modal_dialog } from "cockpit-components-dialog.jsx";
 
 import { show_unexpected_error } from "./dialog-utils.js";
@@ -98,15 +98,9 @@ function get_expire(name) {
 
 export function AccountDetails({ accounts, groups, current_user, user, shells }) {
     const [expiration, setExpiration] = useState(null);
+
     useEffect(() => {
         get_expire(user).then(setExpiration);
-
-        // Watch `/var/run/utmp` to register when user logs in or out
-        const handle = cockpit.file("/var/run/utmp", { superuser: "try", binary: true });
-        handle.watch(() => {
-            get_expire(user).then(setExpiration);
-        }, { read: false });
-        return handle.close;
     }, [user, accounts]);
 
     const [edited_real_name, set_edited_real_name] = useState(null);

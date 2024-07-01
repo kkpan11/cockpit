@@ -20,7 +20,7 @@
 import testlib
 
 
-@testlib.skipImage("needs pybridge", "rhel-8*", "centos-8*")
+@testlib.skipImage("needs pybridge", "rhel-8*")
 # enable this once our cockpit/ws container can beiboot
 @testlib.skipOstree("client setup does not work with ws container")
 class TestClient(testlib.MachineCase):
@@ -39,7 +39,7 @@ class TestClient(testlib.MachineCase):
         if self.m_target.image.startswith("debian") or self.m_target.image.startswith("ubuntu"):
             self.m_target.execute("dpkg --purge cockpit-pcp-dbgsym || true; dpkg --purge cockpit-pcp pcp")
         elif self.m_target.image != 'arch':
-            self.m_target.execute("rpm --erase --verbose cockpit-pcp pcp")
+            self.m_target.execute("rpm --erase --verbose cockpit-pcp pcp; systemctl daemon-reload")
 
         # replicate the plumbing bits of src/client/cockpit-client to set up cockpit-beiboot
         self.m_client.write("/etc/cockpit/cockpit.conf", """
@@ -147,13 +147,11 @@ Command = /usr/bin/env python3 -m cockpit.beiboot
             b.wait_text("#conversation-prompt", "admin@10.111.113.2's password: ")
             b.set_val("#conversation-input", "wrong")
             b.click("#login-button")
-        b.wait_in_text("#login-fatal-message", "admin@10.111.113.2: Permission denied")
-        b.click("#login-again")
-        b.wait_text("#brand", "Connect to:")
-        # resets the host field
-        b.wait_val("#server-field", "")
+        b.wait_in_text("#login-error-message", "Authentication failed")
+        b.wait_val("#server-field", "10.111.113.2")
 
         # connect to most recent host
+        b.open("/")  # reset URL from /metrics and last remote =host
         b.click("#recent-hosts-list .host-line button.host-name")
         b.wait_text("#conversation-prompt", "admin@10.111.113.2's password: ")
         b.set_val("#conversation-input", "foobar")
@@ -208,9 +206,8 @@ Command = /usr/bin/env python3 -m cockpit.beiboot
         # unreachable host
         b.set_val("#server-field", "unknownhost")
         b.click("#login-button")
-        b.wait_in_text("#login-fatal-message", "Could not resolve hostname unknownhost")
-        b.click("#login-again")
-        b.wait_text("#brand", "Connect to:")
+        b.wait_in_text("#login-error-message", "Host is unknown")
+        b.wait_val("#server-field", "unknownhost")
         # does not appear in recent hosts
         b.wait_in_text("#recent-hosts-list", "10.111.113.2")
         self.assertNotIn("unknownhost", b.text("#recent-hosts-list"))
@@ -218,7 +215,7 @@ Command = /usr/bin/env python3 -m cockpit.beiboot
         # wrong port
         b.set_val("#server-field", "10.111.113.2:222")
         b.click("#login-button")
-        b.wait_in_text("#login-fatal-message", "connect to host 10.111.113.2 port 222: No route to host")
+        b.wait_in_text("#login-error-message", "Host is unknown")
 
         # unencrypted SSH key login
         self.m_client.execute("runuser -u admin -- ssh-keygen -t rsa -N '' -f ~admin/.ssh/id_rsa")

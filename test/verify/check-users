@@ -106,7 +106,6 @@ def createUser(
 
 
 @testlib.nondestructive
-@testlib.skipDistroPackage()
 class TestAccounts(testlib.MachineCase):
 
     def testBasic(self):
@@ -403,6 +402,7 @@ class TestAccounts(testlib.MachineCase):
 
         # Clean out the relevant logfiles
         m.execute("truncate -s0 /var/log/{[bw]tmp,lastlog} /var/run/utmp")
+        m.execute("rm -f /var/lib/lastlog/lastlog2.db /var/lib/wtmpdb/wtmp.db")
 
         self.login_and_go("/users")
         # Create a locked user with weak password
@@ -652,9 +652,9 @@ class TestAccounts(testlib.MachineCase):
 
         # On OSTree this happens over ssh
         if m.ostree_image:
-            self.restore_dir("/etc/ssh", restart_unit="sshd")
+            self.restore_dir("/etc/ssh", restart_unit=self.sshd_service)
             m.execute("sed -i 's/.*ChallengeResponseAuthentication.*/ChallengeResponseAuthentication yes/' /etc/ssh/sshd_config /etc/ssh/sshd_config.d/*")
-            m.execute("systemctl try-restart sshd.service")
+            m.execute(self.restart_sshd)
 
         b.wait_visible("#login")
         b.wait_not_visible("#conversation-group")
@@ -1046,7 +1046,8 @@ class TestAccounts(testlib.MachineCase):
         b.wait_not_present("#password-expiration")
 
         b.logout()
-        self.login_and_go("/users", user="scruffy")
+        # HACK: https://github.com/cockpit-project/cockpit/issues/20262
+        self.login_and_go("/users", user="scruffy", superuser=False)
         b.go("#/scruffy")
         b.wait_text("#account-user-name", "scruffy")
         b.wait_text("#account-expiration-text", "Never expire account")
@@ -1073,6 +1074,7 @@ class TestAccounts(testlib.MachineCase):
 
         # Clean out the relevant logfiles
         m.execute("truncate -s0 /var/log/{[bw]tmp,lastlog} /var/run/utmp")
+        m.execute("rm -f /var/lib/lastlog/lastlog2.db /var/lib/wtmpdb/wtmp.db")
 
         # Login once to create an entry
         self.login_and_go("/users")

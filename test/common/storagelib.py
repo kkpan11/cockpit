@@ -136,8 +136,11 @@ class StorageHelpers:
     def dialog_wait_open(self):
         self.browser.wait_visible('#dialog')
 
-    def dialog_wait_alert(self, text):
-        self.browser.wait_in_text('#dialog .pf-v5-c-alert__title', text)
+    def dialog_wait_alert(self, text1, text2=None):
+        def has_alert_title():
+            t = self.browser.text('#dialog .pf-v5-c-alert__title')
+            return text1 in t or (text2 is not None and text2 in t)
+        self.browser.wait(has_alert_title)
 
     def dialog_wait_title(self, text):
         self.browser.wait_in_text('#dialog .pf-v5-c-modal-box__title', text)
@@ -560,8 +563,9 @@ grub2-install {dev}
 grubby --update-kernel=ALL --args="root=UUID=$uuid rootflags=defaults rd.luks.uuid=$luks_uuid rd.lvm.lv=root/root"
 ! test -f /etc/kernel/cmdline || cp /etc/kernel/cmdline /new-root/etc/kernel/cmdline
 """, timeout=300)
-        m.spawn("dd if=/dev/zero of=/dev/vda bs=1M count=100; reboot", "reboot", check=False)
-        m.wait_reboot(300)
+        # destroy bootability of the current root partition, just to make sure
+        m.execute("rm -rf /etc/*")
+        m.reboot()
         self.assertEqual(m.execute("findmnt -n -o SOURCE /").strip(), "/dev/mapper/root-root")
 
     # Cards and tables
@@ -662,7 +666,7 @@ class StorageCase(MachineCase, StorageHelpers):
         else:
             self.default_crypto_type = "luks1"
 
-        if self.image.startswith("rhel-8") or self.image.startswith("centos-8"):
+        if self.image.startswith("rhel-8"):
             # HACK: missing /etc/crypttab file upsets udisks: https://github.com/storaged-project/udisks/pull/835
             self.machine.write("/etc/crypttab", "")
 

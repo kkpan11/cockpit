@@ -27,7 +27,7 @@ import { DatePicker } from "@patternfly/react-core/dist/esm/components/DatePicke
 
 import { has_errors } from "./dialog-utils.js";
 import { show_modal_dialog, apply_modal_dialog } from "cockpit-components-dialog.jsx";
-import * as timeformat from "timeformat.js";
+import * as timeformat from "timeformat";
 import { FormHelper } from "cockpit-components-form-helper";
 
 const _ = cockpit.gettext;
@@ -123,7 +123,7 @@ export function account_expiration_dialog(account, expire_date) {
                             } else
                                 prog.push("");
                             prog.push(account.name);
-                            return cockpit.spawn(prog, { superuser: true, err: "message" });
+                            return cockpit.spawn(prog, { superuser: "require", err: "message" });
                         } else {
                             update();
                             return Promise.reject();
@@ -220,7 +220,7 @@ export function password_expiration_dialog(account, expire_days) {
                         if (validate()) {
                             const days = state.mode == "expires" ? parseInt(state.days) : 99999;
                             return cockpit.spawn(["passwd", "-x", String(days), account.name],
-                                                 { superuser: true, err: "message" });
+                                                 { superuser: "require", err: "message" });
                         } else {
                             update();
                             return Promise.reject();

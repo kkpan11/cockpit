@@ -83,6 +83,16 @@ Once the machine is booted and the cockpit socket has been activated, a
 message will be printed describing how to access the virtual machine, via
 ssh and web.  See the "Helpful tips" section below.
 
+By default, it's only possible to contact the virtual machine from the host
+machine on which it's running.   If you want to conduct manual testing from
+other devices on your network, set `TEST_BIND_GLOBAL=1`, for example:
+
+     TEST_BIND_GLOBAL=1 bots/vm-run -s cockpit.socket debian-stable
+
+This will bind the Cockpit and SSH ports to all interfaces, making it possible
+to access a URL like http://yourhost.local:9091/ to test Cockpit from another
+machine on your LAN.
+
 ## Pixel tests
 
 Pixel tests in Cockpit ensure that updates of our dependencies or code changes
@@ -95,7 +105,7 @@ Pixel tests make a screenshot of a selector and compare it to a known good
 reference image. if there is a difference, the test fails and a pixel
 difference is shown.
 
-This works as our tests run in the [cockpit/tasks container](https://quay.io/repository/cockpit/tasks)
+This works as our tests run in the [cockpit/tasks container](https://ghcr.io/cockpit-project/tasks)
 which pins the browser and font rendering so repeated runs provide the same
 pixels. To generate new pixels, this tasks container must be used; your own
 browser and font rendering software might generate different results. For more
@@ -156,6 +166,7 @@ You can set these environment variables to configure the test suite:
 
     TEST_OS    The OS to run the tests in.  Currently supported values:
                   "centos-9-stream"
+                  "centos-10"
                   "debian-stable"
                   "debian-testing"
                   "fedora-39"

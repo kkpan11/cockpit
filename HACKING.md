@@ -17,7 +17,7 @@ remote, for example with
 
 ## Setting up development container
 
-The cockpit team maintains a [cockpit/tasks container](https://quay.io/repository/cockpit/tasks)
+The cockpit team maintains a [cockpit/tasks container](https://ghcr.io/cockpit-project/tasks)
 for both local development and CI. If you can install [toolbx](https://containertoolbx.org/) or
 [distrobox](https://distrobox.privatedns.org/) on your system, it is highly
 recommended to do that:
@@ -203,9 +203,9 @@ These shell aliases might be useful when experimenting with the protocol:
     alias cpy='PYTHONPATH=src python3 -m cockpit.bridge'
     alias cpf='PYTHONPATH=src python3 -m cockpit.misc.print'
 
-When working with the Python bridge on test images, note that `RHEL/CentOS 8`,
-`debian-stable`, and `ubuntu-2204` still use the C bridge. So if you want to
-explicitly have the Python bridge on those images use:
+When working with the Python bridge on test images, note that `rhel-8*` still
+uses the C bridge. So if you want to explicitly have the Python bridge on those
+images use:
 
     ./test/image-prepare --python
 
@@ -478,6 +478,20 @@ Cockpit log out, use something like:
 
     >> localStorage.debugging = "spawn"
 
+## Using React Developer Tools
+
+Cockpit uses React for the JavaScript frontend, [React Developer
+Tools](https://react.dev/learn/react-developer-tools) is a browser extension to
+inspect React components, edit props and state. Out of the box the developer
+tools do not work with Cockpit due to the pages being loaded in a separate
+iframe. A workaround is to load the page directly by embedding, for example for
+the system overview page:
+
+<http://localhost:9090/cockpit/@localhost/system/index.html>
+
+This loads the system overview as a standalone page allowing React Developer
+tools to inspect its state.
+
 ## Running Cockpit processes under a debugger
 
 You may want to run cockpit-ws under a debugger such as valgrind or gdb. You can
@@ -525,7 +539,7 @@ For running tests, the following dependencies are required:
 
     sudo dnf install curl expect xz rpm-build chromium-headless dbus-daemon \
         libvirt-daemon-driver-storage-core libvirt-daemon-driver-qemu libvirt-client python3-libvirt \
-        python3-flake8 python3-pyyaml
+        python3-pyyaml
 
 For compiling the C parts, you will need the package build dependencies:
 

@@ -8,6 +8,7 @@ import json
 import os
 import pwd
 import shlex
+import stat
 import subprocess
 import sys
 import unittest.mock
@@ -19,9 +20,9 @@ import pytest
 
 from cockpit._vendor.systemd_ctypes import bus
 from cockpit.bridge import Bridge
-from cockpit.channel import Channel
+from cockpit.channel import AsyncChannel, Channel, ChannelRoutingRule
 from cockpit.channels import CHANNEL_TYPES
-from cockpit.jsonutil import JsonDict, JsonObject, JsonValue, get_bool, get_dict, get_int, json_merge_patch
+from cockpit.jsonutil import JsonDict, JsonObject, JsonValue, get_bool, get_dict, get_int, get_str, json_merge_patch
 from cockpit.packages import BridgeConfig
 
 from .mocktransport import MOCK_HOSTNAME, MockTransport
@@ -497,6 +498,31 @@ async def test_fsreplace1(transport: MockTransport, tmp_path: Path) -> None:
     # no leftover files
     assert os.listdir(tmp_path) == ['newfile']
 
+    # set funny permissions to check that they are preserved
+    perms = 0o625
+    myfile.chmod(perms)
+
+    # get the current tag
+    ch = await transport.check_open('fsread1', path=str(myfile))
+    transport.send_done(ch)
+    await transport.assert_data(ch, b'new new new!')
+    await transport.assert_msg('', command='done', channel=ch)
+    transport.send_close(ch)
+    close_msg = await transport.next_msg('')
+    assert close_msg['command'] == 'close'
+    tag = close_msg['tag']
+
+    # update contents with expected tag
+    ch = await transport.check_open('fsreplace1', path=str(myfile), tag=tag)
+    transport.send_data(ch, b'even newer')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(channel=ch)
+    assert myfile.read_bytes() == b'even newer'
+
+    # preserves existing permissions when giving expected tag
+    assert stat.S_IMODE(myfile.stat().st_mode) == perms
+
     # write empty file
     ch = await transport.check_open('fsreplace1', path=str(myfile))
     transport.send_data(ch, b'')
@@ -512,6 +538,79 @@ async def test_fsreplace1(transport: MockTransport, tmp_path: Path) -> None:
     await transport.check_close(channel=ch)
     assert not myfile.exists()
 
+    # acks
+    ch = await transport.check_open('fsreplace1', path=str(myfile), send_acks='bytes')
+    transport.send_data(ch, b'some stuff')
+    await transport.assert_msg('', command='ack', bytes=10, channel=ch)
+    transport.send_data(ch, b'some more stuff')
+    await transport.assert_msg('', command='ack', bytes=15, channel=ch)
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(channel=ch)
+
+
+@pytest.mark.asyncio
+async def test_fsreplace1_change_conflict(transport: MockTransport, tmp_path: Path) -> None:
+    myfile = tmp_path / 'data'
+    myfile.write_text('hello')
+
+    # get current tag from fsread1
+    ch = await transport.check_open('fsread1', path=str(myfile))
+    transport.send_done(ch)
+    await transport.assert_data(ch, b'hello')
+    await transport.assert_msg('', command='done', channel=ch)
+    transport.send_close(ch)
+    close_msg = await transport.next_msg('')
+    assert close_msg['command'] == 'close'
+    tag = close_msg['tag']
+
+    # modify the file in between read and replace operations
+    # we have to wait a bit, assuming that file systems we run tests on have at least centisecond mtime resolution
+    await asyncio.sleep(0.2)
+    myfile.write_text('goodbye')
+
+    # try to replace it, expecting the old contents (via tag)
+    ch = await transport.check_open('fsreplace1', path=str(myfile), tag=tag)
+    transport.send_data(ch, b'newcontent')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='close', channel=ch, problem='change-conflict')
+    transport.send_close(ch)
+
+    # file was not touched by fsreplace1 due to conflict
+    assert myfile.read_text() == 'goodbye'
+
+
+@pytest.mark.asyncio
+async def test_fsreplace1_change_conflict_mode(transport: MockTransport, tmp_path: Path) -> None:
+    myfile = tmp_path / 'data'
+    myfile.write_text('hello')
+
+    # get current tag
+    ch = await transport.check_open('fsread1', path=str(myfile))
+    transport.send_done(ch)
+    await transport.assert_data(ch, b'hello')
+    await transport.assert_msg('', command='done', channel=ch)
+    transport.send_close(ch)
+    close_msg = await transport.next_msg('')
+    assert close_msg['command'] == 'close'
+    tag = close_msg['tag']
+
+    # modify the stat metadata in between read and replace operations
+    new_mode = 0o741
+    assert stat.S_IMODE(myfile.stat().st_mode) != new_mode
+    myfile.chmod(new_mode)
+
+    # try to replace it, expecting the old mode (via tag)
+    ch = await transport.check_open('fsreplace1', path=str(myfile), tag=tag)
+    transport.send_data(ch, b'newcontent')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='close', channel=ch, problem='change-conflict')
+    transport.send_close(ch)
+
+    # file was not touched by fsreplace1 due to conflict
+    assert stat.S_IMODE(myfile.stat().st_mode) == new_mode
+    assert myfile.read_text() == 'hello'
+
 
 @pytest.mark.asyncio
 async def test_fsreplace1_error(transport: MockTransport, tmp_path: Path) -> None:
@@ -526,6 +625,80 @@ async def test_fsreplace1_error(transport: MockTransport, tmp_path: Path) -> Non
     transport.send_data(ch, b'not me')
     transport.send_done(ch)
     await transport.assert_msg('', command='close', channel=ch, problem='not-found')
+
+    # invalid send-acks option
+    await transport.check_open('fsreplace1', path=str(tmp_path), send_acks='not-valid',
+                               problem='protocol-error',
+                               reply_keys={
+                                   'message': """attribute 'send-acks': invalid value "not-valid" not in ['bytes']"""
+    })
+
+
+@pytest.mark.asyncio
+async def test_fsreplace1_size_hint(transport: MockTransport, tmp_path: Path) -> None:
+    myfile = tmp_path / 'myfile'
+
+    # create a file, no size hint
+    ch = await transport.check_open('fsreplace1', path=str(myfile))
+    assert list(tmp_path.iterdir()) == []  # no temp file should be created yet
+    transport.send_data(ch, b'content')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(ch)
+    assert list(tmp_path.iterdir()) == [myfile]  # no temp file left
+    assert myfile.read_bytes() == b'content'
+
+    # delete it again
+    ch = await transport.check_open('fsreplace1', path=str(myfile))
+    assert list(tmp_path.iterdir()) == [myfile]  # no temp file created
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(ch)
+    assert list(tmp_path.iterdir()) == []  # empty again
+
+    # enospc in advance: 1PB ought to be enough for anybody...
+    ch = transport.send_open('fsreplace1', path=str(myfile), size=1 << 50)  # 1PB
+    err = await transport.assert_msg('', command='close', channel=ch, problem='internal-error')
+    message = get_str(err, 'message')
+    assert 'No space left on device' in message or 'File too large' in message
+    assert list(tmp_path.iterdir()) == []  # still empty
+    assert not myfile.exists()
+
+    # ensure cancellation is always a no-op, even with size specified
+    ch = await transport.check_open('fsreplace1', path=str(myfile), size=1 << 20)  # 1MB
+    assert len(list(tmp_path.iterdir())) == 1  # observe the temp file created immediately
+    await transport.check_close(ch)
+    assert list(tmp_path.iterdir()) == []  # no temp file left
+    assert not myfile.exists()
+
+    # ...but even size=0 will result in the file being created without payload
+    ch = await transport.check_open('fsreplace1', path=str(myfile), size=0)
+    assert len(list(tmp_path.iterdir())) == 1  # observe the temp file created immediately
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(ch)
+    assert list(tmp_path.iterdir()) == [myfile]  # no temp file left
+    assert myfile.read_bytes() == b''
+
+    # check too little data written
+    ch = await transport.check_open('fsreplace1', path=str(myfile), size=1 << 20)  # 1 MB
+    assert len(list(tmp_path.iterdir())) == 2  # observe the temp file created immediately
+    transport.send_data(ch, b'too small')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(ch)
+    assert list(tmp_path.iterdir()) == [myfile]  # no temp file left
+    assert myfile.read_bytes() == b'too small'
+
+    # check too much data written
+    ch = await transport.check_open('fsreplace1', path=str(myfile), size=5)
+    assert len(list(tmp_path.iterdir())) == 2  # observe the temp file created immediately
+    transport.send_data(ch, b'too large')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(ch)
+    assert list(tmp_path.iterdir()) == [myfile]  # no temp file left
+    assert myfile.read_bytes() == b'too large'
 
 
 @pytest.mark.asyncio
@@ -603,7 +776,7 @@ async def test_channel(bridge: Bridge, transport: MockTransport, channeltype, tm
     print('sending done')
     transport.send_done(ch)
 
-    if payload in ['dbus-json3', 'fswatch1', 'null']:
+    if payload in ['dbus-json3', 'fswatch1', 'metrics1', 'null']:
         transport.send_close(ch)
 
     while True:
@@ -644,6 +817,72 @@ async def test_channel(bridge: Bridge, transport: MockTransport, channeltype, tm
 def test_get_os_release(os_release: str, expected: str) -> None:
     with unittest.mock.patch('builtins.open', unittest.mock.mock_open(read_data=os_release)):
         assert Bridge.get_os_release() == expected
+
+
+class AckChannel(AsyncChannel):
+    payload = 'ack1'
+
+    async def run(self, options: JsonObject) -> None:
+        self.semaphore = asyncio.Semaphore(0)
+        self.ready()
+        while await self.read():
+            await self.semaphore.acquire()
+
+
+@pytest.mark.asyncio
+async def test_async_acks(bridge: Bridge, transport: MockTransport) -> None:
+    # Inject our mock channel type
+    for rule in bridge.routing_rules:
+        if isinstance(rule, ChannelRoutingRule):
+            rule.table['ack1'] = [AckChannel]
+
+    # invalid send-acks values
+    await transport.check_open('ack1', send_acks=True, problem='protocol-error')
+    await transport.check_open('ack1', send_acks='x', problem='protocol-error')
+
+    # open the channel with acks off
+    ch = await transport.check_open('ack1')
+    # send a bunch of data and get no acks
+    for _ in range(20):
+        transport.send_data(ch, b'x')
+    # this will assert that we receive only the close message (and no acks)
+    await transport.check_close(ch)
+
+    # open the channel with acks on
+    ch = await transport.check_open('ack1', send_acks='bytes')
+    # send a bunch of data
+    for _ in range(20):
+        transport.send_data(ch, b'x')
+    # we should get exactly one ack (from the first read) before things block
+    await transport.assert_msg('', channel=ch, command='ack', bytes=1)
+    # this will assert that we receive only the close message (and no additional acks)
+    await transport.check_close(ch)
+
+    # open the channel with acks on
+    ch = await transport.check_open('ack1', send_acks='bytes')
+    # fish the open channel out of the bridge
+    ack = bridge.open_channels[ch]
+    assert isinstance(ack, AckChannel)
+    # let's give ourselves a bit more headroom
+    for _ in range(5):
+        ack.semaphore.release()
+    # send a bunch of data and get some acks
+    for _ in range(10):
+        transport.send_data(ch, b'x')
+    for _ in range(6):
+        await transport.assert_msg('', channel=ch, command='ack', bytes=1)
+    # make sure that as we "consume" the data we get more acks:
+    for _ in range(4):
+        # no ack in the queue...
+        await transport.assert_empty()
+        ack.semaphore.release()
+        # ... but now there is.
+        await transport.assert_msg('', channel=ch, command='ack', bytes=1)
+    # make some more room (for data we didn't send)
+    for _ in range(5):
+        ack.semaphore.release()
+    # but we shouldn't have gotten any acks for those
+    await transport.check_close(ch)
 
 
 @pytest.mark.asyncio
@@ -1123,6 +1362,16 @@ async def test_fsinfo_targets(transport: MockTransport, tmp_path: Path) -> None:
     entries['lldir'] = {'type': 'lnk', 'target': 'ldir'}
     (tmp_path / 'lloved').symlink_to('loved')
     entries['lloved'] = {'type': 'lnk', 'target': 'loved'}
+
+    # a link to the current directory won't show up in targets since we already
+    # report its attributes directly as our toplevel state structure
+    (tmp_path / 'ldot').symlink_to('.')
+    entries['ldot'] = {'type': 'lnk', 'target': '.'}
+
+    # a link to the parent directory should definitely show up, though
+    (tmp_path / 'ldotdot').symlink_to('..')
+    entries['ldotdot'] = {'type': 'lnk', 'target': '..'}
+    targets['..'] = {'type': 'dir'}
 
     # make sure the watch managed to pick that all up
     assert await watch.next_state() == state

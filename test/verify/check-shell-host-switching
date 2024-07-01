@@ -22,7 +22,6 @@ import time
 import testlib
 
 
-@testlib.skipDistroPackage()
 class HostSwitcherHelpers:
 
     def check_discovered_addresses(self, b, addresses):
@@ -95,7 +94,6 @@ class HostSwitcherHelpers:
         b.click("#hosts-sel button")
 
 
-@testlib.skipDistroPackage()
 @testlib.todoPybridgeRHEL8()
 class TestHostSwitching(testlib.MachineCase, HostSwitcherHelpers):
     provision = {
@@ -439,19 +437,6 @@ class TestHostSwitching(testlib.MachineCase, HostSwitcherHelpers):
         b.click("#nav-hosts .nav-item a[href='/@10.111.113.3'] + span button.nav-action.pf-m-secondary")
         b.set_input_text('#add-machine-user', 'franz')
 
-        def tab(n):
-            for _ in range(n):
-                args = {"type": "keyDown", "key": "Tab"}
-                b.cdp.invoke("Input.dispatchKeyEvent", **args)
-                args["type"] = "keyUp"
-                b.cdp.invoke("Input.dispatchKeyEvent", **args)
-
-        def enter():
-            args = {"type": "keyDown", "key": "Enter"}
-            b.cdp.invoke("Input.dispatchKeyEvent", **args)
-            args["type"] = "keyUp"
-            b.cdp.invoke("Input.dispatchKeyEvent", **args)
-
         # <input type="color /> is rather difficult to set with tests
         # On Firefox the popup window cannot be targeted nor with mouse nor keayboard
         # On Chomium it is possible to tab-navigate through the color selector
@@ -460,13 +445,13 @@ class TestHostSwitching(testlib.MachineCase, HostSwitcherHelpers):
             b.focus("input[type=color]")
             b.click("input[type=color]")
             time.sleep(1)  # We cannot wait until the popup opens up, so just little of waiting
-            tab(3)
-            b.key_press("0")
-            tab(1)
-            b.key_press("0")
-            tab(1)
-            b.key_press("0")
-            enter()
+            b.key("Tab", repeat=3)
+            b.input_text("0")
+            b.key("Tab")
+            b.input_text("0")
+            b.key("Tab")
+            b.input_text("0")
+            b.key("Enter")
 
         b.click('#hosts_setup_server_dialog .pf-m-primary')
         with b.wait_timeout(30):

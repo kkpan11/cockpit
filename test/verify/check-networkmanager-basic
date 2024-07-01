@@ -22,7 +22,6 @@ import testlib
 
 
 @testlib.nondestructive
-@testlib.skipDistroPackage()
 class TestNetworkingBasic(netlib.NetworkCase):
     def testBasic(self):
         b = self.browser
@@ -51,7 +50,7 @@ class TestNetworkingBasic(netlib.NetworkCase):
         # FIXME: rtl test was flaky, debug it and remove the skip
         b.assert_pixels(
             "#networking", "network-main",
-            [
+            ignore=[
                 "td[data-label=Sending]",
                 "td[data-label=Receiving]",
                 "td[data-label='IP address']",

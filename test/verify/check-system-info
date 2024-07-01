@@ -17,6 +17,7 @@
 # You should have received a copy of the GNU Lesser General Public License
 # along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
 
+import re
 import time
 
 import packagelib
@@ -53,7 +54,6 @@ def ssh_reconnect(machine, timeout_sec=120):
     raise error
 
 
-@testlib.skipDistroPackage()
 class TestSystemInfo(testlib.MachineCase):
     def setUp(self):
         super().setUp()
@@ -80,12 +80,13 @@ class TestSystemInfo(testlib.MachineCase):
         m.write("/etc/os-release", os_release)
         m.execute("chattr +i /etc/os-release; (systemctl restart systemd-hostnamed || systemctl restart hostnamed)")
 
+        # set static machine ID, as they have different lengths which disturbs the pixel test
+        m.execute("mv /etc/machine-id /etc/machine-id.orig")
+        m.write("/etc/machine-id", "123456789abcdef123456789abcdef00")
+
         self.login_and_go("/system")
 
         b.wait_visible('#system_information_os_text')
-
-        mid = m.execute("cat /etc/machine-id")
-        b.wait_text('#system_machine_id', mid)
 
         # Health card can contain only one item - it normally is "Loading available updates fail"
         # But sometimes it also contains information about failed services which breaks mobile pixel tests
@@ -98,7 +99,6 @@ class TestSystemInfo(testlib.MachineCase):
         testlib.wait(lambda: b.get_pf_progress_value("#system-usage-cpu-progress + td") < 30)
         b.assert_pixels("#overview", "overview", ignore=[
             ".system-health .pf-v5-c-card__body",
-            "#system_machine_id",
             "#system_uptime",
             # #system_information_systime_button is not enough, need to grab the icon as well
             "tr:contains('System time') td",
@@ -107,6 +107,8 @@ class TestSystemInfo(testlib.MachineCase):
             "#system-usage-memory-progress + td",
             "#tuned-status-button",
         ])
+
+        m.execute("mv /etc/machine-id.orig /etc/machine-id")
 
         # Generate a new rsa key and change the config
         m.execute("ssh-keygen -f /etc/ssh/weirdname -t rsa -N ''")
@@ -132,8 +134,7 @@ class TestSystemInfo(testlib.MachineCase):
 
         # Change ssh config and restart
         self.sed_file(r"s,.*HostKey *,#,; $ a HostKey /etc/ssh/weirdname", "/etc/ssh/sshd_config",
-                      # Restart sshd but stop socket so we can make sure we are restarted
-                      "( ! systemctl is-active sshd.socket || systemctl stop sshd.socket) && systemctl restart sshd.service")
+                      self.restart_sshd)
         ssh_reconnect(m)
 
         b.click("#system-ssh-keys-link")
@@ -182,6 +183,7 @@ class TestSystemInfo(testlib.MachineCase):
         m.execute("rm /usr/lib/os-release || true")
 
         self.login_and_go("/system")
+        mid = m.execute("cat /etc/machine-id")
         b.wait_text('#system_machine_id', mid)
 
         # uptime (introduced in PR #13885)
@@ -191,11 +193,11 @@ class TestSystemInfo(testlib.MachineCase):
         m.execute("mount -o bind /tmp/fake_uptime /proc/uptime")
         self.addCleanup(m.execute, "umount /proc/uptime")
         with b.wait_timeout(70):
-            b.wait_text("#system_uptime", "33 minutes")
+            b.wait_text("#system_uptime", "33 minutes ago")
         # 4 months and a bit, timeformat rounds quite aggressively; also, test a slightly different format
         m.write("/tmp/fake_uptime", "10370000 12345.30\n")
         with b.wait_timeout(70):
-            b.wait_text("#system_uptime", "4 months")
+            b.wait_text("#system_uptime", "4 months ago")
 
         self.allow_journal_messages("error loading contents of os-release: .*",  # C bridge
                                     ".* Neither /etc/os-release nor /usr/lib/os-release exists",  # py bridge
@@ -207,12 +209,14 @@ class TestSystemInfo(testlib.MachineCase):
         b = self.browser
 
         self.restore_file("/etc/motd")
+        # run this test with a tight umask to check preserving file permissions
+        self.sed_file(r"/^UMASK/ s/0../077/", "/etc/login.defs")
         m.execute("rm -f /etc/motd")
 
         self.login_and_go("/system")
         b.wait_not_present('#motd-box')
 
-        m.execute(r"printf '\n  \n  Hello\n  World\n\n' >/etc/motd")
+        m.execute(r"printf '\n  \n  Hello\n  World\n\n' >/etc/motd; chmod 644 /etc/motd")
         b.wait_visible('#motd-box')
         # strips empty lines, but not leading spaces
         b.wait_text('#motd', "  Hello\n  World")
@@ -440,7 +444,7 @@ machine         : 8561
 
         b.reload()
         b.enter_page('/system/hwinfo')
-        distro_without_systemd_memory_dmi = m.image == 'centos-8-stream' or m.image.startswith('rhel-8-')
+        distro_without_systemd_memory_dmi = m.image.startswith('rhel-8-')
 
         # Test more specific memory data with a fake dmidecode
         b.wait_in_text('#memory-listing tbody:nth-of-type(1) td[data-label=ID]', "BANK 0: ChannelA-DIMM0")
@@ -493,7 +497,7 @@ machine         : 8561
                 if expect_smt_state is not None:
                     b.wait_visible('#cpu-mitigations-dialog .nosmt-heading:contains(nosmt)')
                     b.wait_visible('#cpu-mitigations-dialog #nosmt-switch input' +
-                                   (expect_smt_state and ":checked" or ":not(:checked)"))
+                                   (":checked" if expect_smt_state else ":not(:checked)"))
 
                 b.logout()
             finally:
@@ -524,7 +528,7 @@ machine         : 8561
         b.click('#hwinfo button:contains(Mitigations)')
         b.click('#cpu-mitigations-dialog #nosmt-switch input')
         b.wait_visible('#cpu-mitigations-dialog #nosmt-switch input' +
-                       (self.expect_smt_default and ':not(:checked)' or ':checked'))
+                       (':not(:checked)' if self.expect_smt_default else ':checked'))
         b.click('#cpu-mitigations-dialog Button:contains(Save and reboot)')
 
         m.wait_reboot()
@@ -567,10 +571,10 @@ fi
         b.click('#hwinfo button:contains(Mitigations)')
         b.wait_visible('#cpu-mitigations-dialog .nosmt-heading:contains(nosmt)')
         b.wait_visible('#cpu-mitigations-dialog #nosmt-switch input' +
-                       (self.expect_smt_default and ':not(:checked)' or ':checked'))
+                       (':not(:checked)' if self.expect_smt_default else ':checked'))
         b.click('#cpu-mitigations-dialog #nosmt-switch input')
         b.wait_visible('#cpu-mitigations-dialog #nosmt-switch input' +
-                       (self.expect_smt_default and ':checked' or ':not(:checked)'))
+                       (':checked' if self.expect_smt_default else ':not(:checked)'))
         b.click('#cpu-mitigations-dialog Button:contains(Save and reboot)')
         m.wait_reboot()
         if self.expect_smt_default:
@@ -579,7 +583,7 @@ fi
             self.assertNotIn('nosmt', m.execute('cat /proc/cmdline'))
 
         # updates mitigations=nosmt when that is present
-        m.upload(["../pkg/systemd/kernelopt.sh"], "/tmp/")
+        m.upload(["../pkg/lib/kernelopt.sh"], "/tmp/")
         m.execute("/tmp/kernelopt.sh remove nosmt; /tmp/kernelopt.sh set mitigations=auto,nosmt")
         m.reboot()
         self.login_and_go('/system/hwinfo')
@@ -790,9 +794,9 @@ password=foobar
         profile = m.execute(cmd + " --show").strip()
         b.wait_text("#crypto-policy-button", shown_profile_text(profile))
 
-        # RHEL 8 has no SHA1 policy, so do not show it.
+        # RHEL 10 has no SHA1 policy, so do not show it.
         b.click("#crypto-policy-button")
-        func = b.wait_not_present if m.image.startswith('rhel-8') or m.image.startswith('centos-8') else b.wait_visible
+        func = b.wait_not_present if re.match('(centos|rhel)-10.*', m.image) else b.wait_visible
         func(".pf-v5-c-menu__item-main .pf-v5-c-menu__item-text:contains('DEFAULT:SHA1')")
         b.click("#crypto-policy-dialog button:contains('Cancel')")
         b.wait_not_present("#crypto-policy-dialog")
@@ -858,7 +862,6 @@ password=foobar
         self.assertEqual(m.execute("cat /proc/sys/crypto/fips_enabled").strip(), "0")
 
 
-@testlib.skipDistroPackage()
 class TestSystemInfoTime(packagelib.PackageCase):
     def set_change_time_dialog_mode(self, mode):
         b = self.browser

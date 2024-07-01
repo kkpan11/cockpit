@@ -94,7 +94,7 @@ ExecStart=/usr/bin/sleep infinity
         b.wait_in_text("#dialog", "The listed processes and services will be forcefully stopped.")
         if fstype != "btrfs":
             b.assert_pixels("#dialog", "busy-unmount", mock={"td[data-label='PID']": "1234",
-                                                             "td[data-label='Runtime']": "a little while"})
+                                                             "td[data-label='Started']": "a little while ago"})
         self.confirm()
         b.wait_in_text(self.card_desc(filesystem, "Mount point"), "The filesystem is not mounted")
 
@@ -314,7 +314,7 @@ ExecStart=/usr/bin/sleep infinity
         self.dialog_wait_open()
         self.dialog_set_val("mount_options.extra", "hurr")
         self.dialog_apply()
-        self.dialog_wait_alert("bad option")
+        self.dialog_wait_alert("Unknown parameter 'hurr'", "bad option")
         self.dialog_cancel()
         self.dialog_wait_close()
 
@@ -342,7 +342,7 @@ ExecStart=/usr/bin/sleep infinity
         self.dialog_wait_open()
         self.dialog_set_val("mount_options.extra", "hurr")
         self.dialog_apply()
-        self.dialog_wait_alert("bad option")
+        self.dialog_wait_alert("Unknown parameter 'hurr'", "bad option")
         self.dialog_cancel()
         self.dialog_wait_close()
 

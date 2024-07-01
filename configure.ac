@@ -76,11 +76,8 @@ AC_ARG_ENABLE(ssh, AS_HELP_STRING([--disable-ssh], [Disable cockpit-ssh build an
 AM_CONDITIONAL(WITH_COCKPIT_SSH, test "$enable_ssh" != "no")
 AC_MSG_RESULT(${enable_ssh:=yes})
 
-# --enable-old-bridge
-AC_MSG_CHECKING([whether to install the old C cockpit-bridge])
-AC_ARG_ENABLE(old_bridge, AS_HELP_STRING([--enable-old-bridge], [Install old C cockpit-bridge]))
-AM_CONDITIONAL(WITH_OLD_BRIDGE, test "$enable_old_bridge" = "yes")
-AC_MSG_RESULT(${enable_old_bridge:=no})
+# TODO: remove this and clean up the old bridge in src/bridge/
+AM_CONDITIONAL(WITH_OLD_BRIDGE, false)
 
 AC_SEARCH_LIBS([argp_parse], [argp])
 case "$ac_cv_search_argp_parse" in
@@ -230,62 +227,6 @@ fi
 AM_CONDITIONAL(WITH_ASAN, test "$enable_asan" = "yes")
 AC_MSG_RESULT($asan_status)
 
-# User and group for running cockpit web server (cockpit-tls or -ws in customized setups)
-
-AC_ARG_WITH(cockpit_user,
-	    AS_HELP_STRING([--with-cockpit-user=<user>],
-			   [User for running cockpit (root)]
-                          )
-           )
-AC_ARG_WITH(cockpit_group,
-	    AS_HELP_STRING([--with-cockpit-group=<group>],
-			   [Group for running cockpit]
-                          )
-           )
-if test -z "$with_cockpit_user"; then
-    COCKPIT_USER=root
-    COCKPIT_GROUP=
-else
-    COCKPIT_USER=$with_cockpit_user
-    if test -z "$with_cockpit_group"; then
-        COCKPIT_GROUP=$with_cockpit_user
-    else
-	COCKPIT_GROUP=$with_cockpit_group
-    fi
-fi
-
-AC_SUBST(COCKPIT_USER)
-AC_SUBST(COCKPIT_GROUP)
-
-# User for running cockpit-ws instances from cockpit-tls
-
-AC_ARG_WITH(cockpit_ws_instance_user,
-	    AS_HELP_STRING([--with-cockpit-ws-instance-user=<user>],
-			   [User for running cockpit-ws instances from cockpit-tls (root)]
-                          )
-           )
-AC_ARG_WITH(cockpit_ws_instance_group,
-	    AS_HELP_STRING([--with-cockpit-ws-instance-group=<group>],
-			   [Group for running cockpit-ws instances from cockpit-tls]
-                          )
-           )
-if test -z "$with_cockpit_ws_instance_user"; then
-    if test "$COCKPIT_USER" != "root"; then
-        AC_MSG_ERROR([--with-cockpit-ws-instance-user is required when setting --with-cockpit-user])
-    fi
-    COCKPIT_WSINSTANCE_USER=root
-else
-    COCKPIT_WSINSTANCE_USER=$with_cockpit_ws_instance_user
-    if test -z "$with_cockpit_ws_instance_group"; then
-        COCKPIT_WSINSTANCE_GROUP=$with_cockpit_ws_instance_user
-    else
-        COCKPIT_WSINSTANCE_GROUP=$with_cockpit_ws_instance_group
-    fi
-fi
-
-AC_SUBST(COCKPIT_WSINSTANCE_USER)
-AC_SUBST(COCKPIT_WSINSTANCE_GROUP)
-
 # admin users group
 AC_ARG_WITH([admin-group],
             [AS_HELP_STRING([--with-admin-group=GROUP],
@@ -368,10 +309,6 @@ AC_ARG_ENABLE([cockpit-client],
               [], [enable_cockpit_client=no])
 AC_MSG_RESULT($enable_cockpit_client)
 AM_CONDITIONAL([ENABLE_COCKPIT_CLIENT], [test "$enable_cockpit_client" = "yes"])
-
-if test "$enable_cockpit_client" = "yes" && test "$enable_old_bridge" = "yes"; then
-        AC_MSG_ERROR([--enable-cockpit-client conflicts with --enable-old-bridge])
-fi
 
 # Debug
 
@@ -477,10 +414,6 @@ echo "
         cflags:                     ${CFLAGS}
         cppflags:                   ${CPPFLAGS}
 
-        cockpit-ws user:            ${COCKPIT_USER}
-        cockpit-ws group:           ${COCKPIT_GROUP}
-        cockpit-ws instance user:   ${COCKPIT_WSINSTANCE_USER}
-        cockpit-ws instance group:  ${COCKPIT_WSINSTANCE_GROUP}
         admin group:                ${admin_group}
         cockpit-session PATH:       ${default_session_path}
 

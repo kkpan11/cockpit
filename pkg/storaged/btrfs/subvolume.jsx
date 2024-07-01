@@ -20,11 +20,13 @@
 import cockpit from "cockpit";
 import React from "react";
 
-import { CardBody } from "@patternfly/react-core/dist/esm/components/Card/index.js";
+import { Button } from "@patternfly/react-core/dist/esm/components/Button/index.js";
+import { Card, CardBody, CardHeader, CardTitle } from "@patternfly/react-core/dist/esm/components/Card/index.js";
 import { DescriptionList } from "@patternfly/react-core/dist/esm/components/DescriptionList/index.js";
 
 import {
-    StorageCard, StorageDescription, ChildrenTable, new_card, new_page, navigate_away_from_card
+    PageTable, StorageCard, StorageDescription, ChildrenTable,
+    new_card, new_page, navigate_away_from_card, register_crossref, get_crossrefs,
 } from "../pages.jsx";
 import { StorageUsageBar } from "../storage-controls.jsx";
 import {
@@ -36,7 +38,7 @@ import { btrfs_usage, validate_subvolume_name, parse_subvol_from_options } from 
 import { at_boot_input, update_at_boot_input, mounting_dialog, mount_options } from "../filesystem/mounting-dialog.jsx";
 import {
     dialog_open, TextInput,
-    TeardownMessage, init_active_usage_processes,
+    TeardownMessage, init_teardown_usage,
 } from "../dialog.jsx";
 import { check_mismounted_fsys, MismountAlert } from "../filesystem/mismounting.jsx";
 import {
@@ -204,6 +206,7 @@ function subvolume_delete(volume, subvol, mount_point_in_parent, card) {
     const paths_to_delete = [];
     const usage = [];
 
+    usage.Teardown = true;
     for (const sv of all_subvols) {
         const [config, mount_point] = get_fstab_config_with_client(client, block, false, sv);
         const fs_is_mounted = is_mounted(client, block, sv);
@@ -235,13 +238,13 @@ function subvolume_delete(volume, subvol, mount_point_in_parent, card) {
                 for (const c of configs_to_remove)
                     await block.RemoveConfigurationItem(c, {});
                 await cockpit.spawn(["btrfs", "subvolume", "delete"].concat(paths_to_delete),
-                                    { superuser: true, err: "message" });
+                                    { superuser: "require", err: "message" });
                 await btrfs_poll();
                 navigate_away_from_card(card);
             }
         },
         Inits: [
-            init_active_usage_processes(client, usage)
+            init_teardown_usage(client, usage)
         ]
     });
 }
@@ -382,6 +385,16 @@ function make_btrfs_subvolume_page(parent, volume, subvol, path_prefix, subvols)
             return str;
     }
 
+    let snapshot_origin = null;
+    if (subvol.id !== 5 && subvol.parent_uuid !== null) {
+        for (const sv of subvols) {
+            if (sv.uuid === subvol.parent_uuid) {
+                snapshot_origin = sv;
+                break;
+            }
+        }
+    }
+
     const card = new_card({
         title: _("btrfs subvolume"),
         next: null,
@@ -391,9 +404,17 @@ function make_btrfs_subvolume_page(parent, volume, subvol, path_prefix, subvols)
         location: mp_text,
         component: BtrfsSubvolumeCard,
         has_warning: !!mismount_warning,
-        props: { subvol, mount_point, mismount_warning, block, fstab_config, forced_options },
+        props: { volume, subvol, snapshot_origin, mount_point, mismount_warning, block, fstab_config, forced_options },
         actions,
     });
+
+    if (subvol.id !== 5 && subvol.parent_uuid !== null)
+        register_crossref({
+            key: subvol.parent_uuid,
+            card,
+            size: mounted && <StorageUsageBar stats={use} short />,
+        });
+
     const page = new_page(parent, card);
     for (const sv of subvols) {
         if (sv.parent && (sv.parent === subvol.id || sv.parent === subvol.fake_id)) {
@@ -402,7 +423,9 @@ function make_btrfs_subvolume_page(parent, volume, subvol, path_prefix, subvols)
     }
 }
 
-const BtrfsSubvolumeCard = ({ card, subvol, mismount_warning, block, fstab_config, forced_options }) => {
+const BtrfsSubvolumeCard = ({ card, volume, subvol, snapshot_origin, mismount_warning, block, fstab_config, forced_options }) => {
+    const crossrefs = get_crossrefs(subvol.uuid);
+
     return (
         <StorageCard card={card} alert={mismount_warning &&
         <MismountAlert warning={mismount_warning}
@@ -412,6 +435,14 @@ const BtrfsSubvolumeCard = ({ card, subvol, mismount_warning, block, fstab_confi
                 <DescriptionList className="pf-m-horizontal-on-sm">
                     <StorageDescription title={_("Name")} value={subvol.pathname} />
                     <StorageDescription title={_("ID")} value={subvol.id} />
+                    {snapshot_origin !== null &&
+                    <StorageDescription title={_("Snapshot origin")}>
+                        <Button variant="link" isInline role="link"
+                                   onClick={() => cockpit.location.go(["btrfs", volume.data.uuid, snapshot_origin.pathname])}>
+                            {snapshot_origin.pathname}
+                        </Button>
+                    </StorageDescription>
+                    }
                     <StorageDescription title={_("Mount point")}>
                         <MountPoint fstab_config={fstab_config}
                                     backing_block={block} content_block={block}
@@ -424,5 +455,17 @@ const BtrfsSubvolumeCard = ({ card, subvol, mismount_warning, block, fstab_confi
                                aria-label={_("btrfs subvolumes")}
                                page={card.page} />
             </CardBody>
+            {crossrefs &&
+            <Card data-test-card-title="Snapshots">
+                <CardHeader>
+                    <CardTitle component="h2">{_("Snapshots")}</CardTitle>
+                </CardHeader>
+                <CardBody className="contains-list">
+                    <PageTable emptyCaption={_("No snapshots found")}
+                                       aria-label={_("snapshot")}
+                                       crossrefs={crossrefs} />
+                </CardBody>
+            </Card>
+            }
         </StorageCard>);
 };

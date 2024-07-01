@@ -26,7 +26,6 @@ sleep_crash_list_sel = "#journal-box .cockpit-logline .cockpit-log-message:conta
 NO_ABRT = ["debian-*", "ubuntu-*", "fedora-coreos", "rhel*", "centos-*", "arch"]
 
 
-@testlib.skipDistroPackage()
 class TestJournal(testlib.MachineCase):
     def setUp(self):
         super().setUp()
@@ -180,16 +179,8 @@ ExecStart=/bin/sh -c 'sleep 5; for s in $(seq 10); do echo SLOW; sleep 0.1; done
         wait_journal_empty()
 
         def wait_slow10():
-            systemd_version = int(m.execute("systemctl --version | awk '{print $2; exit}'").strip())
-
-            if systemd_version >= 248:
-                # changed in https://github.com/systemd/systemd/commit/f5ec78e503
-                stop_message = "Deactivated successfully."
-            else:
-                stop_message = "Succeeded."
-
             with b.wait_timeout(30):
-                wait_log_lines([["systemd", "slow10.service: " + stop_message, ""], ["sh", "SLOW", "10"],
+                wait_log_lines([["systemd", "slow10.service: Deactivated successfully.", ""], ["sh", "SLOW", "10"],
                                 ["systemd", "Started.*Slowly log 10 identical lines.", ""]])
 
         def wait_log_present(message):
@@ -260,7 +251,7 @@ ExecStart=/bin/sh -c 'sleep 5; for s in $(seq 10); do echo SLOW; sleep 0.1; done
         # Test message filtering
 
         b.focus("#journal-grep input")
-        b.key_press("1")
+        b.input_text("1")
         b.click("#journal-grep button[aria-label=Search]")
 
         b.wait_js_cond('window.location.hash === "#/?priority=notice&tag=test-stream&grep=1"')
@@ -269,7 +260,8 @@ ExecStart=/bin/sh -c 'sleep 5; for s in $(seq 10); do echo SLOW; sleep 0.1; done
         b.wait_visible("#journal-box .cockpit-logline .cockpit-log-message:contains('Message 1')")
 
         b.focus("#journal-grep input")
-        b.key_press("\bm.*[2-5]")
+        b.key("Backspace")
+        b.input_text("m.*[2-5]")
         b.click("#journal-grep button[aria-label=Search]")
         b.wait_not_present("#journal-box .cockpit-logline .cockpit-log-message:contains('Message 1')")
         b.wait_visible("#journal-box .cockpit-logline .cockpit-log-message:contains('Message 2')")
@@ -286,7 +278,7 @@ ExecStart=/bin/sh -c 'sleep 5; for s in $(seq 10); do echo SLOW; sleep 0.1; done
         b.wait_visible("#journal-box .cockpit-logline .cockpit-log-message:contains('Message 6')")
 
         b.focus("#journal-grep input")
-        b.key_press("FOO=bar [5-6]")
+        b.input_text("FOO=bar [5-6]")
         b.click("#journal-grep button[aria-label=Search]")
         b.wait_val("#journal-grep input", "priority:err identifier:logger FOO=bar [5-6]")
 
@@ -295,7 +287,8 @@ ExecStart=/bin/sh -c 'sleep 5; for s in $(seq 10); do echo SLOW; sleep 0.1; done
         b.wait_visible("#journal-box .cockpit-logline .cockpit-log-message:contains('Message 5')")
 
         b.focus("#journal-grep input")
-        b.key_press("\b" * 13 + "[5-6]")
+        b.key("Backspace", 13)
+        b.input_text("[5-6]")
         b.click("#journal-grep button[aria-label=Search]")
         b.wait_not_present("#journal-box .cockpit-logline .cockpit-log-message:contains('Message 4')")
         b.wait_visible("#journal-box .cockpit-logline .cockpit-log-message:contains('Message 6')")
@@ -316,7 +309,8 @@ ExecStart=/bin/sh -c 'sleep 5; for s in $(seq 10); do echo SLOW; sleep 0.1; done
 
         # Check that 'until' qualifier keeps streaming until given time
         b.focus("#journal-grep input")
-        b.key_press("\b\b\b\b6-9] until:+15s")
+        b.key("Backspace", 4)
+        b.input_text("6-9] until:+15s")
         b.click("#journal-grep button[aria-label=Search]")
         b.wait_not_present("#journal-box .cockpit-logline .cockpit-log-message:contains('Message 5')")
         b.wait_visible("#journal-box .cockpit-logline .cockpit-log-message:contains('Message 6')")
@@ -329,6 +323,7 @@ ExecStart=/bin/sh -c 'sleep 5; for s in $(seq 10); do echo SLOW; sleep 0.1; done
 
         self.allow_journal_messages(".*Data from the specified boot .* is not available: No such boot ID in journal.*")
 
+    @testlib.nondestructive
     def testIdentifierReloading(self):
         """
         Test verifies https://github.com/cockpit-project/cockpit/issues/20123
@@ -342,7 +337,7 @@ ExecStart=/bin/sh -c 'sleep 5; for s in $(seq 10); do echo SLOW; sleep 0.1; done
         m.execute(f"logger -p 5 --tag {tag_info} {tag_info.upper()}")
         self.login_and_go("/system/logs")
 
-        b.go("#/?priority=err")
+        b.go(f"#/?priority=err&since=@{self.test_start_time}")
         b.wait_visible(f"#journal-box .cockpit-logline .cockpit-log-message:contains('{tag_error.upper()}')")
         b.wait_not_present(f"#journal-box .cockpit-logline .cockpit-log-message:contains('{tag_info.upper()}')")
         b.select_PF4("#journal-identifier-menu .pf-v5-c-select__toggle", tag_error)
@@ -479,7 +474,7 @@ ExecStart=/bin/sh -c 'sleep 5; for s in $(seq 10); do echo SLOW; sleep 0.1; done
                         ])
 
         b.focus("#journal-grep input")
-        b.key_press("until:2037-01-01\\ 00:03")
+        b.input_text("until:2037-01-01\\ 00:03")
         b.click("#journal-grep button[aria-label=Search]")
         wait_log_lines([expected_date,
                         ["check-journal", "BEFORE BOOT", ""],

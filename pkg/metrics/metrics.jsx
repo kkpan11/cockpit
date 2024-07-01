@@ -50,6 +50,8 @@ import * as service from "service";
 import * as timeformat from "timeformat";
 import { superuser } from "superuser";
 import { journal } from "journal";
+import { read_os_release } from "os-release";
+import { get_manifest_config_matchlist } from "utils";
 import { useObject, useEvent, useInit } from "hooks.js";
 import { WithDialogs, useDialogs } from "dialogs.jsx";
 
@@ -939,7 +941,7 @@ class CurrentMetrics extends React.Component {
                                         className="pf-m-sm"
                                         variant={info.use > 90 ? ProgressVariant.danger : info.use >= 80 ? ProgressVariant.warning : null}
                                         title={info.target}
-                                        label={ cockpit.format(_("$0 free"), cockpit.format_bytes(info.avail, 1000)) } />
+                                        label={ cockpit.format(_("$0 free"), cockpit.format_bytes(info.avail)) } />
                                 );
                                 if (cockpit.manifests?.storage)
                                     progress = <Button variant="link" isInline onClick={() => cockpit.jump("/storage") }>{progress}</Button>;
@@ -947,7 +949,7 @@ class CurrentMetrics extends React.Component {
                                 return (
                                     <Tooltip
                                         key={info.target}
-                                        content={ cockpit.format(_("$0 total"), cockpit.format_bytes(info.size, 1000)) }
+                                        content={ cockpit.format(_("$0 total"), cockpit.format_bytes(info.size)) }
                                         position="bottom">
                                         {progress}
                                     </Tooltip>
@@ -1363,10 +1365,11 @@ const wait_cond = (cond, objects) => {
 const PCPConfigDialog = ({
     firewalldRequest,
     needsLogout, setNeedsLogout,
-    s_pmlogger, s_pmproxy, s_redis, s_redis_server
+    s_pmlogger, s_pmproxy, s_redis, s_redis_server, s_valkey,
 }) => {
     const Dialogs = useDialogs();
-    const dialogInitialProxyValue = runningService(s_pmproxy) && (runningService(s_redis) || runningService(s_redis_server));
+    const dialogInitialProxyValue = runningService(s_pmproxy) && (
+        runningService(s_redis) || runningService(s_redis_server) || runningService(s_valkey));
     const [dialogError, setDialogError] = useState(null);
     const [dialogLoggerValue, setDialogLoggerValue] = useState(runningService(s_pmlogger));
     const [dialogProxyValue, setDialogProxyValue] = useState(dialogInitialProxyValue);
@@ -1375,27 +1378,29 @@ const PCPConfigDialog = ({
 
     useInit(() => packagekit.detect().then(setPackagekitExists));
 
-    const handleInstall = () => {
+    const handleInstall = async () => {
     // when enabling services, install missing packages on demand
         const missing = [];
         if (dialogLoggerValue && !s_pmlogger.exists)
             missing.push("cockpit-pcp");
-        if (dialogProxyValue && !(s_redis.exists || s_redis_server.exists))
-            missing.push("redis");
+        const redisExists = () => s_redis.exists || s_redis_server.exists || s_valkey.exists;
+        if (dialogProxyValue && !redisExists()) {
+            const os_release = await read_os_release();
+            missing.push(get_manifest_config_matchlist("metrics", "redis_package", "redis",
+                                                       [os_release.PLATFORM_ID, os_release.ID]));
+        }
+
         if (missing.length > 0) {
             debug("PCPConfig: missing packages", JSON.stringify(missing), ", offering install");
             Dialogs.close();
-            return install_dialog(missing)
-                    .then(() => {
-                        debug("PCPConfig: package installation successful");
-                        if (missing.indexOf("cockpit-pcp") >= 0)
-                            setNeedsLogout(true);
-                        return wait_cond(() => (s_pmlogger.exists &&
-                                                (!dialogProxyValue || (s_pmproxy.exists && (s_redis.exists || s_redis_server.exists)))),
-                                         [s_pmlogger, s_pmproxy, s_redis, s_redis_server]);
-                    });
-        } else
-            return Promise.resolve();
+            await install_dialog(missing);
+            debug("PCPConfig: package installation successful");
+            if (missing.indexOf("cockpit-pcp") >= 0)
+                setNeedsLogout(true);
+            await wait_cond(() => (s_pmlogger.exists &&
+                                   (!dialogProxyValue || (s_pmproxy.exists && redisExists()))),
+                            [s_pmlogger, s_pmproxy, s_redis, s_redis_server, s_valkey]);
+        }
     };
 
     const handleSave = () => {
@@ -1407,7 +1412,10 @@ const PCPConfigDialog = ({
 
                     let real_redis;
                     let redis_name;
-                    if (s_redis_server.exists) {
+                    if (s_valkey.exists && s_valkey.unit?.UnitFileState !== 'masked') {
+                        real_redis = s_valkey;
+                        redis_name = "valkey.service";
+                    } else if (s_redis_server.exists && s_redis_server.unit?.UnitFileState !== 'masked') {
                         real_redis = s_redis_server;
                         redis_name = "redis-server.service";
                     } else {
@@ -1490,7 +1498,7 @@ const PCPConfigDialog = ({
                                 isChecked={dialogLoggerValue}
                                 isDisabled={!s_pmlogger.exists && !packagekitExists}
                                 label={
-                                    <Flex spaceItems={{ modifier: 'spaceItemsXl' }}>
+                                    <Flex>
                                         <FlexItem>{ _("Collect metrics") }</FlexItem>
                                         <TextContent>
                                             <Text component={TextVariants.small}>(pmlogger.service)</Text>
@@ -1507,7 +1515,7 @@ const PCPConfigDialog = ({
                     <Switch id="switch-pmproxy"
                                 isChecked={dialogProxyValue}
                                 label={
-                                    <Flex spaceItems={{ modifier: 'spaceItemsXl' }}>
+                                    <Flex>
                                         <FlexItem>{ _("Export to network") }</FlexItem>
                                         <TextContent>
                                             <Text component={TextVariants.small}>(pmproxy.service)</Text>
@@ -1529,15 +1537,20 @@ const PCPConfig = ({ buttonVariant, firewalldRequest, needsLogout, setNeedsLogou
     // redis.service on Fedora/RHEL, redis-server.service on Debian/Ubuntu with an Alias=redis
     const s_redis = useObject(() => service.proxy("redis.service"), null, []);
     const s_redis_server = useObject(() => service.proxy("redis-server.service"), null, []);
+    const s_valkey = useObject(() => service.proxy("valkey.service"), null, []);
 
     useEvent(superuser, "changed");
     useEvent(s_pmlogger, "changed");
     useEvent(s_pmproxy, "changed");
     useEvent(s_redis, "changed");
     useEvent(s_redis_server, "changed");
+    useEvent(s_valkey, "changed");
 
     debug("PCPConfig s_pmlogger.state", s_pmlogger.state, "needs logout", needsLogout);
-    debug("PCPConfig s_pmproxy state", s_pmproxy.state, "redis exists", s_redis.exists, "state", s_redis.state, "redis-server exists", s_redis_server.exists, "state", s_redis_server.state);
+    debug("PCPConfig s_pmproxy state", s_pmproxy.state,
+          "redis exists", s_redis.exists, "state", s_redis.state,
+          "redis-server exists", s_redis_server.exists, "state", s_redis_server.state,
+          "valkey exists", s_valkey.exists, "state", s_valkey.state);
 
     if (!superuser.allowed)
         return null;
@@ -1547,12 +1560,13 @@ const PCPConfig = ({ buttonVariant, firewalldRequest, needsLogout, setNeedsLogou
                                       needsLogout={needsLogout} setNeedsLogout={setNeedsLogout}
                                       s_pmlogger={s_pmlogger}
                                       s_pmproxy={s_pmproxy}
-                                      s_redis={s_redis} s_redis_server={s_redis_server} />);
+                                      s_redis={s_redis} s_redis_server={s_redis_server} s_valkey={s_valkey} />);
     }
 
     return (
         <Button variant={buttonVariant} icon={<CogIcon />}
-                isDisabled={ invalidService(s_pmlogger) || invalidService(s_pmproxy) || invalidService(s_redis) || invalidService(s_redis_server) }
+                isDisabled={ invalidService(s_pmlogger) || invalidService(s_pmproxy) ||
+                             invalidService(s_redis) || invalidService(s_redis_server) || invalidService(s_valkey) }
                 onClick={show_dialog}>
             { _("Metrics settings") }
         </Button>);

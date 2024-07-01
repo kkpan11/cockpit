@@ -23,7 +23,6 @@ FP_SHA256 = "SHA256:iyVAl4Z8riL9Jg4fV9Wv/6cbqebdDtsBEMkojNLLYX8"
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEAkRTvQCSEZNPXpA5bP82ilQn3TMeQ6z2NO3O0UwY9z test-name"
 
 
-@testlib.skipDistroPackage()
 @testlib.nondestructive
 class TestKeys(testlib.MachineCase):
     def testAuthorizedKeys(self):
@@ -131,7 +130,7 @@ class TestKeys(testlib.MachineCase):
         b.wait_not_in_text("#account-authorized-keys", "Invalid key")
         b.wait_js_func("ph_count_check", "#account-authorized-keys-list tr", 1)
         data = m.execute("cat /home/user/.ssh/authorized_keys")
-        self.assertEqual(data, KEY + "\n\n")
+        self.assertEqual(data, KEY + "\n")
         # Permissions are still ok
         check_perms()
         b.logout()
@@ -313,7 +312,7 @@ session    optional     pam_ssh_add.so
         b.set_input_text("#credentials-modal .pf-v5-c-select__toggle-typeahead input", "/var/test/")
         b.wait_in_text("#credentials-modal .pf-v5-c-select__menu-item.pf-m-disabled", "No such file or directory")
         b.focus("#credentials-modal .pf-v5-c-select__toggle-typeahead input")
-        b.key_press("\b\b\b\b\b")
+        b.key("Backspace", 5)
         b.wait_visible("#credentials-modal .pf-v5-c-select__menu-item.directory:contains('/var/lib/')")
         b.click("#credentials-modal .pf-v5-c-select__toggle-clear")
         b.wait_val("#credentials-modal .pf-v5-c-select__toggle-typeahead input", "")

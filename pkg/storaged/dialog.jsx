@@ -235,14 +235,20 @@ import { HelperText, HelperTextItem } from "@patternfly/react-core/dist/esm/comp
 import { List, ListItem } from "@patternfly/react-core/dist/esm/components/List/index.js";
 import { ExclamationTriangleIcon, InfoIcon, HelpIcon, EyeIcon, EyeSlashIcon } from "@patternfly/react-icons";
 import { InputGroup } from "@patternfly/react-core/dist/esm/components/InputGroup/index.js";
+import { Table, Tbody, Tr, Td } from '@patternfly/react-table';
 
 import { show_modal_dialog, apply_modal_dialog } from "cockpit-components-dialog.jsx";
 import { ListingTable } from "cockpit-components-table.jsx";
 import { FormHelper } from "cockpit-components-form-helper";
 
-import { fmt_size, block_name, format_size_and_text, format_delay, for_each_async } from "./utils.js";
+import {
+    decode_filename, fmt_size, block_name, format_size_and_text, format_delay, for_each_async, get_byte_units,
+    is_available_block
+} from "./utils.js";
 import { fmt_to_fragments } from "utils.jsx";
 import client from "./client.js";
+
+import fsys_is_empty_sh from "./fsys-is-empty.sh";
 
 const _ = cockpit.gettext;
 
@@ -328,6 +334,19 @@ const Body = ({ body, teardown, fields, values, errors, isFormHorizontal, onChan
     );
 };
 
+const ExtraConfirmation = ({ text, onChange }) => {
+    const [confirmed, setConfirmed] = useState(false);
+
+    return (
+        <Checkbox isChecked={confirmed}
+                  id="dialog-confirm"
+                  label={text}
+                  onChange={(_, val) => {
+                      setConfirmed(val);
+                      onChange(val);
+                  }} />);
+};
+
 function flatten_fields(fields) {
     return fields.reduce(
         (acc, val) => acc.concat([val]).concat(val.options && val.options.nested_fields
@@ -340,6 +359,8 @@ export const dialog_open = (def) => {
     const nested_fields = def.Fields || [];
     const fields = flatten_fields(nested_fields);
     const values = { };
+    let confirmation = null;
+    let confirmed = false;
     let errors = null;
 
     fields.forEach(f => { values[f.tag] = f.initial_value });
@@ -415,8 +436,10 @@ export const dialog_open = (def) => {
                 caption: variant.Title,
                 style: actions.length == 0 ? "primary" : "secondary",
                 danger: def.Action.Danger || def.Action.DangerButton,
-                disabled: running_promise != null || (def.Action.disable_on_error &&
-                                                      errors && errors.toString() != "[object Object]"),
+                disabled: (running_promise != null ||
+                           (def.Action.disable_on_error &&
+                            errors && errors.toString() != "[object Object]") ||
+                           (confirmation && !confirmed)),
                 clicked: progress_callback => run_action(progress_callback, variant.tag),
             });
         }
@@ -436,13 +459,19 @@ export const dialog_open = (def) => {
             }
         }
 
-        const extra = (
-            <div>
-                { def.Action && def.Action.Danger
-                    ? <HelperText><HelperTextItem variant="error">{def.Action.Danger} </HelperTextItem></HelperText>
-                    : null
-                }
-            </div>);
+        let extra = null;
+        if (confirmation) {
+            extra = <ExtraConfirmation text={confirmation}
+                                       onChange={val => {
+                                           confirmed = val;
+                                           update_footer();
+                                       }} />;
+        } else if (def.Action && def.Action.Danger) {
+            extra = (
+                <div>
+                    <HelperText><HelperTextItem variant="error">{def.Action.Danger} </HelperTextItem></HelperText>
+                </div>);
+        }
 
         return {
             idle_message: (running_promise
@@ -535,6 +564,14 @@ export const dialog_open = (def) => {
         add_danger: (danger) => {
             def.Action.Danger = <>{def.Action.Danger} {danger}</>;
             update();
+        },
+
+        need_confirmation: (conf) => {
+            confirmation = conf;
+            confirmed = false;
+            def.Action.Danger = null;
+            def.Action.DangerButton = true;
+            update_footer();
         },
 
         close: () => {
@@ -863,11 +900,12 @@ export const SelectSpace = (tag, title, options) => {
     };
 };
 
-const CheckBoxComponent = ({ tag, val, title, tooltip, update_function }) => {
+const CheckBoxComponent = ({ tag, val, title, tooltip, disabled, update_function }) => {
     return (
         <Checkbox data-field={tag} data-field-type="checkbox"
                   id={tag}
                   isChecked={val}
+                  isDisabled={disabled}
                   label={
                       <>
                           {title}
@@ -905,6 +943,7 @@ export const CheckBoxes = (tag, title, options) => {
                                               tag={ftag}
                                               val={fval}
                                               title={field.title}
+                                              disabled={field.disabled}
                                               tooltip={field.tooltip}
                                               options={options}
                                               update_function={fchange} />;
@@ -921,6 +960,7 @@ export const CheckBoxes = (tag, title, options) => {
             if (options.fields.length == 1)
                 return fieldset;
 
+            // eslint-disable-next-line react/jsx-no-useless-fragment
             return <>{ fieldset }</>;
         }
     };
@@ -975,7 +1015,7 @@ function size_slider_round(value, round) {
 class SizeSliderElement extends React.Component {
     constructor(props) {
         super();
-        this.units = cockpit.get_byte_units(props.value || props.max);
+        this.units = get_byte_units(props.value || props.max);
         this.state = { unit: this.units.find(u => u.selected).factor };
     }
 
@@ -1201,12 +1241,15 @@ const teardown_block_name = use => {
         name = block_name(client.blocks[use.block.CryptoBackingDevice] || use.block);
     }
 
-    return name;
+    return name.replace(/^\/dev\//, "");
 };
 
 export const TeardownMessage = (usage, expect_single_unmount) => {
-    if (usage.length == 0)
+    if (!usage.Teardown)
         return null;
+
+    if (client.in_anaconda_mode() && !expect_single_unmount)
+        return <AnacondaTeardownMessage usage={usage} />;
 
     if (is_expected_unmount(usage, expect_single_unmount))
         return <StopProcessesMessage mount_point={expect_single_unmount} users={usage[0].users} />;
@@ -1248,6 +1291,36 @@ export const TeardownMessage = (usage, expect_single_unmount) => {
         </div>);
 };
 
+const AnacondaTeardownMessage = ({ usage }) => {
+    const rows = [];
+
+    usage.forEach((use, index) => {
+        if (use.data_warning) {
+            const name = teardown_block_name(use);
+            const location = client.strip_mount_point_prefix(use.location) || use.block.IdLabel || "-";
+
+            rows.push(
+                <Tr key={index}>
+                    <Td className="pf-v5-u-font-weight-bold">{name}</Td>
+                    <Td>{location}</Td>
+                    <Td>{use.data_warning}</Td>
+                </Tr>);
+        }
+    });
+
+    if (rows.length > 0) {
+        return (
+            <div className="modal-footer-teardown">
+                <HelperText>
+                    <HelperTextItem variant="error">
+                        {_("Important data might be deleted:")}
+                    </HelperTextItem>
+                </HelperText>
+                <Table variant="compact" borders={false}><Tbody>{rows}</Tbody></Table>
+            </div>);
+    }
+};
+
 export function teardown_danger_message(usage, expect_single_unmount) {
     if (is_expected_unmount(usage, expect_single_unmount))
         return stop_processes_danger_message(usage[0].users);
@@ -1266,24 +1339,54 @@ export function teardown_danger_message(usage, expect_single_unmount) {
     }
 }
 
-export function init_active_usage_processes(client, usage, expect_single_unmount) {
+export function init_teardown_usage(client, usage, expect_single_unmount) {
     return {
-        title: _("Checking related processes"),
-        func: dlg => {
-            return for_each_async(usage, u => {
+        title: _("Checking filesystem usage"),
+        func: async function (dlg) {
+            let have_data = false;
+            for (const u of usage) {
                 if (u.usage == "mounted") {
-                    return client.find_mount_users(u.location)
-                            .then(users => {
-                                u.users = users;
-                            });
-                } else
-                    return Promise.resolve();
-            }).then(() => {
-                dlg.set_attribute("Teardown", TeardownMessage(usage, expect_single_unmount));
+                    u.users = await client.find_mount_users(u.location);
+                }
+                if (client.in_anaconda_mode() && !expect_single_unmount && u.block) {
+                    if (u.block.IdUsage == "filesystem" &&
+                        ["xfs", "ext2", "ext3", "ext4", "btrfs", "vfat", "ntfs"].indexOf(u.block.IdType) >= 0) {
+                        const empty = await cockpit.script(fsys_is_empty_sh,
+                                                           [decode_filename(u.block.PreferredDevice)],
+                                                           { superuser: "require", err: "message" });
+                        if (empty.trim() != "yes") {
+                            try {
+                                const info = JSON.parse(empty);
+                                u.data_warning = cockpit.format(_("$0 used, $1 total"),
+                                                                fmt_size((info.total - info.free) * info.unit),
+                                                                fmt_size(info.total * info.unit));
+                            } catch {
+                                u.data_warning = _("Device contains unrecognized data");
+                            }
+                        }
+                    } else if (u.block.IdUsage == "crypto" && !client.blocks_cleartext[u.block.path]) {
+                        u.data_warning = _("Locked encrypted device might contain data");
+                    } else if (!client.blocks_ptable[u.block.path] &&
+                               u.block.IdUsage != "raid" &&
+                               !is_available_block(client, u.block)) {
+                        u.data_warning = _("Device contains unrecognized data");
+                    }
+                    if (u.data_warning)
+                        have_data = true;
+                }
+            }
+
+            if (have_data) {
+                usage.Teardown = true;
+                dlg.need_confirmation(_("I confirm I want to lose this data forever"));
+            } else if (client.in_anaconda_mode() && !expect_single_unmount) {
+                dlg.need_confirmation(null);
+            } else {
                 const msg = teardown_danger_message(usage, expect_single_unmount);
                 if (msg)
                     dlg.add_danger(msg);
-            });
+            }
+            dlg.set_attribute("Teardown", TeardownMessage(usage, expect_single_unmount));
         }
     };
 }
@@ -1329,7 +1432,7 @@ export const StopProcessesMessage = ({ mount_point, users }) => {
                                           { title: _("PID"), props: colprops },
                                           { title: _("Command"), props: colprops },
                                           { title: _("User"), props: colprops },
-                                          { title: _("Runtime"), props: colprops }
+                                          { title: _("Started"), props: colprops }
                                       ]
                                   }
                                       rows={process_rows} />
@@ -1349,7 +1452,7 @@ export const StopProcessesMessage = ({ mount_point, users }) => {
                                           { title: _("Service"), props: colprops },
                                           { title: _("Command"), props: colprops },
                                           { title: _("Description"), props: colprops },
-                                          { title: _("Runtime"), props: colprops }
+                                          { title: _("Started"), props: colprops }
                                       ]
                                   }
                                   rows={service_rows} />

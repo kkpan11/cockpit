@@ -29,31 +29,22 @@ import testlib
 
 WAIT_KRB_SCRIPT = """
 set -ex
-# HACK: This needs to work, but may take a minute
-for x in $(seq 1 60); do
-    if getent passwd {0}; then
-        break
+# Configuring kerberos in sssd takes some time
+for _retry in $(seq 5); do
+    if getent passwd {0} &&
+       ssh -oStrictHostKeyChecking=no -oBatchMode=yes -l {0} x0.cockpit.lan true; then
+        exit 0
     fi
     if systemctl --quiet is-failed sssd.service; then
         systemctl status --lines=100 sssd.service >&2
         exit 1
     fi
     sss_cache -E || true
+    systemctl reset-failed sssd.service
     systemctl restart sssd.service
-    sleep $x
+    sleep 10
 done
-# ensure this works now, if the above loop timed out
-getent passwd {0}
-
-# HACK: This needs to work but may take a minute
-for x in $(seq 1 60); do
-    if ssh -oStrictHostKeyChecking=no -oBatchMode=yes -l {0} x0.cockpit.lan true; then
-        break
-    fi
-    sss_cache -E || true
-    systemctl restart sssd.service
-    sleep $x
-done
+exit 1
 """
 
 # https://en.wikipedia.org/wiki/HMAC-based_One-time_Password_algorithm
@@ -82,7 +73,6 @@ ExecStart=/bin/true
         machine.execute("systemctl unmask chrony")
 
 
-@testlib.skipDistroPackage()
 class CommonTests:
 
     def wait_discover(self):
@@ -489,7 +479,6 @@ class CommonTests:
 
 @testlib.skipOstree("No realmd available")
 @testlib.skipImage("No realmd available", "arch")
-@testlib.skipDistroPackage()
 @testlib.no_retry_when_changed
 class TestRealms(testlib.MachineCase):
     """Common variables and tests for all supported domain backends"""
@@ -511,8 +500,8 @@ class TestRealms(testlib.MachineCase):
         self.allow_journal_messages("couldn't get all properties of org.freedesktop.realmd.Service.*org.freedesktop.DBus.Error.NoReply: Remote peer disconnected")
 
 
-@testlib.skipDistroPackage()
 @testlib.no_retry_when_changed
+@testlib.skipImage("freeipa not currently available", "debian-testing")
 class TestIPA(TestRealms, CommonTests):
     def setUp(self):
         super().setUp()
@@ -556,6 +545,9 @@ class TestIPA(TestRealms, CommonTests):
 
         # validate Kerberos setup for ws
         m.execute(f"echo {self.admin_password} | kinit -f {self.admin_user}@COCKPIT.LAN")
+        # HACK: https://launchpad.net/bugs/2061055
+        if m.image == 'ubuntu-stable':
+            m.execute(self.restart_sshd)
         m.execute(WAIT_KRB_SCRIPT.format(f"{self.admin_user}@cockpit.lan"), timeout=300)
 
         # kerberos login should work
@@ -747,7 +739,7 @@ ipa-advise enable-admins-sudo | sh -ex
 
         # enable ssh GSSAPI authentication
         m.execute("sed -ri 's/#GSSAPIAuthentication.*/GSSAPIAuthentication yes/' /etc/ssh/sshd_config")
-        m.execute("systemctl restart sshd")
+        m.execute(self.restart_sshd)
 
         # avoid "unknown host" error in SSH
         m.execute("su -c 'mkdir -p ~/.ssh; ssh-keyscan localhost > ~/.ssh/known_hosts' alice")
@@ -770,7 +762,8 @@ ipa-advise enable-admins-sudo | sh -ex
         b.open("/system/terminal")
         b.enter_page("/system/terminal")
         b.wait_in_text(".terminal .xterm-accessibility-tree", "alice")
-        b.key_press("klist\r")
+        b.input_text("klist")
+        b.key("Enter")
         b.wait_in_text(".terminal .xterm-accessibility-tree", "Ticket cache: FILE:/run/user")
         b.wait_in_text(".terminal .xterm-accessibility-tree", "Default principal: alice@COCKPIT.LAN")
         b.wait_in_text(".terminal .xterm-accessibility-tree", "for client HTTP/x0.cockpit.lan@COCKPIT.LAN")
@@ -838,7 +831,8 @@ ipa-advise enable-admins-sudo | sh -ex
             b.open("/@x0.cockpit.lan/system/terminal")
             b.enter_page("/system/terminal", host="x0.cockpit.lan")
         b.wait_in_text(".terminal .xterm-accessibility-tree", "alice")
-        b.key_press(f"{ccache_env} sudo whoami\r")
+        b.input_text(f"{ccache_env} sudo whoami")
+        b.key("Enter")
         b.wait_in_text(".terminal .xterm-accessibility-tree", "root")
 
         # S4U proxy ticket gets cleaned up on logout
@@ -848,7 +842,6 @@ ipa-advise enable-admins-sudo | sh -ex
 
 
 @testlib.skipImage("adcli not on test images", "debian-*", "ubuntu-*")
-@testlib.skipDistroPackage()
 @testlib.no_retry_when_changed
 class TestAD(TestRealms, CommonTests):
     def setUp(self):
@@ -1003,7 +996,7 @@ sed -i '/^sudoers:/ s/files sss/sss files/' /etc/nsswitch.conf
 
 @testlib.skipOstree("No realmd available")
 @testlib.skipImage("No realmd available", "arch")
-@testlib.skipDistroPackage()
+@testlib.skipImage("freeipa not currently available", "debian-*")
 @testlib.no_retry_when_changed
 class TestKerberos(testlib.MachineCase):
     provision = {
@@ -1025,6 +1018,9 @@ class TestKerberos(testlib.MachineCase):
             # no nss-myhostname there
             self.machine.execute("echo '10.111.113.1 x0.cockpit.lan' >> /etc/hosts")
         self.machine.execute(JOIN_SCRIPT % args, timeout=1800)
+        # HACK: https://launchpad.net/bugs/2061055
+        if self.machine.image == 'ubuntu-stable':
+            self.machine.execute(self.restart_sshd)
         self.machine.execute(WAIT_KRB_SCRIPT.format("admin"), timeout=300)
 
     @testlib.skipBrowser("Firefox cannot work with cookies", "firefox")
@@ -1078,7 +1074,8 @@ class TestKerberos(testlib.MachineCase):
         b.enter_page("/system/terminal")
         # wait for prompt
         b.wait_in_text(".terminal .xterm-accessibility-tree", "admin")
-        b.key_press("klist\r")
+        b.input_text("klist")
+        b.key("Enter")
         b.wait_in_text(".terminal .xterm-accessibility-tree", "Ticket cache")
         b.wait_in_text(".terminal .xterm-accessibility-tree", "Default principal: admin@COCKPIT.LAN")
         b.wait_in_text(".terminal .xterm-accessibility-tree", "krbtgt/COCKPIT.LAN")
@@ -1129,7 +1126,6 @@ class TestKerberos(testlib.MachineCase):
 
 @testlib.skipImage("No realmd available", "arch")
 @testlib.skipOstree("Package (un)install does not work on OSTree")
-@testlib.skipDistroPackage()
 class TestPackageInstall(packagelib.PackageCase):
 
     def setUp(self):

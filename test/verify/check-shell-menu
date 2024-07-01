@@ -23,20 +23,22 @@ import testlib
 
 
 @testlib.nondestructive
-@testlib.skipDistroPackage()
 class TestMenu(testlib.MachineCase):
 
     def testDarkThemeSwitcher(self):
         b = self.browser
 
-        def switch_style(style_class, prevPage="system"):
+        def switch_style(style_class, prevPage="system", pixel_test=False):
             b.switch_to_top()
             b.click("#toggle-menu")
+            if pixel_test:
+                b.wait_visible("#toggle-menu-menu")
+                b.assert_pixels_in_current_layout("#toggle-menu-menu", "shell-toggle-menu")
             b.click(f"#topnav {style_class}")
             b.enter_page(f"/{prevPage}")
 
         self.login_and_go("/system")
-        switch_style("#dark")
+        switch_style("#dark", pixel_test=True)
         b._wait_present("html.pf-v5-theme-dark")
 
         switch_style("#light")
@@ -81,11 +83,12 @@ class TestMenu(testlib.MachineCase):
 
         # Clicking inside the iframed pages should close the docs menu
         b.click("#toggle-docs")
-        b.wait_visible("#toggle-docs + ul")
+        b.wait_visible("#toggle-docs-menu")
+        b.assert_pixels("#toggle-docs-menu", "shell-docs-menu")
         b.enter_page("/system")
         b.focus("#overview main")
         b.switch_to_top()
-        b.wait_not_present("#toggle-docs + ul")
+        b.wait_not_present("#toggle-docs-menu")
 
         # Check that we can use a link with a hash in it
         b.click_system_menu("/system/#/memory")
@@ -154,6 +157,57 @@ class TestMenu(testlib.MachineCase):
         b.wait_visible("#login")
         b.wait_visible("#login-info-message")
         b.wait_text("#login-info-message", "You have been logged out due to inactivity.")
+
+    def testKeyboardNavigation(self):
+        b = self.browser
+        self.login_and_go()
+
+        # initially shows host switcher
+        b.wait_visible("#host-toggle")
+        self.assertEqual(b.eval_js("document.activeElement.tagName"), "BODY")
+        # conceptually we want that, but we use CSS hacks (-999 offset and 1x1 size) to hide it
+        # b.wait_not_visible(".skiplink")
+
+        # press Tab once → "Skip to content" skiplink
+        b.key("Tab")
+        b.wait_js_cond("document.activeElement.classList.contains('skiplink')")
+        self.assertEqual(b.eval_js("document.activeElement.textContent"), "Skip to content")
+        self.assertEqual(b.eval_js("document.activeElement.getAttribute('href')"), "#content")
+        b.key("Enter")
+        b.wait_js_cond("document.activeElement.getAttribute('id') === 'content'")
+        self.assertEqual(b.eval_js("document.activeElement.tagName"), "DIV")
+        self.assertEqual(b.eval_js("document.activeElement.getAttribute('id')"), "content")
+
+        # reset
+        b.reload()
+        b.wait_visible("#host-toggle")
+
+        # press Tab twice → "Skip main navigation" skiplink
+        b.key("Tab")
+        self.assertEqual(b.eval_js("document.activeElement.textContent"), "Skip to content")
+        b.key("Tab")
+        self.assertEqual(b.eval_js("document.activeElement.textContent"), "Skip main navigation")
+        b.key("Enter")
+        b.wait_js_cond("document.activeElement.tagName === 'NAV'")
+        self.assertEqual(b.eval_js("document.activeElement.getAttribute('id')"), "hosts-sel")
+
+        # actually skips the page menu and goes on to top nav bar
+        b.key("Tab")
+        b.wait_js_cond("document.activeElement.getAttribute('id') === 'host-toggle'")
+        b.key("Tab")
+        if self.machine.ostree_image:
+            b.wait_js_cond("document.activeElement.textContent === 'Help'")
+        else:
+            b.wait_js_cond("document.activeElement.textContent === 'Administrative access'")
+
+        # reset
+        b.reload()
+        b.wait_visible("#host-toggle")
+
+        # without skip links, tabbing goes through page menu
+        b.key("Tab", repeat=5)
+        # different browsers behave a bit different here -- Firefox is at "Overview", Chromium at "Logs"
+        b.wait_js_cond("document.activeElement.classList.contains('pf-v5-c-nav__link')")
 
 
 if __name__ == '__main__':

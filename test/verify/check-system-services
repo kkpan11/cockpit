@@ -20,11 +20,10 @@
 import time
 
 import testlib
-import testvm
+from machine import testvm
 
 
 @testlib.nondestructive
-@testlib.skipDistroPackage()
 class TestServices(testlib.MachineCase):
 
     def setUp(self):
@@ -38,11 +37,10 @@ class TestServices(testlib.MachineCase):
         # We manipulate with `/etc/systemd/system` so `daemon-reload` to keep it in proper state
         # Also `reset-failed` as failed units can be still listed with `systemctl` even when all files
         # were removed and daemon reloaded.
-        self.restore_dir("/etc/systemd/system", "systemctl daemon-reload; systemctl reset-failed", reboot_safe=True)
-        user_post_restore = "su - admin -c 'export XDG_RUNTIME_DIR=/run/user/$(id -u admin); systemctl --user daemon-reload; systemctl --user reset-failed'"
-        self.restore_dir("/etc/systemd/user", user_post_restore, reboot_safe=True)
-        self.restore_dir("/etc/xdg/systemd/user", user_post_restore, reboot_safe=True)
-        self.restore_dir("/home/admin/.config", user_post_restore, reboot_safe=True)
+        self.restore_dir("/etc/systemd/system", "systemctl daemon-reload; systemctl reset-failed")
+        self.restore_dir("/etc/systemd/user")
+        self.restore_dir("/etc/xdg/systemd/user")
+        self.restore_dir("/home/admin/.config")
 
     def run_systemctl(self, user, cmd):
         if user:
@@ -663,7 +661,7 @@ ExecStart=/bin/awk -f /tmp/mem-hog{params}.awk
         self.goto_service("mem-hog.service")
         b.wait_not_present("#memory")
         # In some distros systemctl is showing memory current as [Not Set] for user units
-        if not user or (m.image != "centos-8-stream" and not m.image.startswith("rhel-8-")):
+        if not user or not m.image.startswith("rhel-8-"):
             self.run_systemctl(user, "start mem-hog.service")
             # If the test fails before we stop mem-hog, the next test run will not get the correct memory usage here
             self.addCleanup(self.run_systemctl, user, "stop mem-hog.service || true")
@@ -1297,7 +1295,7 @@ WantedBy=multi-user.target
 
         # overview: alias
         self.wait_service_present("flower-byanyothername.service")
-        if m.image.startswith("rhel-8") or m.image.startswith("centos-8"):
+        if m.image.startswith("rhel-8"):
             # old systemd does not have unit file state "alias" yet
             self.wait_service_in_panel("flower-byanyothername.service", "Enabled")
         else:
@@ -1355,7 +1353,6 @@ WantedBy=multi-user.target
         self.check_service_details(["Read-only", "Disabled"], [], enabled=False, onoff=False, kebab=False)
 
 
-@testlib.skipDistroPackage()
 class TestTimers(testlib.MachineCase):
     def svc_sel(self, service):
         return f'tr[data-goto-unit="{service}"]'
@@ -1384,6 +1381,8 @@ class TestTimers(testlib.MachineCase):
         testlib.wait(lambda: "false" in m.execute(
             "busctl get-property org.freedesktop.timedate1 /org/freedesktop/timedate1 org.freedesktop.timedate1 NTP"))
         m.execute("timedatectl set-time '2036-01-01 12:00:00'")
+        # this sometimes confuses PAM session tracking
+        self.allow_journal_messages("cockpit-session: admin: couldn't close session: System error: Unknown error -7")
         m.reboot()
 
         m.execute("timedatectl set-time '2036-01-01 15:30:00'")
@@ -1480,7 +1479,7 @@ class TestTimers(testlib.MachineCase):
         m.execute("timedatectl set-time '2036-03-07 00:00:00'")
         wait_systemctl_timer("2036-03-08 21:12")
         self.assertIn("2036-03-08 21:12", m.execute("systemctl list-timers"))
-        # creates a new weekly timer that runs on Fri at 12:45 and Sun at 20:12 every week
+        # creates a new weekly timer that runs on Fri at 12:30 and Sun at 20:12 every week
         b.click('#create-timer')
         b.wait_visible("#timer-dialog")
         b.set_input_text("#servicename", "weekly_timer")
@@ -1491,7 +1490,9 @@ class TestTimers(testlib.MachineCase):
         b.wait_visible("[data-index='0'] .week-days")
         b.click("[data-index='0'] [aria-label='Add']")
         b.select_from_dropdown("[data-index='0'] .week-days select", "fri")
-        b.set_input_text("[data-index='0'] .create-timer-time-picker input", "12:45")
+        # select time from dropdown with mouse
+        b.select_PF5("#timer-dialog [data-index='0'] .create-timer-time-picker input", ".pf-v5-c-menu", "12:30")
+        # type time with keyboard
         b.select_from_dropdown("[data-index='1'] .week-days select", "sun")
         b.set_input_text("[data-index='1'] .create-timer-time-picker input", "20:12")
         b.click("#timer-save-button")
@@ -1504,15 +1505,15 @@ class TestTimers(testlib.MachineCase):
         wait_systemctl_timer("Sun 2036-03-09 20:12")
         self.assertIn("Sun 2036-03-09 20:12", m.execute("systemctl list-timers"))
         m.execute("timedatectl set-time '2036-03-10 00:00:00'")
-        wait_systemctl_timer("Fri 2036-03-14 12:45")
-        self.assertIn("Fri 2036-03-14 12:45", m.execute("systemctl list-timers"))
+        wait_systemctl_timer("Fri 2036-03-14 12:30")
+        self.assertIn("Fri 2036-03-14 12:30", m.execute("systemctl list-timers"))
         # checks if timer runs on next week's Friday and Sunday
         m.execute("timedatectl set-time '2036-03-15 00:00:00'")
         wait_systemctl_timer("Sun 2036-03-16 20:12")
         self.assertIn("Sun 2036-03-16 20:12", m.execute("systemctl list-timers"))
         m.execute("timedatectl set-time '2036-03-17 00:00:00'")
-        wait_systemctl_timer("Fri 2036-03-21 12:45")
-        self.assertIn("Fri 2036-03-21 12:45", m.execute("systemctl list-timers"))
+        wait_systemctl_timer("Fri 2036-03-21 12:30")
+        self.assertIn("Fri 2036-03-21 12:30", m.execute("systemctl list-timers"))
         # creates a new daily timer that runs at 2:40 and at 21:15 every day
         b.click('#create-timer')
         b.wait_visible("#timer-dialog")

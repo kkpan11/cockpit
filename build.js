@@ -50,8 +50,12 @@ const qunitOptions = {
 const parser = (await import('argparse')).default.ArgumentParser();
 parser.add_argument('-r', '--rsync', { help: "rsync bundles to ssh target after build", metavar: "HOST" });
 parser.add_argument('-w', '--watch', { action: 'store_true', help: "Enable watch mode" });
+parser.add_argument('-m', '--metafile', { help: "Enable bund size information file", metavar: "FILE" });
 parser.add_argument('onlydir', { nargs: '?', help: "The pkg/<DIRECTORY> to build (eg. base1, shell, ...)", metavar: "DIRECTORY" });
 const args = parser.parse_args();
+
+if (args.metafile)
+    pkgOptions.metafile = true;
 
 if (args.onlydir?.includes('/'))
     parser.error("Directory must not contain '/'");
@@ -115,7 +119,7 @@ async function build() {
 
     const { entryPoints, assetFiles, redhat_fonts } = getFiles(args.onlydir);
     const tests = getTestFiles();
-    const testEntryPoints = tests.map(test => "pkg/" + test + ".js");
+    const testEntryPoints = tests.map(test => "pkg/" + test);
 
     const pkgFirstPlugins = [
         cleanPlugin({ subdir: args.onlydir }),
@@ -201,7 +205,9 @@ async function build() {
         });
 
         try {
-            await Promise.all([pkgContext.rebuild(), qunitContext.rebuild()]);
+            const results = await Promise.all([pkgContext.rebuild(), qunitContext.rebuild()]);
+            if (args.metafile)
+                fs.writeFileSync(args.metafile, JSON.stringify(results[0].metafile));
         } catch (e) {
             if (!args.watch)
                 process.exit(1);

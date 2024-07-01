@@ -44,6 +44,7 @@
         "react/jsx-closing-tag-location": "off",
         "react/jsx-curly-newline": "off",
         "react/jsx-first-prop-new-line": "off",
+        "react/jsx-no-useless-fragment": "error",
         "react/prop-types": "off",
         "space-before-function-paren": "off",
         "standard/no-callback-literal": "off",
@@ -53,9 +54,22 @@
         "react/jsx-wrap-multilines": "off"
     },
     "globals": {
-        "require": false,
-        "module": false
+        "require": "readonly",
+        "module": "readonly"
     },
+    "overrides": [
+        {
+          "files": ["**/*.ts", "**/*.tsx"],
+          "plugins": [
+            "@typescript-eslint"
+          ],
+          "extends": ["eslint:recommended", "plugin:@typescript-eslint/recommended"],
+          "parser": "@typescript-eslint/parser",
+          "parserOptions": {
+            "project": ["./tsconfig.json"]
+          }
+        }
+    ],
     "settings": {
         "react": {
             "version": "detect"

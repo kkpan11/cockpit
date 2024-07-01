@@ -48,7 +48,8 @@ def build_sdist(sdist_directory: str,
     sdist_filename = f'{PACKAGE}.tar.gz'
     # We do this manually to avoid adding timestamps.  See https://bugs.python.org/issue31526
     with gzip.GzipFile(f'{sdist_directory}/{sdist_filename}', mode='w', mtime=0) as gz:
-        with tarfile.open(fileobj=gz, mode='w|', dereference=True) as sdist:
+        # https://github.com/python/typeshed/issues/5491
+        with tarfile.open(fileobj=gz, mode='w|', dereference=True) as sdist:  # type: ignore[arg-type]
             for filename in find_sources(srcpkg=True):
                 sdist.add(filename, arcname=f'{PACKAGE}/{filename}', )
     return sdist_filename
@@ -86,7 +87,7 @@ def build_wheel(wheel_directory: str,
         def beipack_self(main: str, args: str = '') -> bytes:
             from cockpit._vendor.bei import beipack
             contents = {name: wheel.read(name) for name in wheel.namelist()}
-            pack = beipack.pack(contents, main, args=args).encode('utf-8')
+            pack = beipack.pack(contents, main, args=args).encode()
             return lzma.compress(pack, preset=lzma.PRESET_EXTREME)
 
         def write_distinfo(filename: str, lines: Iterable[str]) -> None:

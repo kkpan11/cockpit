@@ -15,7 +15,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-import asyncio
 import http.client
 import logging
 import socket
@@ -31,11 +30,11 @@ class HttpChannel(AsyncChannel):
     payload = 'http-stream2'
 
     @staticmethod
-    def get_headers(response: http.client.HTTPResponse, binary: 'str | None') -> JsonObject:
+    def get_headers(response: http.client.HTTPResponse, *, binary: bool) -> JsonObject:
         # Never send these headers
         remove = {'Connection', 'Transfer-Encoding'}
 
-        if binary != 'raw':
+        if not binary:
             # Only send these headers for raw binary streams
             remove.update({'Content-Length', 'Range'})
 
@@ -98,7 +97,6 @@ class HttpChannel(AsyncChannel):
     async def run(self, options: JsonObject) -> None:
         logger.debug('open %s', options)
 
-        binary = get_str(options, 'binary', None)
         method = get_str(options, 'method')
         path = get_str(options, 'path')
         headers = get_object(options, 'headers', lambda d: {k: typechecked(v, str) for k, v in d.items()}, None)
@@ -106,7 +104,6 @@ class HttpChannel(AsyncChannel):
         if 'connection' in options:
             raise ChannelError('protocol-error', message='connection sharing is not implemented on this bridge')
 
-        loop = asyncio.get_running_loop()
         connection = self.create_client(options)
 
         self.ready()
@@ -114,13 +111,13 @@ class HttpChannel(AsyncChannel):
         body = b''
         while True:
             data = await self.read()
-            if data == b'':
+            if data is None:
                 break
             body += data
 
         # Connect in a thread and handle errors
         try:
-            await loop.run_in_executor(None, self.connect, connection, get_str(options, 'unix', None))
+            await self.in_thread(self.connect, connection, get_str(options, 'unix', None))
         except ssl.SSLCertVerificationError as exc:
             raise ChannelError('unknown-hostkey', message=str(exc)) from exc
         except (OSError, IOError) as exc:
@@ -128,19 +125,19 @@ class HttpChannel(AsyncChannel):
 
         # Submit request in a thread and handle errors
         try:
-            response = await loop.run_in_executor(None, self.request, connection, method, path, headers or {}, body)
+            response = await self.in_thread(self.request, connection, method, path, headers or {}, body)
         except (http.client.HTTPException, OSError) as exc:
             raise ChannelError('terminated', message=str(exc)) from exc
 
         self.send_control(command='response',
                           status=response.status,
                           reason=response.reason,
-                          headers=self.get_headers(response, binary))
+                          headers=self.get_headers(response, binary=self.is_binary))
 
         # Receive the body and finish up
         try:
             while True:
-                block = await loop.run_in_executor(None, response.read1, self.BLOCK_SIZE)
+                block = await self.in_thread(response.read1, self.BLOCK_SIZE)
                 if not block:
                     break
                 await self.write(block)
@@ -151,7 +148,7 @@ class HttpChannel(AsyncChannel):
             block = response.read()
             assert block == b''
 
-            await loop.run_in_executor(None, connection.close)
+            await self.in_thread(connection.close)
         except (http.client.HTTPException, OSError) as exc:
             raise ChannelError('terminated', message=str(exc)) from exc
 

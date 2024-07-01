@@ -22,7 +22,6 @@ import importlib.resources
 import logging
 import os
 import shlex
-import sys
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Sequence
 
@@ -159,9 +158,9 @@ class AuthorizeResponder(ferny.AskpassHandler):
                                                            echo=False)
 
         b64 = response.removeprefix('X-Conversation -').strip()
-        passwd = base64.b64decode(b64.encode()).decode()
-        logger.debug('Returning a %d chars password', len(passwd))
-        return passwd
+        response = base64.b64decode(b64.encode()).decode()
+        logger.debug('Returning a %d chars response', len(response))
+        return response
 
     async def do_custom_command(self, command: str, args: tuple, fds: list[int], stderr: str) -> None:
         logger.debug('Got ferny command %s %s %s', command, args, stderr)
@@ -304,13 +303,26 @@ async def run(args) -> None:
 
         # only patch the packages line if we are in beiboot mode
         if bridge.packages:
-            message['packages'] = {p: None for p in bridge.packages.packages}
+            message['packages'] = dict.fromkeys(bridge.packages.packages)
 
         bridge.write_control(message)
         bridge.ssh_peer.thaw_endpoint()
     except ferny.InteractionError as exc:
-        sys.exit(str(exc))
+        error = ferny.ssh_errors.get_exception_for_ssh_stderr(str(exc))
+        logger.debug("ferny.InteractionError: %s, interpreted as: %r", exc, error)
+        if isinstance(error, ferny.SshAuthenticationError):
+            problem = 'authentication-failed'
+        elif isinstance(error, ferny.SshHostKeyError):
+            problem = 'unknown-hostkey'
+        elif isinstance(error, OSError):
+            # usually DNS/socket errors
+            problem = 'unknown-host'
+        else:
+            problem = 'internal-error'
+        bridge.write_control(command='init', problem=problem, message=str(error))
+        return
     except CockpitProblem as exc:
+        logger.debug("CockpitProblem: %s", exc)
         bridge.write_control(exc.attrs, command='init')
         return
 

@@ -44,6 +44,7 @@ import { ListingTable } from "cockpit-components-table.jsx";
 import cockpit from "cockpit";
 import { superuser } from "superuser";
 import { useObject, useEvent } from "hooks";
+import * as python from "python";
 
 import { SuperuserButton } from "../shell/superuser.jsx";
 
@@ -52,6 +53,8 @@ import * as timeformat from "timeformat";
 import { WithDialogs, useDialogs } from "dialogs.jsx";
 import { FormHelper } from "cockpit-components-form-helper";
 import { KebabDropdown } from "cockpit-components-dropdown";
+
+import get_report_dir_py from "./get_report_dir.py";
 
 import './sosreport.scss';
 
@@ -90,8 +93,10 @@ function sosLister() {
         }
     }
 
-    function update_reports() {
-        cockpit.script('find /var/tmp -maxdepth 1 -name \'*sosreport-*.tar.*\' -print0 | xargs -0 -r stat --printf="%n\\r%W\\n"', { superuser: true, err: "message" })
+    function update_reports(report_dir) {
+        cockpit.script(`find ${report_dir} -maxdepth 1 -name '*sosreport-*.tar.*' -print0 | ` +
+                       'xargs -0 -r stat --printf="%n\\r%W\\n"',
+                       { superuser: "require", err: "message" })
                 .then(output => {
                     const reports = { };
                     const lines = output.split("\n");
@@ -116,7 +121,7 @@ function sosLister() {
 
     let watch = null;
 
-    function restart() {
+    async function restart() {
         if (superuser.allowed === null)
             return;
 
@@ -126,14 +131,16 @@ function sosLister() {
         self.problem = null;
         watch = null;
 
-        watch = cockpit.channel({ payload: "fswatch1", path: "/var/tmp", superuser: true });
+        const report_dir = (await python.spawn(get_report_dir_py)).trim();
+
+        watch = cockpit.channel({ payload: "fswatch1", path: report_dir, superuser: "require" });
         watch.addEventListener("message", (event, payload) => {
             const msg = JSON.parse(payload);
             if (msg.event != "present" && parse_report_name(msg.path))
-                update_reports();
+                update_reports(report_dir);
         });
 
-        update_reports();
+        update_reports(report_dir);
     }
 
     restart();
@@ -150,7 +157,7 @@ function sosCreate(args, setProgress, setError, setErrorDetail) {
 
     // TODO - Use a real API instead of scraping stdout once such an API exists
     const task = cockpit.spawn(["sos", "report", "--batch"].concat(args),
-                               { superuser: true, err: "out", pty: true });
+                               { superuser: "require", err: "out", pty: true });
 
     task.stream(text => {
         let p = 0;
@@ -195,7 +202,7 @@ function sosDownload(path) {
         payload: "fsread1",
         binary: "raw",
         path,
-        superuser: true,
+        superuser: "require",
         max_read_size: 150 * 1024 * 1024,
         external: {
             "content-disposition": 'attachment; filename="' + basename + '"',
@@ -222,7 +229,16 @@ function sosDownload(path) {
 }
 
 function sosRemove(path) {
-    return cockpit.script(cockpit.format("rm -f '$0' '$0'.*", path), { superuser: true, err: "message" });
+    // there are various potential extra files; not all of them are expected to exist,
+    // the file API tolerates removing nonexisting files
+    const paths = [
+        path,
+        path + ".asc",
+        path + ".gpg",
+        path + ".md5",
+        path + ".sha256",
+    ];
+    return Promise.all(paths.map(p => cockpit.file(p, { superuser: "require" }).replace(null)));
 }
 
 const SOSDialog = () => {
@@ -464,7 +480,7 @@ const SOSBody = () => {
             props: { key: path },
             columns: [
                 report.name,
-                timeformat.distanceToNow(new Date(report.date * 1000), true),
+                timeformat.distanceToNow(new Date(report.date * 1000)),
                 { title: <LabelGroup>{labels}</LabelGroup> },
                 {
                     title: <>{action}{menu}</>,
