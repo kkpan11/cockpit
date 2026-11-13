@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2016 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import React, { useState } from 'react';
@@ -24,6 +10,7 @@ import { Dropdown, DropdownItem } from '@patternfly/react-core/dist/esm/componen
 import { MenuToggle } from '@patternfly/react-core/dist/esm/components/MenuToggle/index.js';
 import { Tooltip, TooltipPosition } from "@patternfly/react-core/dist/esm/components/Tooltip/index.js";
 import { Switch } from "@patternfly/react-core/dist/esm/components/Switch/index.js";
+import { Icon } from "@patternfly/react-core/dist/esm/components/Icon/index.js";
 import { BarsIcon, EllipsisVIcon } from '@patternfly/react-icons';
 
 import cockpit from "cockpit";
@@ -120,7 +107,6 @@ export const StorageButton = ({ id, kind, excuse, onClick, children, ariaLabel, 
                                        onClick={checked(onClick, setSpinning)}
                                        variant={kind || "secondary"}
                                        isDisabled={!!excuse || (spinner && spinning)}
-                                       style={excuse ? { pointerEvents: 'none' } : null}
                                        isLoading={spinner ? spinning : undefined}>
                                    {children}
                                </Button>
@@ -131,7 +117,6 @@ export const StorageLink = ({ id, excuse, onClick, children }) => (
     <StorageControl excuse={excuse}
                     content={excuse => (
                         <Button onClick={checked(onClick)}
-                                style={excuse ? { pointerEvents: 'none' } : null}
                                 variant="link"
                                 isInline
                                 isDisabled={!!excuse}>
@@ -197,12 +182,12 @@ export const StorageUsageBar = ({ stats, critical, block, offset, total, short }
 
     return (
         <div>
-            <span className="usage-text pf-v5-u-text-nowrap">
+            <span className="usage-text pf-v6-u-text-nowrap">
                 {labelText}
             </span>
             <div className={"usage-bar" + (fraction > critical ? " usage-bar-danger" : "") + (short ? " usage-bar-short" : "")}
                  role="progressbar"
-                 aria-valuemin="0" aria-valuemax={stats[1]} aria-valuenow={stats[0]}
+                 aria-valuemin={0} aria-valuemax={stats[1]} aria-valuenow={stats[0]}
                  aria-label={cockpit.format(_("Usage of $0"), block)}
                  aria-valuetext={labelText}>
                 <div className="usage-bar-indicator usage-bar-other" aria-hidden="true" style={{ width: total_fraction * 100 + "%" }} />
@@ -218,17 +203,17 @@ export const StorageUsageBar = ({ stats, critical, block, offset, total, short }
 export const StorageSize = ({ size }) => {
     return (
         <div>
-            <span className="usage-text pf-v5-u-text-nowrap">
+            <span className="usage-text pf-v6-u-text-nowrap">
                 {utils.fmt_size(size)}
             </span>
             <div className="usage-bar usage-bar-short usage-bar-empty" />
         </div>);
 };
 
-export const StorageMenuItem = ({ onClick, danger, excuse, children }) => (
+export const StorageMenuItem = ({ onClick, danger, excuse, children, isDisabled }) => (
     <DropdownItem className={danger && !excuse ? " delete-resource-dangerous" : ""}
                   description={excuse}
-                  isDisabled={!!excuse}
+                  isDisabled={isDisabled || !!excuse}
                   onClick={checked(onClick, null, excuse)}>
         {children}
     </DropdownItem>
@@ -248,14 +233,16 @@ export const StorageBarMenu = ({ label, isKebab, menuItems }) => {
         setIsOpen(false);
     };
 
-    const toggle = ref => <MenuToggle ref={ref}
-                                      variant="plain"
-                                      className={isKebab ? "" : "pf-m-primary"}
-                                      onClick={onToggleClick}
-                                      isExpanded={isOpen}
-                                      aria-label={label}>
-        {isKebab ? <EllipsisVIcon /> : <BarsIcon color="white" />}
-    </MenuToggle>;
+    const toggle = ref => (
+        <MenuToggle
+            ref={ref}
+            variant="plain"
+            onClick={onToggleClick}
+            isExpanded={isOpen}
+            aria-label={label}>
+            {isKebab ? <EllipsisVIcon /> : <Icon size="lg"><BarsIcon /></Icon>}
+        </MenuToggle>
+    );
 
     return (
         <Dropdown isOpen={isOpen}

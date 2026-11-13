@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2016 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from 'cockpit';
@@ -80,15 +66,15 @@ export function init(statusChangedCallback) {
                         return;
                     const key = items[0].trim();
                     const value = items[1].trim();
-                    if (key == "SELinux status") {
-                        status.enabled = (value == "enabled");
-                    } else if (key == "Current mode") {
-                        status.enforcing = (value == "enforcing");
-                    } else if (key == "Mode from config file") {
-                        if (value == 'error (Permission denied)') {
+                    if (key === "SELinux status") {
+                        status.enabled = (value === "enabled");
+                    } else if (key === "Current mode") {
+                        status.enforcing = (value === "enforcing");
+                    } else if (key === "Mode from config file") {
+                        if (value === 'error (Permission denied)') {
                             status.configEnforcing = undefined;
                         } else {
-                            status.configEnforcing = (value == "enforcing");
+                            status.configEnforcing = (value === "enforcing");
                         }
                     }
                 });
@@ -191,7 +177,7 @@ export function getModifications(statusChangedCallback) {
                     const items = mod.split(" ");
 
                     // Skip enumeration of types, e.g. 'boolean -D'
-                    if (items.length === 2 && items[1] == "-D")
+                    if (items.length === 2 && items[1] === "-D")
                         return result;
 
                     if (manageditems.indexOf(items[0]) < 0) {
@@ -232,5 +218,5 @@ ${rules}
 // returns a promise of the command used to set enforcing mode
 export function setEnforcing(enforcingMode) {
     const command = ["setenforce", (enforcingMode ? "1" : "0")];
-    return cockpit.spawn(command, { superuser: true, err: "message" });
+    return cockpit.spawn(command, { superuser: "require", err: "message" });
 }

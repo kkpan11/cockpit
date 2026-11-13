@@ -1,23 +1,9 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2017 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
-import '../lib/patternfly/patternfly-5-cockpit.scss';
+import '../lib/patternfly/patternfly-6-cockpit.scss';
 import "polyfills";
 import 'cockpit-dark-theme'; // once per page
 
@@ -27,11 +13,12 @@ import React, { useState } from "react";
 import { createRoot } from 'react-dom/client';
 
 import { EmptyStatePanel } from "cockpit-components-empty-state.jsx";
+import { usePageLocation, useObject, useEvent } from "hooks";
+
 import { ApplicationList } from "./application-list.jsx";
 import { Application } from "./application.jsx";
 import { get_metainfo_db } from "./appstream.js";
-import { usePageLocation, useObject, useEvent } from "hooks";
-import { show_error } from "./utils.jsx";
+import { show_error } from "./utils";
 
 const App = () => {
     const [progress, setProgress] = useState({});
@@ -57,12 +44,11 @@ const App = () => {
                                 action={action}
                                 appProgress={progress}
                                 appProgressTitle={progressTitle} />;
-    } else if (path.length == 1) {
+    } else if (path.length === 1) {
         const id = path[0];
         return <Application metainfo_db={metainfo_db}
                             action={action}
                             progress={progress[id]}
-                            progressTitle={progressTitle[id]}
                             id={id} />;
     } else { /* redirect */
         console.warn("not a apps location: " + path);

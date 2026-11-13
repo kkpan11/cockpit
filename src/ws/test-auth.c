@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2013 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
@@ -23,11 +9,10 @@
 #include "cockpitws.h"
 
 #include "common/cockpitconf.h"
-#include "common/cockpiterror.h"
-#include "common/cockpitsystem.h"
-#include "common/cockpitwebrequest-private.h"
+#include "cockpiterror.h"
+#include "cockpitwebrequest-private.h"
 
-#include "websocket/websocket.h"
+#include "websocket.h"
 
 #include "testlib/cockpittest.h"
 #include "testlib/mock-auth.h"
@@ -60,7 +45,7 @@ static void
 setup_normal (Test *test,
               gconstpointer data)
 {
-  cockpit_config_file = SRCDIR "/src/ws/mock-config/cockpit/cockpit.conf";
+  cockpit_config_file = SRCDIR "/src/common/mock-config/cockpit/cockpit.conf";
   test->auth = cockpit_auth_new (FALSE, COCKPIT_AUTH_NONE);
 }
 
@@ -68,7 +53,7 @@ static void
 setup_alt_config (Test *test,
               gconstpointer data)
 {
-  cockpit_config_file = SRCDIR "/src/ws/mock-config/cockpit/cockpit-alt.conf";
+  cockpit_config_file = SRCDIR "/src/common/mock-config/cockpit/cockpit-alt.conf";
   test->auth = cockpit_auth_new (FALSE, COCKPIT_AUTH_NONE);
 }
 
@@ -260,7 +245,10 @@ test_userpass_bad (Test *test,
   response = cockpit_auth_login_finish (test->auth, result, NULL, headers, &error);
   g_object_unref (result);
 
-  g_assert (response == NULL);
+  g_assert (response != NULL);
+  g_assert_cmpstr (json_object_get_string_member (response, "problem"), ==, "authentication-failed");
+  g_clear_pointer (&response, json_object_unref);
+
   g_assert_error (error, COCKPIT_ERROR, COCKPIT_ERROR_AUTHENTICATION_FAILED);
   g_clear_error (&error);
 
@@ -289,7 +277,10 @@ test_userpass_emptypass (Test *test,
   response = cockpit_auth_login_finish (test->auth, result, NULL, headers, &error);
   g_object_unref (result);
 
-  g_assert (response == NULL);
+  g_assert (response != NULL);
+  g_assert_cmpstr (json_object_get_string_member (response, "problem"), ==, "authentication-failed");
+  g_clear_pointer (&response, json_object_unref);
+
   g_assert_error (error, COCKPIT_ERROR, COCKPIT_ERROR_AUTHENTICATION_FAILED);
   g_clear_error (&error);
 
@@ -461,8 +452,10 @@ test_max_startups (Test *test,
     g_main_context_iteration (NULL, TRUE);
   response = cockpit_auth_login_finish (test->auth, result1, NULL, NULL, &error1);
   g_object_unref (result1);
-  g_assert (response == NULL);
+  g_assert (response != NULL);
+  g_assert_cmpstr (json_object_get_string_member (response, "problem"), ==, "authentication-failed");
   g_assert_cmpstr ("Authentication failed", ==, error1->message);
+  g_clear_pointer (&response, json_object_unref);
 
   /* Now that first is finished we can successfully run another one */
   g_hash_table_insert (headers_fail, g_strdup ("Authorization"), g_strdup ("testscheme fail"));
@@ -473,7 +466,9 @@ test_max_startups (Test *test,
     g_main_context_iteration (NULL, TRUE);
   response = cockpit_auth_login_finish (test->auth, result3, NULL, NULL, &error3);
   g_object_unref (result3);
-  g_assert (response == NULL);
+  g_assert (response != NULL);
+  g_assert_cmpstr (json_object_get_string_member (response, "problem"), ==, "authentication-failed");
+  g_clear_pointer (&response, json_object_unref);
   g_assert_cmpstr ("Authentication failed", ==, error3->message);
 
   g_clear_error (&error1);
@@ -489,6 +484,7 @@ typedef struct {
   const gchar *error_message;
   const gchar *warning;
   const gchar *path;
+  const gchar *init_problem;
   int error_code;
 } ErrorFixture;
 
@@ -530,7 +526,17 @@ test_custom_fail (Test *test,
   response = cockpit_auth_login_finish (test->auth, result, NULL, headers, &error);
   g_object_unref (result);
 
-  g_assert (response == NULL);
+  if (fix->init_problem)
+    {
+      g_assert (response != NULL);
+      g_assert_cmpstr (json_object_get_string_member (response, "problem"), ==, fix->init_problem);
+      g_clear_pointer (&response, json_object_unref);
+    }
+  else
+    {
+      g_assert (response == NULL);
+    }
+
   if (fix->error_code)
     g_assert_error (error, COCKPIT_ERROR, fix->error_code);
   else
@@ -679,36 +685,41 @@ static const SuccessFixture fixture_ssh_alt = {
 
 static const ErrorFixture fixture_bad_conversation = {
   .header = "X-Conversation conversation-id xxx",
-  .error_message = "Invalid conversation token"
+  .error_message = "Invalid conversation token",
 };
 
 static const ErrorFixture fixture_ssh_basic_failed = {
   .error_message = "Authentication failed",
-  .header = "Basic dXNlcjp0aGlzIGlzIHRoZSBwYXNzd29yZA=="
+  .header = "Basic dXNlcjp0aGlzIGlzIHRoZSBwYXNzd29yZA==",
+  .init_problem = "authentication-failed",
 };
 
 static const ErrorFixture fixture_ssh_remote_basic_failed = {
   .error_message = "Authentication failed",
   .header = "Basic d3Jvbmc6dGhpcyBpcyB0aGUgbWFjaGluZSBwYXNzd29yZA==",
-  .path = "/cockpit+=machine"
+  .path = "/cockpit+=machine",
+  .init_problem = "authentication-failed",
 };
 
 static const ErrorFixture fixture_ssh_not_supported = {
   .error_code = COCKPIT_ERROR_AUTHENTICATION_FAILED,
   .error_message = "Authentication failed: authentication-not-supported",
   .header = "testsshscheme not-supported",
+  .init_problem = "authentication-not-supported",
 };
 
 static const ErrorFixture fixture_ssh_auth_failed = {
   .error_code = COCKPIT_ERROR_AUTHENTICATION_FAILED,
   .error_message = "Authentication failed",
   .header = "testsshscheme ssh-fail",
+  .init_problem = "authentication-failed",
 };
 
 static const ErrorFixture fixture_ssh_auth_with_error = {
   .error_code = COCKPIT_ERROR_FAILED,
   .error_message = "Authentication failed: unknown: detail for error",
   .header = "testsshscheme with-error",
+  .init_problem = "unknown",
 };
 
 static const SuccessFixture fixture_no_cookie = {
@@ -730,8 +741,8 @@ static const SuccessFixture fixture_data_then_success = {
 };
 
 static const ErrorFixture fixture_bad_command = {
-  .error_code = COCKPIT_ERROR_FAILED,
-  .error_message = "Internal error in login process",
+  .error_code = COCKPIT_ERROR_AUTHENTICATION_FAILED,
+  .error_message = "Authentication not available",
   .header = "badcommand bad",
 };
 
@@ -739,18 +750,21 @@ static const ErrorFixture fixture_auth_failed = {
   .error_code = COCKPIT_ERROR_AUTHENTICATION_FAILED,
   .error_message = "Authentication failed",
   .header = "testscheme fail",
+  .init_problem = "authentication-failed",
 };
 
 static const ErrorFixture fixture_auth_denied = {
   .error_code = COCKPIT_ERROR_PERMISSION_DENIED,
   .error_message = "Permission denied",
   .header = "testscheme denied",
+  .init_problem = "access-denied",
 };
 
 static const ErrorFixture fixture_auth_with_error = {
   .error_code = COCKPIT_ERROR_FAILED,
   .error_message = "Authentication failed: unknown: detail for error",
   .header = "testscheme with-error",
+  .init_problem = "unknown",
 };
 
 static const ErrorFixture fixture_auth_none = {
@@ -783,6 +797,7 @@ typedef struct {
   const gchar *error_message;
   const gchar *message;
   int error_code;
+  const gchar *init_problem;
   int pause;
 } ErrorMultiFixture;
 
@@ -1030,7 +1045,17 @@ test_multi_step_fail (Test *test,
         }
       else
         {
-          g_assert (response == NULL);
+          if (fix->init_problem)
+            {
+              g_assert (response != NULL);
+              g_assert_cmpstr (json_object_get_string_member (response, "problem"), ==, fix->init_problem);
+              g_clear_pointer (&response, json_object_unref);
+            }
+          else
+            {
+              g_assert (response == NULL);
+            }
+
           if (fix->error_code)
             g_assert_error (error, COCKPIT_ERROR, fix->error_code);
           else
@@ -1076,6 +1101,7 @@ static const ErrorMultiFixture fixture_fail_three_steps = {
   .prompts = three_prompts,
   .error_code = COCKPIT_ERROR_AUTHENTICATION_FAILED,
   .error_message = "Authentication failed",
+  .init_problem = "authentication-failed",
 };
 
 static const ErrorMultiFixture fixture_fail_two_steps = {
@@ -1083,6 +1109,7 @@ static const ErrorMultiFixture fixture_fail_two_steps = {
   .prompts = two_prompts,
   .error_code = COCKPIT_ERROR_AUTHENTICATION_FAILED,
   .error_message = "Authentication failed",
+  .init_problem = "authentication-failed",
 };
 
 static const ErrorMultiFixture fixture_fail_ssh_two_steps = {
@@ -1090,6 +1117,7 @@ static const ErrorMultiFixture fixture_fail_ssh_two_steps = {
   .prompts = two_prompts,
   .error_code = COCKPIT_ERROR_AUTHENTICATION_FAILED,
   .error_message = "Authentication failed",
+  .init_problem = "authentication-failed",
 };
 
 static const ErrorMultiFixture fixture_fail_step_timeout = {
@@ -1220,7 +1248,7 @@ main (int argc,
   cockpit_ws_session_program = BUILDDIR "/mock-auth-command";
   cockpit_ws_service_idle = 1;
 
-  cockpit_setenv_check ("COCKPIT_WS_PROCESS_IDLE", "2", TRUE);
+  cockpit_test_setenv ("COCKPIT_WS_PROCESS_IDLE", "2");
 
   cockpit_test_init (&argc, &argv);
 

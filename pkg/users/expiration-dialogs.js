@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2020 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from 'cockpit';
@@ -27,7 +13,7 @@ import { DatePicker } from "@patternfly/react-core/dist/esm/components/DatePicke
 
 import { has_errors } from "./dialog-utils.js";
 import { show_modal_dialog, apply_modal_dialog } from "cockpit-components-dialog.jsx";
-import * as timeformat from "timeformat.js";
+import * as timeformat from "timeformat";
 import { FormHelper } from "cockpit-components-form-helper";
 
 const _ = cockpit.gettext;
@@ -40,7 +26,7 @@ function AccountExpirationDialogBody({ state, errors, change, validate, update }
             <FormGroup validated={errors?.date ? "error" : "default"}>
                 <Radio id="account-expiration-never" name="mode" value="never"
                        label={_("Never expire account")}
-                       isChecked={mode == "never"} onChange={() => change("mode", "never")} />
+                       isChecked={mode === "never"} onChange={() => change("mode", "never")} />
                 <Radio id="account-expiration-expires" name="mode" value="expires"
                        label={
                            <Flex>
@@ -58,7 +44,7 @@ function AccountExpirationDialogBody({ state, errors, change, validate, update }
                                            isDisabled={mode !== "expires"} />
                            </Flex>
                        }
-                       isChecked={mode == "expires"} onChange={() => change("mode", "expires")} />
+                       isChecked={mode === "expires"} onChange={() => change("mode", "expires")} />
                 <FormHelper helperTextInvalid={errors?.date} />
             </FormGroup>
         </Form>
@@ -73,7 +59,7 @@ export function account_expiration_dialog(account, expire_date) {
     const state = {
         mode: expire_date ? "expires" : "never",
         before: parts,
-        date: expire_date?.toISOString().substr(0, 10) ?? ""
+        date: expire_date?.toISOString().substring(0, 10) ?? ""
     };
 
     let errors = { };
@@ -89,7 +75,7 @@ export function account_expiration_dialog(account, expire_date) {
     function validate() {
         errors = { };
 
-        if (state.mode == "expires") {
+        if (state.mode === "expires") {
             if (!state.date)
                 errors.date = _("Please specify an expiration date");
             else {
@@ -117,13 +103,13 @@ export function account_expiration_dialog(account, expire_date) {
                     clicked: () => {
                         if (validate()) {
                             const prog = ["/usr/sbin/usermod", "-e"];
-                            if (state.mode == "expires") {
+                            if (state.mode === "expires") {
                                 const date = new Date(state.date + "T12:00:00Z");
-                                prog.push(date.toISOString().substr(0, 10));
+                                prog.push(date.toISOString().substring(0, 10));
                             } else
                                 prog.push("");
                             prog.push(account.name);
-                            return cockpit.spawn(prog, { superuser: true, err: "message" });
+                            return cockpit.spawn(prog, { superuser: "require", err: "message" });
                         } else {
                             update();
                             return Promise.reject();
@@ -152,16 +138,16 @@ function PasswordExpirationDialogBody({ state, errors, change }) {
             <FormGroup>
                 <Radio id="password-expiration-never" name="mode" value="never"
                        label={_("Never expire password")}
-                       isChecked={mode == "never"} onChange={() => change("mode", "never")} />
+                       isChecked={mode === "never"} onChange={() => change("mode", "never")} />
                 <Radio id="password-expiration-expires" name="mode" value="expires"
                        label={<>
                            <span id="password-expiration-before">{before}</span>
                            <TextInput className="size-text-ct" id="password-expiration-input"
                                   validated={(errors?.days) ? "error" : "default"}
-                                  value={days} onChange={(_event, value) => change("days", value)} isDisabled={mode != "expires"} />
+                                  value={days} onChange={(_event, value) => change("days", value)} isDisabled={mode !== "expires"} />
                            <span id="password-expiration-after">{after}</span>
                        </>}
-                       isChecked={mode == "expires"} onChange={() => change("mode", "expires")} />
+                       isChecked={mode === "expires"} onChange={() => change("mode", "expires")} />
                 <FormHelper helperTextInvalid={errors?.days} />
             </FormGroup>
         </Form>
@@ -173,9 +159,6 @@ export function password_expiration_dialog(account, expire_days) {
 
     /* TRANSLATORS: This is split up and therefore cannot use ngettext plurals */
     const parts = _("Require password change every $0 days").split("$0");
-
-    if (parseInt(expire_days) >= 99999)
-        expire_days = null;
 
     const state = {
         mode: expire_days ? "expires" : "never",
@@ -194,7 +177,7 @@ export function password_expiration_dialog(account, expire_days) {
     function validate() {
         errors = { };
 
-        if (state.mode == "expires") {
+        if (state.mode === "expires") {
             const days = parseInt(state.days);
             if (isNaN(days) || days < 0)
                 errors.days = _("Invalid number of days");
@@ -218,9 +201,9 @@ export function password_expiration_dialog(account, expire_days) {
                     style: "primary",
                     clicked: () => {
                         if (validate()) {
-                            const days = state.mode == "expires" ? parseInt(state.days) : 99999;
+                            const days = state.mode === "expires" ? parseInt(state.days) : -1;
                             return cockpit.spawn(["passwd", "-x", String(days), account.name],
-                                                 { superuser: true, err: "message" });
+                                                 { superuser: "require", err: "message" });
                         } else {
                             update();
                             return Promise.reject();

@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2021 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 import cockpit from "cockpit";
 import { journal } from "journal";
@@ -36,7 +22,7 @@ export function checkJournalctlGrep(setShowTextSearch) {
 export const getFilteredQuery = ({ match, options }) => {
     const cmd = journal.build_cmd(match, options);
     const filtered_cmd = cmd.filter(i => i !== "-q" && i !== "--output=json");
-    if (filtered_cmd[filtered_cmd.length - 1] == "--")
+    if (filtered_cmd[filtered_cmd.length - 1] === "--")
         filtered_cmd.pop();
 
     return filtered_cmd.join(" ");
@@ -55,14 +41,14 @@ export const getGrepFiltersFromOptions = ({ options }) => {
         options.service.split(",").forEach(s => {
             if (!s.endsWith(".service"))
                 s = s + ".service";
-            match.push(...['_SYSTEMD_UNIT=' + s, "+", "COREDUMP_UNIT=" + s, "+", "UNIT=" + s]);
+            match.push('_SYSTEMD_UNIT=' + s, "+", "COREDUMP_UNIT=" + s, "+", "UNIT=" + s);
         });
         full_grep += "service:" + options.service + " ";
     } else if (options["user-service"]) {
         options["user-service"].split(",").forEach(s => {
             if (!s.endsWith(".service"))
                 s = s + ".service";
-            match.push(...['_SYSTEMD_USER_UNIT=' + s, "+", "COREDUMP_USER_UNIT=" + s, "+", "USER_UNIT=" + s]);
+            match.push('_SYSTEMD_USER_UNIT=' + s, "+", "COREDUMP_USER_UNIT=" + s, "+", "USER_UNIT=" + s);
         });
         full_grep += "user-service:" + options["user-service"] + " ";
     }
@@ -126,7 +112,7 @@ export const getOptionsFromTextInput = (value) => {
                 const map_keys = (key) => {
                     if (key === "identifier")
                         return "tag";
-                    if (key == "service")
+                    if (key === "service")
                         return "unit";
                     return key;
                 };

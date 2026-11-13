@@ -1,13 +1,8 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 /* Red Hat Branding */
 
 :root {
     --ct-color-host-accent: #c00 !important;
-}
-
-body.login-pf {
-    background: url("bg-plain.jpg") no-repeat 50% 0;
-    background-size: cover;
-    background-color: #101010;
 }
 
 #badge {
@@ -18,19 +13,10 @@ body.login-pf {
     background-repeat: no-repeat;
 }
 
-#brand {
-    font-size: 18pt;
-    text-transform: uppercase;
+.pf-v6-theme-dark #badge {
+    background-image: url("logo-dark.png");
 }
 
 #brand::before {
-    content: "${NAME}";
-}
-
-#index-brand {
-    font-weight: bold;
-}
-
-#index-brand::before {
     content: "${NAME}";
 }

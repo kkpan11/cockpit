@@ -1,10 +1,10 @@
-#!/bin/sh
+#!/bin/bash
 
 set -eux
 
 cd "${0%/*}/../.."
 
-# like "basic", passed on to run-test.sh
+# like "storage-basic", passed on to run-test.sh
 PLAN="$1"
 
 # show some system info
@@ -17,30 +17,25 @@ mkdir -p /root/.ssh
 curl https://raw.githubusercontent.com/cockpit-project/bots/main/machine/identity.pub >> /root/.ssh/authorized_keys
 chmod 600 /root/.ssh/authorized_keys
 
-# HACK: setroubleshoot-server crashes/times out randomly (breaking TestServices),
-# and is hard to disable as it does not use systemd
-if rpm -q setroubleshoot-server; then
-    dnf remove -y --setopt=clean_requirements_on_remove=False setroubleshoot-server
-fi
+if [ ! -e /sysroot/ostree ]; then
+    # HACK: setroubleshoot-server crashes/times out randomly (breaking TestServices),
+    # and is hard to disable as it does not use systemd
+    if rpm -q setroubleshoot-server; then
+        dnf remove -y --setopt=clean_requirements_on_remove=False setroubleshoot-server
+    fi
 
-if grep -q 'ID=.*fedora' /etc/os-release && [ "$PLAN" = "basic" ]; then
-    # Fedora-only packages which are not available in CentOS/RHEL
-    # required by TestLogin.testBasic
-    dnf install -y tcsh
-    # required by TestJournal.testAbrt*
-    dnf install -y abrt abrt-addon-ccpp reportd libreport-plugin-bugzilla libreport-fedora
-    # required by TestStorageBtrfs*
-    dnf install -y udisks2-btrfs
-fi
+    # HACK: this package creates bogus/broken sda → nvme symlinks; it's new in rawhide TF default instances, not required for
+    # our tests, and only causes trouble; https://github.com/amazonlinux/amazon-ec2-utils/issues/37
+    if rpm -q amazon-ec2-utils; then
+        rpm -e --verbose amazon-ec2-utils
+        # clean up the symlinks, if they exist
+        udevadm trigger /dev/nvme* || true
+    fi
 
-# dnf installs "missing" weak dependencies, but we don't want them for plans other than "optional"
-if [ "$PLAN" != "optional" ] && rpm -q cockpit-packagekit; then
-    dnf remove -y cockpit-packagekit
-fi
-
-if grep -q 'ID=.*rhel' /etc/os-release; then
-    # required by TestUpdates.testKpatch, but kpatch is only in RHEL
-    dnf install -y kpatch kpatch-dnf
+    # dnf installs "missing" weak dependencies, but we don't want them for plans other than "main"
+    if [ "$PLAN" != "main" ] && rpm -q cockpit-packagekit; then
+        dnf remove -y cockpit-packagekit
+    fi
 fi
 
 # if we run during cross-project testing against our main-builds COPR, then let that win
@@ -48,18 +43,7 @@ fi
 main_builds_repo="$(ls /etc/yum.repos.d/*cockpit*main-builds* 2>/dev/null || true)"
 if [ -n "$main_builds_repo" ]; then
     echo 'priority=0' >> "$main_builds_repo"
-    dnf distro-sync -y 'cockpit*'
-fi
-
-# RHEL 8 does not build cockpit-tests; when dropping RHEL 8 support, move to test/browser/main.fmf
-if [ "$PLAN" = basic ] && ! grep -q el8 /etc/os-release; then
-    dnf install -y cockpit-tests
-fi
-
-
-# On CentOS Stream 8 the cockpit package is upgraded so the file isn't touched.
-if [ ! -f /etc/cockpit/disallowed-users ]; then
-    echo 'root' > /etc/cockpit/disallowed-users
+    dnf distro-sync --setopt=allow_vendor_change=1 -y 'cockpit*'
 fi
 
 #HACK: unbreak RHEL 9's default choice of 999999999 rounds, see https://bugzilla.redhat.com/show_bug.cgi?id=1993919
@@ -82,8 +66,38 @@ echo core > /proc/sys/kernel/core_pattern
 
 # make sure that we can access cockpit through the firewall
 systemctl start firewalld
+# wait for d-bus service to be accessible
+while ! firewall-cmd --state; do sleep 1; done
 firewall-cmd --add-service=cockpit --permanent
 firewall-cmd --add-service=cockpit
+
+# HACK: unbreak subuid assignment for new users; see
+# https://bugzilla.redhat.com/show_bug.cgi?id=2382662
+# https://issues.redhat.com/browse/RHEL-103765
+if [ -e /etc/login.defs ]; then
+    sed -i '/^SUB_.ID_COUNT/ s/\b0/65536/' /etc/login.defs
+fi
+
+. /usr/lib/os-release
+export TEST_OS="${ID}-${VERSION_ID/./-}"
+
+if [ -e /sysroot/ostree ]; then
+    TEST_OS="${TEST_OS}-bootc"
+
+    # bootc deployments have a r/o /usr/local; make it writable
+    mount -t tmpfs tmpfs /usr/local
+fi
+
+if [ "${VARIANT_ID:-}" = "eln" ]; then
+    TEST_OS="fedora-eln"
+fi
+
+# HACK: in C10s bootc in TF with a packit COPR, SELinux contexts get messed up
+# https://github.com/cockpit-project/cockpit/issues/23295
+# https://redhat.atlassian.net/browse/TFT-4722
+if [ "$TEST_OS" = "centos-10-bootc" ]; then
+    setenforce 0
+fi
 
 # Run tests in the cockpit tasks container, as unprivileged user
 CONTAINER="$(cat .cockpit-ci/container)"
@@ -92,8 +106,8 @@ exec podman \
         --rm \
         --shm-size=1024m \
         --security-opt=label=disable \
+        --env='TEST_*' \
         --volume="${TMT_TEST_DATA}":/logs:rw,U --env=LOGS=/logs \
         --volume="$(pwd)":/source:rw,U --env=SOURCE=/source \
-        --volume=/usr/lib/os-release:/run/host/usr/lib/os-release:ro \
         "${CONTAINER}" \
             sh /source/test/browser/run-test.sh "$@"

@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2023 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -26,7 +12,7 @@ import { CardBody } from "@patternfly/react-core/dist/esm/components/Card/index.
 import { DescriptionList } from "@patternfly/react-core/dist/esm/components/DescriptionList/index.js";
 
 import { StorageCard, StorageDescription, new_card, register_crossref } from "../pages.jsx";
-import { format_dialog } from "../block/format-dialog.jsx";
+import { std_format_action } from "../block/actions.jsx";
 import { block_short_name, fmt_size, mdraid_name } from "../utils.js";
 import { std_lock_action } from "../crypto/actions.jsx";
 
@@ -39,12 +25,15 @@ export function make_mdraid_disk_card(next, backing_block, content_block) {
     const disk_card = new_card({
         title: _("MDRAID disk"),
         next,
-        location: mdraid_block ? block_short_name(mdraid_block) : (mdraid ? mdraid_name(mdraid) : null),
+        location: {
+            label: mdraid_block ? block_short_name(mdraid_block) : (mdraid ? mdraid_name(mdraid) : null),
+            to: mdraid ? ["mdraid", mdraid.UUID] : null,
+        },
         component: MDRaidDiskCard,
         props: { backing_block, content_block, mdraid },
         actions: [
             std_lock_action(backing_block, content_block),
-            { title: _("Format"), action: () => format_dialog(client, backing_block.path), danger: true },
+            std_format_action(backing_block, content_block),
         ]
     });
 
@@ -61,7 +50,7 @@ export function make_mdraid_disk_card(next, backing_block, content_block) {
             }
         });
 
-        const active_state = mdraid.ActiveDevices.find(as => as[0] == content_block.path);
+        const active_state = mdraid.ActiveDevices.find(as => as[0] === content_block.path);
 
         const state_text = (state) => {
             return {
@@ -93,7 +82,7 @@ export function make_mdraid_disk_card(next, backing_block, content_block) {
             remove_excuse = _("Last disk can not be removed");
 
         let remove_action = null;
-        if (mdraid.Level != "raid0")
+        if (mdraid.Level !== "raid0")
             remove_action = {
                 title: _("Remove"),
                 action: () => mdraid.RemoveDevice(content_block.path, { wipe: { t: 'b', v: true } }),

@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2021 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import React, { useState, useEffect } from 'react';
@@ -25,18 +11,20 @@ import { CodeBlockCode } from "@patternfly/react-core/dist/esm/components/CodeBl
 import { DescriptionList, DescriptionListDescription, DescriptionListGroup, DescriptionListTerm } from "@patternfly/react-core/dist/esm/components/DescriptionList/index.js";
 import { ExpandableSection } from "@patternfly/react-core/dist/esm/components/ExpandableSection/index.js";
 import { Form, FormGroup } from "@patternfly/react-core/dist/esm/components/Form/index.js";
-import { Modal } from "@patternfly/react-core/dist/esm/components/Modal/index.js";
+import {
+    Modal, ModalBody, ModalFooter, ModalHeader
+} from '@patternfly/react-core/dist/esm/components/Modal/index.js';
 import { TextInput } from "@patternfly/react-core/dist/esm/components/TextInput/index.js";
 import { CheckIcon, ExclamationCircleIcon, InProgressIcon } from "@patternfly/react-icons";
 
 import cockpit from "cockpit";
-import { Privileged } from "cockpit-components-privileged.jsx";
+import { Privileged } from "cockpit-components-privileged";
 import { superuser } from "superuser";
 import { useEvent } from "hooks.js";
 import { FormHelper } from "cockpit-components-form-helper";
 import { install_dialog } from "cockpit-components-install-dialog.jsx";
-import * as packagekit from "packagekit.js";
 import { useDialogs } from "dialogs.jsx";
+import { getPackageManager } from 'packagemanager';
 
 import "./realmd.scss";
 
@@ -66,13 +54,12 @@ export class RealmdClient {
     onClose(ev, options) {
         if (options.problem === "not-found") {
             // see if we can install it
-            packagekit.detect().then(exists => {
-                if (exists) {
-                    this.error = _("Joining a domain requires installation of realmd");
-                    this.install_realmd = true;
-                } else {
-                    this.error = _("Cannot join a domain because realmd is not available on this system");
-                }
+            getPackageManager().then(() => {
+                this.error = _("Joining a domain requires installation of realmd");
+                this.install_realmd = true;
+                this.dispatchEvent("changed");
+            }).catch(exc => {
+                this.error = _("Cannot join a domain because realmd is not available on this system");
                 this.dispatchEvent("changed");
             });
         } else {
@@ -122,7 +109,7 @@ export class RealmdClient {
     checkRealm(name) {
         return this.dbus_realmd.call(MANAGER, PROVIDER, "Discover", [name, {}])
                 .then(([relevance, realms]) => {
-                    if (realms.length == 0)
+                    if (realms.length === 0)
                         return { result: false };
 
                     // the first realm
@@ -151,7 +138,7 @@ export class RealmdClient {
             return kerberosMembership.call("Join", [credentials, options])
                     .then(() => this.installWSCredentials(realm, user, password))
                     .catch(ex => {
-                        if (ex.name == "org.freedesktop.realmd.Error.Cancelled")
+                        if (ex.name === "org.freedesktop.realmd.Error.Cancelled")
                             return Promise.resolve();
                         ex.diagnostics = diagnostics;
                         return Promise.reject(ex);
@@ -271,53 +258,54 @@ const LeaveDialog = ({ realmd_client }) => {
 
     return (
         <Modal id="realms-leave-dialog" isOpen position="top" variant="medium"
-               onClose={Dialogs.close}
-               footer={
-                   <>
-                       { error && <Alert variant="danger" isInline className="realms-op-error" title={error.toString()} /> }
-                       <Button variant="secondary" isDisabled={pending} onClick={Dialogs.close}>{ _("Close") }</Button>
-                   </>
-               }
-               title={ _("dialog-title", "Domain") }>
-            <DescriptionList isHorizontal>
-                <DescriptionListGroup>
-                    <DescriptionListTerm>{ _("Domain") }</DescriptionListTerm>
-                    <DescriptionListDescription id="realms-op-info-domain">
-                        { realm && realm.Name }
-                    </DescriptionListDescription>
-                </DescriptionListGroup>
-                <DescriptionListGroup>
-                    <DescriptionListTerm>{ _("Login format") }</DescriptionListTerm>
-                    <DescriptionListDescription id="realms-op-info-login-format">{
-                        realm && realm.LoginFormats && realm.LoginFormats.length > 0
-                            ? realm.LoginFormats[0].replace("%U", "username")
-                            : null
-                    }</DescriptionListDescription>
-                </DescriptionListGroup>
-                <DescriptionListGroup>
-                    <DescriptionListTerm>{ _("Server software") }</DescriptionListTerm>
-                    <DescriptionListDescription id="realms-op-info-server-sw">
-                        { find_detail(realm, "server-software") }
-                    </DescriptionListDescription>
-                </DescriptionListGroup>
-                <DescriptionListGroup>
-                    <DescriptionListTerm>{ _("Client software") }</DescriptionListTerm>
-                    <DescriptionListDescription id="realms-op-info-client-sw">
-                        { find_detail(realm, "client-software") }
-                    </DescriptionListDescription>
-                </DescriptionListGroup>
-            </DescriptionList>
+            onClose={Dialogs.close}
+        >
+            <ModalHeader title={ _("dialog-title", "Domain") } />
+            <ModalBody>
+                <DescriptionList isHorizontal>
+                    <DescriptionListGroup>
+                        <DescriptionListTerm>{ _("Domain") }</DescriptionListTerm>
+                        <DescriptionListDescription id="realms-op-info-domain">
+                            { realm && realm.Name }
+                        </DescriptionListDescription>
+                    </DescriptionListGroup>
+                    <DescriptionListGroup>
+                        <DescriptionListTerm>{ _("Login format") }</DescriptionListTerm>
+                        <DescriptionListDescription id="realms-op-info-login-format">{
+                            realm && realm.LoginFormats && realm.LoginFormats.length > 0
+                                ? realm.LoginFormats[0].replace("%U", "username")
+                                : null
+                        }</DescriptionListDescription>
+                    </DescriptionListGroup>
+                    <DescriptionListGroup>
+                        <DescriptionListTerm>{ _("Server software") }</DescriptionListTerm>
+                        <DescriptionListDescription id="realms-op-info-server-sw">
+                            { find_detail(realm, "server-software") }
+                        </DescriptionListDescription>
+                    </DescriptionListGroup>
+                    <DescriptionListGroup>
+                        <DescriptionListTerm>{ _("Client software") }</DescriptionListTerm>
+                        <DescriptionListDescription id="realms-op-info-client-sw">
+                            { find_detail(realm, "client-software") }
+                        </DescriptionListDescription>
+                    </DescriptionListGroup>
+                </DescriptionList>
 
-            <ExpandableSection toggleText={ _("Leave domain") } isExpanded={expanded}
-                                onToggle={ e => setExpanded(e) }>
-                <Alert variant="warning" isInline
-                        title={ realm && realm.Name ? cockpit.format(_("Leave $0"), realm.Name) : _("Leave domain") }
-                        actionLinks={
-                            <Button variant="danger" id="realms-op-leave" isDisabled={pending} onClick={onLeave}>{ _("Leave domain") }</Button>
-                        }>
-                    { _("After leaving the domain, only users with local credentials will be able to log into this machine. This may also affect other services as DNS resolution settings and the list of trusted CAs may change.") }
-                </Alert>
-            </ExpandableSection>
+                <ExpandableSection toggleText={ _("Leave domain") } isExpanded={expanded}
+                                    onToggle={ e => setExpanded(e) }>
+                    <Alert variant="warning" isInline
+                            title={ realm && realm.Name ? cockpit.format(_("Leave $0"), realm.Name) : _("Leave domain") }
+                            actionLinks={
+                                <Button variant="danger" id="realms-op-leave" isDisabled={pending} onClick={onLeave}>{ _("Leave domain") }</Button>
+                            }>
+                        { _("After leaving the domain, only users with local credentials will be able to log into this machine. This may also affect other services as DNS resolution settings and the list of trusted CAs may change.") }
+                    </Alert>
+                </ExpandableSection>
+            </ModalBody>
+            <ModalFooter>
+                { error && <Alert variant="danger" isInline className="realms-op-error" title={error.toString()} /> }
+                <Button variant="secondary" isDisabled={pending} onClick={Dialogs.close}>{ _("Close") }</Button>
+            </ModalFooter>
         </Modal>);
 };
 
@@ -344,7 +332,7 @@ const JoinDialog = ({ realmd_client }) => {
                         setRealm(reply.realm);
 
                         // handle initial auto-detection
-                        if (name == "") {
+                        if (name === "") {
                             if (!address)
                                 setAddress(reply.realm.Name);
                         }
@@ -420,37 +408,39 @@ const JoinDialog = ({ realmd_client }) => {
 
     return (
         <Modal id="realms-join-dialog" isOpen position="top" variant="medium"
-               onClose={Dialogs.close}
-               footer={
-                   <>
-                       { errorAlert }
-                       <Button variant="primary"
-                               isDisabled={join_disabled}
-                               onClick={onJoin}
-                               isLoading={pending}
-                               spinnerAriaValueText={ pending ? _("Joining") : null }>
-                           { _("Join") }
-                       </Button>
-                       <Button variant="link" isDisabled={pending} onClick={Dialogs.close}>{ _("Cancel") }</Button>
-                       { pending && <span className="realms-op-wait-message">{ _("This may take a while") }</span> }
-                   </>
-               }
-               title={ _("dialog-title", "Join a domain") }>
-            <Form isHorizontal onSubmit={onJoin}>
-                <FormGroup label={ _("Domain address") } fieldId="realms-op-address" validated={addressValid}>
-                    <TextInput id="realms-op-address" placeholder="domain.example.com"
-                               data-discover={ (!addressValid || addressValid == "default") ? null : "done" }
-                               value={address} onChange={(_event, value) => validateAddress(value)} isDisabled={pending} />
-                </FormGroup>
+            onClose={Dialogs.close}
+        >
+            <ModalHeader title={ _("dialog-title", "Join a domain") } />
+            <ModalBody>
+                <Form isHorizontal onSubmit={onJoin}>
+                    <FormGroup label={ _("Domain address") } fieldId="realms-op-address" validated={addressValid}>
+                        <TextInput id="realms-op-address" placeholder="domain.example.com"
+                                   data-discover={ (!addressValid || addressValid === "default") ? null : "done" }
+                                   autoComplete="url"
+                                   value={address} onChange={(_event, value) => validateAddress(value)} isDisabled={pending} />
+                    </FormGroup>
 
-                <FormGroup label={ _("Domain administrator name") } fieldId="realms-op-admin">
-                    <TextInput id="realms-op-admin" placeholder="admin" value={admin} onChange={(_event, value) => setAdmin(value)} isDisabled={pending} />
-                </FormGroup>
-                <FormGroup label={ _("Domain administrator password") } fieldId="realms-op-admin-password">
-                    <TextInput id="realms-op-admin-password" type="password" value={adminPassword} onChange={(_event, value) => setAdminPassword(value)} isDisabled={pending} />
-                </FormGroup>
-                <FormHelper fieldId="realms-op-address" helperText={domainHelperText} helperTextInvalid={addressValid == "error" && domainHelperText} icon={domainHelperIcon} />
-            </Form>
+                    <FormGroup label={ _("Domain administrator name") } fieldId="realms-op-admin">
+                        <TextInput id="realms-op-admin" placeholder="admin" value={admin} autoComplete="username" onChange={(_event, value) => setAdmin(value)} isDisabled={pending} />
+                    </FormGroup>
+                    <FormGroup label={ _("Domain administrator password") } fieldId="realms-op-admin-password">
+                        <TextInput id="realms-op-admin-password" type="password" value={adminPassword} autoComplete="current-password" onChange={(_event, value) => setAdminPassword(value)} isDisabled={pending} />
+                    </FormGroup>
+                    <FormHelper fieldId="realms-op-address" helperText={domainHelperText} helperTextInvalid={addressValid === "error" && domainHelperText} icon={domainHelperIcon} />
+                </Form>
+            </ModalBody>
+            <ModalFooter>
+                { errorAlert }
+                <Button variant="primary"
+                        isDisabled={join_disabled}
+                        onClick={onJoin}
+                        isLoading={pending}
+                        spinnerAriaValueText={ pending ? _("Joining") : null }>
+                    { _("Join") }
+                </Button>
+                <Button variant="link" isDisabled={pending} onClick={Dialogs.close}>{ _("Cancel") }</Button>
+                { pending && <span className="realms-op-wait-message">{ _("This may take a while") }</span> }
+            </ModalFooter>
         </Modal>);
 };
 

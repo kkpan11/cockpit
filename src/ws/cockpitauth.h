@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2013 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #ifndef __COCKPIT_AUTH_H__
@@ -26,9 +12,9 @@
 #include "cockpitcreds.h"
 #include "cockpitwebservice.h"
 
-#include "common/cockpitpipe.h"
-#include "common/cockpittransport.h"
-#include "common/cockpitwebserver.h"
+#include "cockpitpipe.h"
+#include "cockpittransport.h"
+#include "cockpitwebserver.h"
 
 G_BEGIN_DECLS
 
@@ -76,8 +62,6 @@ GType           cockpit_auth_get_type        (void) G_GNUC_CONST;
 
 CockpitAuth *   cockpit_auth_new             (gboolean login_loopback, CockpitAuthFlags flags);
 
-gchar *         cockpit_auth_nonce           (CockpitAuth *self);
-
 void            cockpit_auth_login_async     (CockpitAuth *self,
                                               CockpitWebRequest *request,
                                               GAsyncReadyCallback callback,
@@ -95,14 +79,13 @@ void            cockpit_auth_local_async     (CockpitAuth *self,
                                               GAsyncReadyCallback callback,
                                               gpointer user_data);
 
-gboolean        cockpit_auth_local_finish    (CockpitAuth *self,
-                                              GAsyncResult *result,
-                                              GError **error);
-
 CockpitWebService *  cockpit_auth_check_cookie    (CockpitAuth *self,
                                                    CockpitWebRequest *request);
 
-gchar *         cockpit_auth_parse_application    (const gchar *path,
+gboolean        cockpit_auth_is_valid_cookie_value (CockpitAuth *self,
+                                                    const gchar *cookie_value);
+
+  gchar *         cockpit_auth_parse_application    (const gchar *path,
                                                    gboolean *is_host);
 
 gchar *         cockpit_auth_empty_cookie_value       (const gchar *path,

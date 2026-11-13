@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2015 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -124,6 +110,9 @@ journal.build_cmd = function build_cmd(/* ... */) {
     else if (options.follow)
         cmd.push("--follow");
 
+    if (options['output-fields'])
+        cmd.push("--output-fields=" + options['output-fields']);
+
     cmd.push("--");
     cmd.push.apply(cmd, matches);
     return cmd;
@@ -140,7 +129,8 @@ journal.journalctl = function journalctl(/* ... */) {
     let interval = null;
 
     function fire_streamers() {
-        let ents, i;
+        let ents;
+        let i;
         if (streamers.length && entries.length > 0) {
             ents = entries;
             entries = [];
@@ -161,7 +151,7 @@ journal.journalctl = function journalctl(/* ... */) {
                 const lines = data.split("\n");
                 const last = lines.length - 1;
                 lines.forEach(function(line, i) {
-                    if (i == last) {
+                    if (i === last) {
                         buffer = line;
                     } else if (line && line.indexOf("-- ") !== 0) {
                         try {
@@ -182,7 +172,7 @@ journal.journalctl = function journalctl(/* ... */) {
             .fail(function(ex) {
             /* The journalctl command fails when no entries are matched
              * so we just ignore this status code */
-                if (ex.problem == "cancelled" ||
+                if (ex.problem === "cancelled" ||
                 ex.exit_status === 1) {
                     fire_streamers();
                     dfd.resolve(entries);
@@ -211,7 +201,7 @@ journal.printable = function printable(value, key) {
         return _("[no data]");
     else if (typeof (value) == "string")
         return value;
-    else if (value.length !== undefined && value.length <= 1000 && key == "MESSAGE")
+    else if (value.length !== undefined && value.length <= 1000 && key === "MESSAGE")
         return new TextDecoder().decode(new Uint8Array(value));
     else {
         return _("[binary data]");
@@ -308,11 +298,11 @@ journal.renderer = function renderer(output_funcs) {
 
     function entry_is_equal(a, b) {
         return (a && b &&
-                a.day == b.day &&
-                a.bootid == b.bootid &&
-                a.ident == b.ident &&
-                a.prio == b.prio &&
-                a.message == b.message);
+                a.day === b.day &&
+                a.bootid === b.bootid &&
+                a.ident === b.ident &&
+                a.prio === b.prio &&
+                a.message === b.message);
     }
 
     // A state object describes a line that should be eventually
@@ -347,7 +337,8 @@ journal.renderer = function renderer(output_funcs) {
     // line has been output so far, top_state and bottom_state point
     // to the same object.
 
-    let top_state, bottom_state;
+    let top_state;
+    let bottom_state;
 
     top_state = bottom_state = { };
 
@@ -383,9 +374,9 @@ journal.renderer = function renderer(output_funcs) {
             top_output();
 
             if (top_state.entry) {
-                if (entry.bootid != top_state.entry.bootid)
+                if (entry.bootid !== top_state.entry.bootid)
                     output_funcs.prepend(output_funcs.render_reboot_separator());
-                if (entry.day != top_state.entry.day)
+                if (entry.day !== top_state.entry.day)
                     output_funcs.prepend(output_funcs.render_day_header(top_state.entry.day));
             }
 
@@ -425,11 +416,11 @@ journal.renderer = function renderer(output_funcs) {
         } else {
             bottom_output();
 
-            if (!bottom_state.entry || entry.day != bottom_state.entry.day) {
+            if (!bottom_state.entry || entry.day !== bottom_state.entry.day) {
                 output_funcs.append(output_funcs.render_day_header(entry.day));
                 bottom_state.header_present = true;
             }
-            if (bottom_state.entry && entry.bootid != bottom_state.entry.bootid)
+            if (bottom_state.entry && entry.bootid !== bottom_state.entry.bootid)
                 output_funcs.append(output_funcs.render_reboot_separator());
 
             start_new_line();

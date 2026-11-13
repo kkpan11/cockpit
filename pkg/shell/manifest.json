@@ -3,6 +3,7 @@
         "cockpit": "239"
     },
     "locales": {
+        "ar-eg": "العربية",
         "cs-cz": "čeština",
         "de-de": "Deutsch",
         "en-us": "English",
@@ -10,25 +11,28 @@
         "fi-fi": "suomi",
         "fr-fr": "français",
         "he-il": "עברית",
+        "id-id": "Indonesia",
         "it-it": "italiano",
         "ja-jp": "日本語",
         "ka-ge": "ქართული",
         "ko-kr": "한국어",
-        "nb-no": "norsk bokmål",
+        "lo-la": "ພາສາລາວ",
         "nl-nl": "Nederlands",
         "pl-pl": "polski",
         "pt-br": "português (Brasil)",
+        "ro-ro": "română",
         "ru-ru": "русский",
         "sk-sk": "slovenčina",
         "sv-se": "svenska",
         "tr-tr": "Türkçe",
         "uk-ua": "Українська",
-        "zh-cn": "中文（中国）"
+        "zh-cn": "中文（中国）",
+        "zh-tw": "中文（台灣）"
     },
     "docs": [
         {
             "label": "Web Console",
-            "url": "https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/8/html/managing_systems_using_the_rhel_8_web_console/index"
+            "url": "https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/managing_systems_using_the_rhel_9_web_console/index"
         }
     ],
     "bridges": [
@@ -47,6 +51,16 @@
         },
         {
             "privileged": true,
+            "polkit": true,
+            "method": "StartTransientUnit",
+            "spawn": [
+                "cockpit-bridge",
+                "--privileged"
+            ]
+        },
+        {
+            "privileged": true,
+            "polkit": true,
             "spawn": [
                 "pkexec",
                 "--disable-internal-agent",

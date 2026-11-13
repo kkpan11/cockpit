@@ -1,27 +1,13 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2022 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from 'cockpit';
 import React from 'react';
 import { List, ListItem } from "@patternfly/react-core/dist/esm/components/List/index.js";
 import { Stack } from "@patternfly/react-core/dist/esm/layouts/Stack/index.js";
-import { Text, TextContent } from "@patternfly/react-core/dist/esm/components/Text/index.js";
+import { Content, } from "@patternfly/react-core/dist/esm/components/Content/index.js";
 
 import { show_modal_dialog } from "cockpit-components-dialog.jsx";
 
@@ -33,11 +19,11 @@ export function delete_group_dialog(group) {
         title: cockpit.format(_("Permanently delete $0 group?"), group.name),
         body: group.userlistPrimary.length > 0
             ? <Stack hasGutter>
-                <TextContent>
-                    <Text>
+                <Content>
+                    <Content component="p">
                         {_("This group is the primary group for the following users:")}
-                    </Text>
-                </TextContent>
+                    </Content>
+                </Content>
                 <List>
                     {group.userlistPrimary.map(account => <ListItem className='list-item' key={account}>{account}</ListItem>)}
                 </List>

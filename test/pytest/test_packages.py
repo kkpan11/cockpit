@@ -1,25 +1,15 @@
-# This file is part of Cockpit.
 #
 # Copyright (C) 2023 Red Hat, Inc.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 
 import json
+from pathlib import Path
 
 import pytest
 
-from cockpit.packages import Packages, parse_accept_language
+from cockpit.jsonutil import JsonValue
+from cockpit.packages import Packages, PackagesLoader, parse_accept_language
 
 
 @pytest.mark.parametrize(("test_input", "expected"), [
@@ -46,7 +36,7 @@ def test_parse_accept_language(test_input: str, expected: 'tuple[str]') -> None:
 
 
 @pytest.fixture
-def pkgdir(tmp_path, monkeypatch):
+def pkgdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv('XDG_DATA_DIRS', str(tmp_path))
     monkeypatch.setenv('XDG_DATA_HOME', '/nonexisting')
 
@@ -57,18 +47,18 @@ def pkgdir(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def confdir(tmp_path, monkeypatch):
+def confdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv('XDG_CONFIG_DIRS', str(tmp_path))
     return tmp_path / 'cockpit'
 
 
-def make_package(pkgdir, dirname: str, **kwargs: object) -> None:
+def make_package(pkgdir: Path, dirname: str, **kwargs: JsonValue) -> None:
     (pkgdir / dirname).mkdir()
     with (pkgdir / dirname / 'manifest.json').open('w') as file:
         json.dump(kwargs, file, indent=2)
 
 
-def test_basic(pkgdir):
+def test_basic(pkgdir: Path) -> None:
     packages = Packages()
     assert len(packages.packages) == 1
     assert packages.packages['basic'].name == 'basic'
@@ -79,7 +69,7 @@ def test_basic(pkgdir):
     assert packages.manifests == '{"basic": {"description": "standard package", "requires": {"cockpit": "42"}}}'
 
 
-def test_override_etc(pkgdir, confdir):
+def test_override_etc(pkgdir: Path, confdir: Path) -> None:
     (confdir / 'basic.override.json').write_text('{"description": null, "priority": 5, "does-not-exist": null}')
 
     packages = Packages()
@@ -99,7 +89,34 @@ def test_override_etc(pkgdir, confdir):
     }
 
 
-def test_priority(pkgdir):
+def test_override_invalid_json(pkgdir: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """An override file with broken JSON must be ignored, not crash the bridge."""
+    (pkgdir / 'basic' / 'override.json').write_text('{ "priority": 5,, }')
+
+    packages = Packages()
+    assert len(packages.packages) == 1
+    # the broken override is ignored, the manifest is untouched
+    assert packages.packages['basic'].manifest['description'] == 'standard package'
+    assert packages.packages['basic'].priority == 1
+    assert 'override.json' in caplog.text
+
+
+def test_override_invalid_json_does_not_hide_later_ones(
+    pkgdir: Path, confdir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A broken override file must not stop the remaining ones from being applied."""
+    # first candidate: broken
+    (pkgdir / 'basic' / 'override.json').write_text('not json at all')
+    # second candidate: fine
+    (confdir / 'basic.override.json').write_text('{"priority": 5}')
+
+    packages = Packages()
+    assert len(packages.packages) == 1
+    assert packages.packages['basic'].priority == 5
+    assert 'override.json' in caplog.text
+
+
+def test_priority(pkgdir: Path) -> None:
     make_package(pkgdir, 'vip', name='basic', description='VIP', priority=100)
     make_package(pkgdir, 'guest', description='Guest')
 
@@ -116,7 +133,7 @@ def test_priority(pkgdir):
     assert parsed['guest'] == {'description': 'Guest'}
 
 
-def test_conditions(pkgdir):
+def test_conditions(pkgdir: Path) -> None:
     make_package(pkgdir, 'empty', conditions=[])
 
     # path-exists only
@@ -146,8 +163,17 @@ def test_conditions(pkgdir):
         'basic', 'empty', 'exists-1-yes', 'exists-2-yes', 'notexists-1-yes', 'notexists-2-yes', 'mixed-yes'
     }
 
+    # Manifest.get_condition_files()
+    assert set(packages.packages['empty'].manifest.get_condition_files()) == set()
+    assert set(packages.packages['exists-1-yes'].manifest.get_condition_files()) == {'/usr'}
+    assert set(packages.packages['exists-2-yes'].manifest.get_condition_files()) == {'/usr', '/bin/sh'}
+    assert set(packages.packages['mixed-yes'].manifest.get_condition_files()) == {'/usr', '/nonexisting'}
 
-def test_conditions_errors(pkgdir):
+    # PackagesLoader.get_condition_files()
+    assert set(PackagesLoader.get_condition_files()) == {'/usr', '/bin/sh', '/nonexisting', '/obscure'}
+
+
+def test_conditions_errors(pkgdir: Path) -> None:
     make_package(pkgdir, 'broken-syntax-1', conditions=[1])
     make_package(pkgdir, 'broken-syntax-2', conditions=[["path-exists"]])
     make_package(pkgdir, 'broken-syntax-3', conditions=[{"path-exists": "/foo", "path-not-exists": "/bar"}])
@@ -160,8 +186,13 @@ def test_conditions_errors(pkgdir):
     packages = Packages()
     assert set(packages.packages.keys()) == {'basic', 'unknown-predicate-good'}
 
+    # get_condition_files() should have the valid ones
+    assert set(packages.packages['unknown-predicate-good'].manifest.get_condition_files()) == {'/usr'}
 
-def test_condition_hides_priority(pkgdir):
+    assert set(PackagesLoader.get_condition_files()) == {'/usr', '/nonexisting'}
+
+
+def test_condition_hides_priority(pkgdir: Path) -> None:
     make_package(pkgdir, 'vip', name="basic", description="VIP", priority=100,
                  conditions=[{"path-exists": "/nonexisting"}])
 
@@ -172,7 +203,88 @@ def test_condition_hides_priority(pkgdir):
     assert packages.packages['basic'].priority == 1
 
 
-def test_english_translation(pkgdir):
+def test_conditions_any(pkgdir: Path) -> None:
+    make_package(pkgdir, 'any-empty-fail', conditions=[{"any": []}])
+
+    # Test basic "any" condition - should pass if any one condition is true
+    make_package(pkgdir, 'any-pass-1', conditions=[
+        {"any": [{"path-exists": "/usr"}, {"path-exists": "/nonexisting"}]}
+    ])
+    make_package(pkgdir, 'any-pass-2', conditions=[
+        {"any": [{"path-exists": "/nonexisting"}, {"path-exists": "/usr"}]}
+    ])
+    make_package(pkgdir, 'any-fail', conditions=[
+        {"any": [{"path-exists": "/nonexisting"}, {"path-exists": "/alsonotexisting"}]}
+    ])
+
+    # Test "any" mixed with path-not-exists
+    make_package(pkgdir, 'any-mixed-pass', conditions=[
+        {"any": [{"path-not-exists": "/nonexisting"}, {"path-exists": "/alsonotexisting"}]}
+    ])
+    make_package(pkgdir, 'any-mixed-fail', conditions=[
+        {"any": [{"path-not-exists": "/usr"}, {"path-exists": "/nonexisting"}]}
+    ])
+
+    # Test combination of regular conditions with "any" conditions
+    make_package(pkgdir, 'mixed-any-pass', conditions=[
+        {"any": [{"path-exists": "/usr"}, {"path-exists": "/nonexisting"}]},
+        {"path-not-exists": "/nonexisting"}
+    ])
+    make_package(pkgdir, 'mixed-any-fail-1', conditions=[
+        {"any": [{"path-exists": "/nonexisting"}, {"path-exists": "/alsonotexisting"}]},
+        {"path-not-exists": "/nonexisting"}
+    ])
+    make_package(pkgdir, 'mixed-any-fail-2', conditions=[
+        {"any": [{"path-exists": "/usr"}, {"path-exists": "/nonexisting"}]},
+        {"path-not-exists": "/usr"}
+    ])
+
+    # Test nested "any" conditions
+    make_package(pkgdir, 'nested-any-pass', conditions=[
+        {"any": [
+            {"any": [{"path-exists": "/usr"}, {"path-exists": "/nonexisting2"}]},
+            {"path-not-exists": "/nonexisting3"}
+        ]}
+    ])
+    make_package(pkgdir, 'nested-any-fail', conditions=[
+        {"any": [
+            {"any": [{"path-exists": "/nonexisting"}, {"path-exists": "/alsonotexisting"}]},
+            {"path-not-exists": "/usr"}
+        ]}
+    ])
+
+    packages = Packages()
+    assert set(packages.packages.keys()) == {
+        'basic', 'any-pass-1', 'any-pass-2', 'any-mixed-pass', 'mixed-any-pass', 'nested-any-pass',
+    }
+
+    # get_condition_files()
+    assert set(packages.packages['any-pass-1'].manifest.get_condition_files()) == {'/usr', '/nonexisting'}
+    assert set(packages.packages['mixed-any-pass'].manifest.get_condition_files()) == {'/usr', '/nonexisting'}
+    assert set(packages.packages['nested-any-pass'].manifest.get_condition_files()) == {
+        '/usr', '/nonexisting2', '/nonexisting3'
+    }
+
+    assert set(PackagesLoader.get_condition_files()) == {'/usr', '/nonexisting', '/nonexisting2',
+                                                          '/nonexisting3', '/alsonotexisting'}
+
+
+def test_conditions_any_errors(pkgdir: Path) -> None:
+    # Test "any" with invalid syntax
+    make_package(pkgdir, 'any-invalid-1', conditions=[{"any": "not-a-list"}])
+    make_package(pkgdir, 'any-invalid-2', conditions=[{"any": [1, 2, 3]}])
+    make_package(pkgdir, 'any-invalid-3', conditions=[{"any": [{"invalid": "dict", "multiple": "keys"}]}])
+
+    # Unknown predicates inside "any" are ignored
+    make_package(pkgdir, 'any-mixed-unknown', conditions=[
+        {"any": [{"path-exists": "/usr"}, {"frobnicated": True}]}
+    ])
+
+    packages = Packages()
+    assert set(packages.packages.keys()) == {'basic', 'any-mixed-unknown'}
+
+
+def test_english_translation(pkgdir: Path) -> None:
     make_package(pkgdir, 'one')
     (pkgdir / 'one' / 'po.de.js').write_text('eins')
 
@@ -210,7 +322,7 @@ def test_english_translation(pkgdir):
     assert document.data.read() == b''
 
 
-def test_translation(pkgdir):
+def test_translation(pkgdir: Path) -> None:
     # old style: make sure po.de.js is served as fallback for manifest translations
     make_package(pkgdir, 'one')
     (pkgdir / 'one' / 'po.de.js').write_text('eins')
@@ -233,14 +345,14 @@ def test_translation(pkgdir):
     assert document.data.read() == b''
 
     # make sure the manifest translations get sent along with manifests.js
-    document = packages.load_path('/manifests.js', {'Accept-Language': 'de'})
+    document = packages.load_path('/manifests-i18n.js', {'Accept-Language': 'de'})
     contents = document.data.read()
     assert b'eins\n' in contents
     assert b'zwo\n' in contents
     assert b'zwei\n' not in contents
 
 
-def test_filename_mangling(pkgdir):
+def test_filename_mangling(pkgdir: Path) -> None:
     make_package(pkgdir, 'one')
 
     # test various filename variations
@@ -261,7 +373,27 @@ def test_filename_mangling(pkgdir):
     assert encodings == {None, 'gzip'}  # make sure we saw both compressed and uncompressed
 
 
-def test_overlapping_minified(pkgdir):
+def test_filename_gz_suffix_only(pkgdir: Path) -> None:
+    """Only a literal '.gz' suffix may be stripped, not any character + 'gz'."""
+    make_package(pkgdir, 'one')
+
+    (pkgdir / 'one' / 'data.tgz').write_bytes(b'a tarball')
+    (pkgdir / 'one' / 'logo.svgz').write_bytes(b'a compressed svg')
+
+    packages = Packages()
+
+    # these must be served under their own names, unmodified
+    assert packages.load_path('/one/data.tgz', {}).data.read() == b'a tarball'
+    assert packages.load_path('/one/logo.svgz', {}).data.read() == b'a compressed svg'
+
+    # ... and must not have been registered under a truncated name
+    with pytest.raises(KeyError):
+        packages.load_path('/one/data.', {})
+    with pytest.raises(KeyError):
+        packages.load_path('/one/logo.s', {})
+
+
+def test_overlapping_minified(pkgdir: Path) -> None:
     make_package(pkgdir, 'one')
     (pkgdir / 'one' / 'one.min.js').write_text('min')
     (pkgdir / 'one' / 'one.js').write_text('max')
@@ -283,4 +415,3 @@ def test_overlapping_minified(pkgdir):
     assert document.data.read().decode() == 'min'
     document = packages.load_path('/one/two.min.js', {})
     assert document.data.read().decode() == 'min'
-

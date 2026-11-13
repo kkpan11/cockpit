@@ -1,19 +1,7 @@
-# This file is part of Cockpit.
 #
 # Copyright (C) 2022 Red Hat, Inc.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 
 import asyncio
 import contextlib
@@ -205,14 +193,16 @@ class TestStdio:
         os.close(theirs)
         loop = asyncio.get_running_loop()
         protocol = Protocol()
-        yield ours, protocol, cockpit.transports.StdioTransport(loop, protocol, stdin=stdin, stdout=stdout)
-        os.close(stdin)
-        os.close(stdout)
+        try:
+            yield ours, protocol, cockpit.transports.StdioTransport(loop, protocol, stdin=stdin, stdout=stdout)
+        finally:
+            os.close(stdin)
+            os.close(stdout)
 
     @pytest.mark.asyncio
     async def test_terminal_write_eof(self):
         # Make sure write_eof() fails
-        with self.create_terminal() as (ours, protocol, transport):
+        with self.create_terminal() as (ours, _protocol, transport):
             assert not transport.can_write_eof()
             with pytest.raises(RuntimeError):
                 transport.write_eof()
@@ -221,7 +211,7 @@ class TestStdio:
     @pytest.mark.asyncio
     async def test_terminal_disconnect(self):
         # Make sure disconnecting the session shows up as an EOF
-        with self.create_terminal() as (ours, protocol, transport):
+        with self.create_terminal() as (ours, protocol, _transport):
             os.close(ours)
             while not protocol.eof:
                 await asyncio.sleep(0.1)
@@ -254,13 +244,17 @@ class TestSubprocessTransport:
         assert transport.get_returncode() == 0
         assert protocol.sent == protocol.received
         transport.close()
+        # make sure the connection_lost handler isn't called immediately
+        assert protocol.transport is not None
+        # ...but "soon" (in the very next mainloop iteration)
+        await asyncio.sleep(0.01)
         assert protocol.transport is None
 
     @pytest.mark.asyncio
     async def test_send_signal(self) -> None:
         protocol, transport = self.subprocess(['cat'])
-        transport.send_signal(signal.SIGINT)
-        await protocol.eof_and_exited_with_code(-signal.SIGINT)
+        transport.send_signal(signal.SIGTERM)
+        await protocol.eof_and_exited_with_code(-signal.SIGTERM)
 
     @pytest.mark.asyncio
     async def test_pid(self) -> None:
@@ -296,20 +290,90 @@ class TestSubprocessTransport:
         assert transport.get_stderr(reset=True) == ''
 
     @pytest.mark.asyncio
-    async def test_safe_watcher_ENOSYS(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(asyncio, 'PidfdChildWatcher', unittest.mock.Mock(side_effect=OSError), raising=False)
-        protocol, transport = self.subprocess(['true'])
-        watcher = transport._get_watcher(asyncio.get_running_loop())
-        assert isinstance(watcher, asyncio.SafeChildWatcher)
+    async def test_pidfd_ENOSYS(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # this test disables pidfd support in order to force the fallback path
+        monkeypatch.setattr(os, 'pidfd_open', unittest.mock.Mock(side_effect=OSError), raising=False)
+        protocol, _transport = self.subprocess(['true'])
         await protocol.eof_and_exited_with_code(0)
 
     @pytest.mark.asyncio
-    async def test_safe_watcher_oldpy(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delattr(asyncio, 'PidfdChildWatcher', raising=False)
-        protocol, transport = self.subprocess(['true'])
-        watcher = transport._get_watcher(asyncio.get_running_loop())
-        assert isinstance(watcher, asyncio.SafeChildWatcher)
-        await protocol.eof_and_exited_with_code(0)
+    async def test_pidfd_ENOSYS_nonzero_exit(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # test that non-zero exit codes are correctly reported via the threaded fallback path
+        monkeypatch.setattr(os, 'pidfd_open', unittest.mock.Mock(side_effect=OSError), raising=False)
+        protocol, _transport = self.subprocess(['false'])
+        await protocol.eof_and_exited_with_code(1)
+
+    @pytest.mark.asyncio
+    async def test_pidfd_ENOSYS_exit_code(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # test that specific exit codes are correctly reported via the threaded fallback path
+        monkeypatch.setattr(os, 'pidfd_open', unittest.mock.Mock(side_effect=OSError), raising=False)
+        protocol, _transport = self.subprocess(['sh', '-c', 'exit 42'])
+        await protocol.eof_and_exited_with_code(42)
+
+    @pytest.mark.asyncio
+    async def test_pidfd_ENOSYS_signal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # test that signal termination is correctly reported via the threaded fallback path
+        monkeypatch.setattr(os, 'pidfd_open', unittest.mock.Mock(side_effect=OSError), raising=False)
+        protocol, transport = self.subprocess(['cat'])
+        transport.send_signal(signal.SIGTERM)
+        await protocol.eof_and_exited_with_code(-signal.SIGTERM)
+
+    @pytest.mark.asyncio
+    async def test_pidfd_ENOSYS_kill(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # test that SIGKILL is correctly reported via the threaded fallback path
+        monkeypatch.setattr(os, 'pidfd_open', unittest.mock.Mock(side_effect=OSError), raising=False)
+        protocol, transport = self.subprocess(['cat'])
+        transport.kill()
+        await protocol.eof_and_exited_with_code(-signal.SIGKILL)
+
+    @pytest.mark.asyncio
+    async def test_pidfd_ENOSYS_concurrent(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # test multiple concurrent subprocesses with different exit scenarios
+        # using the threaded fallback path, to ensure exit statuses don't get mixed up
+        monkeypatch.setattr(os, 'pidfd_open', unittest.mock.Mock(side_effect=OSError), raising=False)
+
+        # start processes that block on stdin - we control when they exit
+        proto_0, transport_0 = self.subprocess(['sh', '-c', 'read a; exit 0'])
+        proto_1, transport_1 = self.subprocess(['sh', '-c', 'read a; exit 1'])
+        proto_42, transport_42 = self.subprocess(['sh', '-c', 'read a; exit 42'])
+        proto_term, transport_term = self.subprocess(['sh', '-c', 'read a; exit 99'])
+        proto_kill, transport_kill = self.subprocess(['sh', '-c', 'read a; exit 99'])
+
+        # create tasks for each process
+        task_0 = asyncio.create_task(proto_0.eof_and_exited_with_code(0))
+        task_1 = asyncio.create_task(proto_1.eof_and_exited_with_code(1))
+        task_42 = asyncio.create_task(proto_42.eof_and_exited_with_code(42))
+        task_term = asyncio.create_task(proto_term.eof_and_exited_with_code(-signal.SIGTERM))
+        task_kill = asyncio.create_task(proto_kill.eof_and_exited_with_code(-signal.SIGKILL))
+        pending = {task_0, task_1, task_42, task_term, task_kill}
+
+        # exit them one by one in a specific order and verify each time
+        transport_kill.kill()
+        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        assert done == {task_kill}
+        task_kill.result()
+
+        transport_term.send_signal(signal.SIGTERM)
+        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        assert done == {task_term}
+        task_term.result()
+
+        transport_42.write_eof()
+        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        assert done == {task_42}
+        task_42.result()
+
+        transport_1.write_eof()
+        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        assert done == {task_1}
+        task_1.result()
+
+        transport_0.write_eof()
+        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        assert done == {task_0}
+        task_0.result()
+
+        assert not pending
 
     @pytest.mark.asyncio
     async def test_true_pty(self) -> None:
@@ -334,6 +398,10 @@ class TestSubprocessTransport:
         # Now let's write to the stdin with the other side closed.
         # This should be enough to immediately disconnect us (EPIPE)
         protocol.write(b'abc')
+        # make sure the connection_lost handler isn't called immediately
+        assert protocol.transport is not None
+        # ...but "soon" (in the very next mainloop iteration)
+        await asyncio.sleep(0.01)
         assert protocol.transport is None
         assert isinstance(protocol.exc, BrokenPipeError)
 
@@ -390,3 +458,90 @@ class TestSubprocessTransport:
             await asyncio.sleep(0.1)
 
         transport.close()
+
+    @pytest.mark.asyncio
+    async def test_simple_close(self) -> None:
+        protocol, transport = self.subprocess(['cat'])
+        protocol.output = []
+
+        protocol.write(b'abcd')
+        assert protocol.transport
+        assert protocol.transport.get_write_buffer_size() == 0
+        protocol.transport.close()
+        # make sure the connection_lost handler isn't called immediately
+        assert protocol.transport is not None
+        # ...but "soon" (in the very next mainloop iteration)
+        await asyncio.sleep(0.01)
+        assert protocol.transport is None
+        # we have another ref on the transport
+        transport.close()  # should be idempotent
+
+    @pytest.mark.asyncio
+    async def test_flow_control(self) -> None:
+        protocol, transport = self.subprocess(['cat'])
+        protocol.output = []
+
+        protocol.write(b'abcd')
+        assert protocol.transport is not None
+        transport.pause_reading()
+        await asyncio.sleep(0.1)
+        transport.resume_reading()
+        while protocol.received < 4:
+            await asyncio.sleep(0.1)
+        assert protocol.transport is not None
+        transport.write_eof()
+        protocol.close_on_eof = False
+        while not protocol.eof:
+            await asyncio.sleep(0.1)
+        assert not transport.is_reading()
+        transport.pause_reading()  # no-op
+        assert not transport.is_reading()
+        transport.resume_reading()  # no-op
+        assert not transport.is_reading()
+
+    @pytest.mark.asyncio
+    async def test_write_backlog_eof(self) -> None:
+        protocol, transport = self.subprocess(['cat'])
+        protocol.output = []
+        protocol.write_a_lot()
+
+        assert transport.can_write_eof()
+        transport.write_eof()
+        assert not transport.is_closing()
+        while protocol.transport is not None:
+            await asyncio.sleep(0.1)
+        assert protocol.transport is None
+
+    @pytest.mark.asyncio
+    async def test_write_backlog_close(self) -> None:
+        protocol, transport = self.subprocess(['cat'])
+        protocol.output = []
+        protocol.write_a_lot()
+
+        assert transport
+        transport.close()
+        assert transport.is_closing()
+        # FIXME: closing the channel should kill the process, like asyncio's SubprocessTransport
+        # See https://github.com/cockpit-project/cockpit/pull/18340
+        transport.kill()
+        while protocol.transport is not None:
+            await asyncio.sleep(0.1)
+        assert protocol.transport is None
+
+    @pytest.mark.asyncio
+    async def test_write_backlog_eof_and_close(self) -> None:
+        protocol, transport = self.subprocess(['cat'])
+        protocol.output = []
+        protocol.write_a_lot()
+
+        assert transport
+        transport.write_eof()
+        transport.close()
+        assert protocol.transport
+        assert protocol.transport.is_closing()
+        # FIXME: closing the channel should kill the process, like asyncio's SubprocessTransport
+        # See https://github.com/cockpit-project/cockpit/pull/18340
+        transport.kill()
+        while protocol.transport is not None:
+            await asyncio.sleep(0.1)
+        assert protocol.transport is None

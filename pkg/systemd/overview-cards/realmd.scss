@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 .realms-op-diagnostics {
   max-block-size: 200px;
 }
@@ -8,6 +9,6 @@
   margin-block-start: 3px;
 }
 
-#realms-leave-dialog .pf-v5-c-expandable-section {
-  margin-block-start: var(--pf-v5-global--spacer--md);
+#realms-leave-dialog .pf-v6-c-expandable-section {
+  margin-block-start: var(--pf-t--global--spacer--md);
 }

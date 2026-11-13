@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2023 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from 'cockpit';
@@ -63,11 +49,11 @@ function validate_name(name, groups) {
 
     for (let i = 0; i < name.length; i++) {
         if (!is_valid_char_name(name[i]))
-            return _("The group name can only consist of letters from a-z, digits, dots, dashes and underscores");
+            return _("Group name can only consist of letters, digits, dots, dashes, and underscores");
     }
 
     for (let k = 0; k < groups.length; k++) {
-        if (groups[k].name == name)
+        if (groups[k].name === name)
             return _("A group with this name already exists");
     }
 
@@ -80,7 +66,7 @@ function validate_group(id, groups) {
 
     const id_num = parseInt(id);
     if (id_num.toString() !== id || id_num < 0)
-        return _("The group ID must be positive integer");
+        return _("Group ID must be positive integer");
 
     return null;
 }

@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2016 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -31,7 +17,7 @@ const busNameFixit = "org.fedoraproject.SetroubleshootFixit";
 const dbusInterfaceFixit = busNameFixit;
 const dbusPathFixit = "/org/fedoraproject/SetroubleshootFixit/object";
 
-client.init = function(capabilitiesChangedCallback) {
+client.init = function() {
     client.connected = false;
     const dbusClientSeTroubleshoot = cockpit.dbus(busName, { superuser: "try" });
     client.proxy = dbusClientSeTroubleshoot.proxy(dbusInterface, dbusPath);
@@ -53,7 +39,7 @@ client.init = function(capabilitiesChangedCallback) {
     client.alertCallback = null;
 
     function handleSignal(event, name, args) {
-        if (client.alertCallback && name == "alert") {
+        if (client.alertCallback && name === "alert") {
             const level = args[0];
             const localId = args[1];
             client.alertCallback(level, localId);
@@ -148,7 +134,7 @@ client.init = function(capabilitiesChangedCallback) {
     /* Delete an alert from the database (will be removed for all users), returns true on success
      * Only assign this to the client variable if the dbus interface actually supports the operation
      */
-    const deleteAlert = localId => client.proxy.call("delete_alert", [localId])
+    client.deleteAlert = localId => client.proxy.call("delete_alert", [localId])
             .then(success => {
                 if (!success)
                     return Promise.reject(new Error(cockpit.format(_("Failed to delete alert: $0"), localId)));
@@ -157,22 +143,6 @@ client.init = function(capabilitiesChangedCallback) {
                 console.warn("Unable to delete alert with id", localId, ":", JSON.stringify(ex));
                 return Promise.reject(new Error(cockpit.format(_("Failed to delete alert: $0"), ex.toString())));
             });
-
-    // earlier versions of the dbus interface don't support alert deletion/dismissal
-    // HACK https://bugzilla.redhat.com/show_bug.cgi?id=1306700
-    // once every client we ship to handles these features, we can remove the capabilities check
-    client.capabilities = { };
-
-    // wait for metadata - if this has the method delete_alert, we can use that
-    dbusClientSeTroubleshoot.addEventListener("meta", function(event, meta) {
-        if (dbusInterface in meta && 'methods' in meta[dbusInterface] && 'delete_alert' in meta[dbusInterface].methods)
-            client.capabilities.deleteAlert = deleteAlert;
-        else
-            delete client.capabilities.deleteAlert;
-
-        if (capabilitiesChangedCallback)
-            capabilitiesChangedCallback(client.capabilities);
-    });
 
     // connect to dbus and start setroubleshootd
     return connectPromise;

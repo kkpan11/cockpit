@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2015 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 /*
@@ -54,6 +40,9 @@ const char *pam_ssh_agent_arg = NULL;
 const char *pam_ssh_add_program = PATH_SSH_ADD;
 const char *pam_ssh_add_arg = NULL;
 
+static unsigned long ssh_agent_pid;
+static uid_t ssh_agent_uid;
+
 /* Environment */
 #define ENVIRON_SIZE 5
 #define PATH "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -73,11 +62,6 @@ static const char *agent_vars[] = {
 /* read & write ends of a pipe */
 #define  READ_END   0
 #define  WRITE_END  1
-
-/* pre-set file descriptors */
-#define  STDIN   0
-#define  STDOUT  1
-#define  STDERR  2
 
 /* attribute for stored auth */
 #define STORED_AUTHTOK "pam_ssh_add_authtok"
@@ -128,7 +112,7 @@ message_handler (int level,
                  const char *format, ...)
 {
   va_list va;
-  char *data;
+  char *data = NULL;
   int res;
 
   if (!pam_ssh_add_log_handler)
@@ -148,7 +132,8 @@ message_handler (int level,
   if (res > 0)
     pam_ssh_add_log_handler (level, data);
 
-  free (data);
+  if (res >= 0)
+    free (data);
 }
 #endif
 
@@ -584,10 +569,13 @@ pam_ssh_add_load (pam_handle_t *pamh,
     }
 
   /* Wait for the initial process to exit */
-  if (waitid (P_PID, pid, &result, WEXITED) < 0)
+  while (waitid (P_PID, pid, &result, WEXITED) < 0)
     {
-      error ("couldn't wait on ssh-add process: %m");
-      goto done;
+      if (errno != EINTR)
+        {
+          error ("couldn't wait on ssh-add process: %m");
+          goto done;
+        }
     }
 
   success = result.si_code == CLD_EXITED && result.si_status == 0;
@@ -595,7 +583,7 @@ pam_ssh_add_load (pam_handle_t *pamh,
   if (!success)
     {
       /* key loading failed, don't report as an error */
-      if (result.si_code == 1)
+      if (result.si_code == CLD_EXITED && result.si_status == 1)
         {
           success = 1;
           message ("Failed adding some keys");
@@ -625,7 +613,7 @@ done:
 int
 pam_ssh_add_start_agent (pam_handle_t *pamh,
                          struct passwd *pwd,
-                         const char *xdg_runtime_overide,
+                         const char *xdg_runtime_override,
                          char **out_auth_sock_var,
                          char **out_agent_pid_var)
 {
@@ -654,7 +642,7 @@ pam_ssh_add_start_agent (pam_handle_t *pamh,
 
   assert (pwd);
   xdg_runtime = get_optional_env ("XDG_RUNTIME_DIR",
-                                  xdg_runtime_overide);
+                                  xdg_runtime_override);
   if (!build_environment (env,
                           "PATH", PATH,
                           "LC_ALL", "C",
@@ -694,10 +682,13 @@ pam_ssh_add_start_agent (pam_handle_t *pamh,
     }
 
   /* Wait for the initial process to exit */
-  if (waitid (P_PID, pid, &result, WEXITED) < 0)
+  while (waitid (P_PID, pid, &result, WEXITED) < 0)
     {
-      error ("couldn't wait on ssh-agent process: %m");
-      goto done;
+      if (errno != EINTR)
+        {
+          error ("couldn't wait on ssh-agent process: %m");
+          goto done;
+        }
     }
 
   success = result.si_code == CLD_EXITED && result.si_status == 0;
@@ -866,6 +857,29 @@ start_agent (pam_handle_t *pamh,
           error ("couldn't set agent environment: %s",
                  pam_strerror (pamh, res));
         }
+
+      /* parse and store the agent pid for later cleanup */
+      if (strncmp (auth_pid, "SSH_AGENT_PID=", 14) == 0)
+        {
+          char *endptr;
+          unsigned long pid;
+
+          errno = 0;
+          pid = strtoul (auth_pid + 14, &endptr, 10);
+          if (pid > 0 && *endptr == '\0' && !(pid == ULONG_MAX && errno == ERANGE))
+            {
+              ssh_agent_pid = pid;
+              ssh_agent_uid = auth_pwd->pw_uid;
+            }
+          else
+            {
+              error ("invalid SSH_AGENT_PID value: %s", auth_pid);
+            }
+        }
+      else
+        {
+          error ("unexpected agent pid format: %s", auth_pid);
+        }
     }
 
   free (auth_socket);
@@ -952,19 +966,25 @@ pam_sm_close_session (pam_handle_t *pamh,
                       int argc,
                       const char *argv[])
 {
-  const char *s_pid;
-  int pid = 0;
   parse_args (argc, argv);
 
   /* Kill the ssh agent we started */
-  s_pid = pam_getenv (pamh, "SSH_AGENT_PID");
-  if (s_pid)
-    pid = atoi (s_pid);
-
-  if (pid > 0)
+  if (ssh_agent_pid > 0)
     {
-      debug ("Closing %d", pid);
-      kill (pid, SIGTERM);
+      debug ("Closing %lu", ssh_agent_pid);
+      /* kill as user to guard against crashing ssh-agent and PID reuse */
+      if (setresuid (ssh_agent_uid, ssh_agent_uid,  -1) < 0)
+        {
+          error ("could not drop privileges for killing ssh agent: %m");
+          return PAM_SESSION_ERR;
+        }
+      if (kill (ssh_agent_pid, SIGTERM) < 0 && errno != ESRCH)
+        message ("could not kill ssh agent %lu: %m", ssh_agent_pid);
+      if (setresuid (0, 0, -1) < 0)
+        {
+          error ("could not restore privileges after killing ssh agent: %m");
+          return PAM_SESSION_ERR;
+        }
     }
   return PAM_SUCCESS;
 }

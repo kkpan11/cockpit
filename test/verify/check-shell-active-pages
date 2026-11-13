@@ -1,26 +1,13 @@
 #!/usr/bin/python3 -cimport os, sys; os.execv(os.path.dirname(sys.argv[1]) + "/../common/pywrap", sys.argv)
 
-# This file is part of Cockpit.
 #
 # Copyright (C) 2017 Red Hat, Inc.
-#
-# Cockpit is free software; you can redistribute it and/or modify it
-# under the terms of the GNU Lesser General Public License as published by
-# the Free Software Foundation; either version 2.1 of the License, or
-# (at your option) any later version.
-#
-# Cockpit is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-# Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
 
 import testlib
 
 
-@testlib.skipDistroPackage()
 @testlib.nondestructive
 class TestActivePages(testlib.MachineCase):
     def testBasic(self):
@@ -39,7 +26,7 @@ class TestActivePages(testlib.MachineCase):
             b.mouse("#toggle-menu", "click", altKey=True)
             b.click("#active-pages")
             b.wait_visible("#active-pages-dialog")
-            b.wait_js_func("ph_count_check", "#active-pages-dialog tr", count)
+            b.wait_count("#active-pages-dialog tr", count)
 
         # Initially we have /system
         showPagesAssertCount(1)
@@ -64,15 +51,17 @@ class TestActivePages(testlib.MachineCase):
         def line_sel(i):
             return '.terminal .xterm-accessibility-tree div:nth-child(%d)' % i
 
-        # wait for prompt in first line
-        b.wait_visible(".terminal .xterm-accessibility-tree")
-        b.wait_in_text(line_sel(1), '$')
+        # WebGL2 is not supported in firefox headless mode
+        if b.browser != "firefox":
+            # wait for prompt in first line
+            b.wait_visible(".terminal .xterm-accessibility-tree")
+            b.wait_in_text(line_sel(1), '$')
 
-        # run a command that we can easily identify, and which will die with the terminal
-        b.key_press("bash -c 'exec -a kitten cat'\r")
+            # run a command that we can easily identify, and which will die with the terminal
+            b.input_text("sleep 42\n")
 
-        # wait for command to run
-        m.execute("until pgrep -afx kitten; do sleep 1; done")
+            # wait for command to run
+            m.execute("until pgrep -afx 'sleep 42'; do sleep 1; done")
 
         # now close the page
         showPagesAssertCount(3)
@@ -91,7 +80,7 @@ class TestActivePages(testlib.MachineCase):
         b.wait_not_present("iframe[name='cockpit1:localhost/system/terminal']")
 
         # running shell command should disappear on the system
-        m.execute("while pgrep -afx kitten; do sleep 1; done")
+        m.execute("while pgrep -afx 'sleep 42'; do sleep 1; done")
 
         # there should only be the original page left
         showPagesAssertCount(1)

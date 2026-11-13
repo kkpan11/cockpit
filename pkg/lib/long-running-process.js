@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2020 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 /* Manage a long-running precious process that runs independently from a Cockpit
@@ -58,7 +44,7 @@ export class LongRunningProcess {
 
         // Watch for start event of the service
         this.systemdClient.subscribe({ interface: I_SD_MGR, member: "JobNew" }, (path, iface, signal, args) => {
-            if (args[2] == this.serviceName)
+            if (args[2] === this.serviceName)
                 this._checkState();
         });
 
@@ -66,17 +52,28 @@ export class LongRunningProcess {
         this._checkState();
     }
 
-    /* Start long-running process. Only call this in states STOPPED or FAILED.
-     * This runs as root, thus will be shared with all privileged Cockpit sessions.
-     * Return cockpit.spawn promise. You need to handle exceptions, but not success.
+    /** Start long-running process. Only call this in states STOPPED or FAILED.
+     *  This runs as root, thus will be shared with all privileged Cockpit sessions.
+     *  Return cockpit.spawn promise. You need to handle exceptions, but not success.
+     * @param {string[]} argv array starting with executable and all of the arguments to pass to it
+     * @param {object} options same properties as cockpit-spawn https://docs.cockpit-project.org/cockpit-guide/latest/guide/cockpit-spawn.html/cockpit-spawn.html
+     * @param {string[]} runArgs arguments to provide to systemd-run itself, such as `--setenv`
      */
-    run(argv, options) {
+    run(argv, options, runArgs = []) {
         if (this.state !== ProcessState.STOPPED && this.state !== ProcessState.FAILED)
             throw new Error(`cannot start LongRunningProcess in state ${this.state}`);
-
         // no need to directly react to this -- JobNew and _checkState() will pick up when the unit runs
-        return cockpit.spawn(["systemd-run", "--unit", this.serviceName, "--service-type=oneshot", "--no-block", "--"].concat(argv),
-                             { superuser: "require", err: "message", ...options });
+        return cockpit.spawn(
+            [
+                "systemd-run",
+                "--unit", this.serviceName,
+                "--service-type=oneshot",
+                "--no-block",
+                ...runArgs,
+                "--"
+            ].concat(argv),
+            { superuser: "require", err: "message", ...options }
+        );
     }
 
     /*  Stop long-running process while it is RUNNING, or reset a FAILED one */
@@ -91,6 +88,12 @@ export class LongRunningProcess {
         return this.systemdClient.call(O_SD_OBJ, I_SD_MGR, "StopUnit", [this.serviceName, "replace"], { type: "ss" });
     }
 
+    reset() {
+        if (this.state === ProcessState.FAILED)
+            this.systemdClient.call(O_SD_OBJ, I_SD_MGR, "ResetFailedUnit", [this.serviceName], { type: "s" });
+        else
+            throw new Error(`cannot reset LongRunningProcess in state ${this.state}`);
+    }
     /*
      * below are internal private methods
      */

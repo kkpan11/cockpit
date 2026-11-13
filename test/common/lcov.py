@@ -1,21 +1,9 @@
 #!/usr/bin/python3 -cimport os, sys; os.execv(os.path.dirname(sys.argv[1]) + "/pywrap", sys.argv)
 
-# This file is part of Cockpit.
 #
 # Copyright (C) 2022 Red Hat, Inc.
-#
-# Cockpit is free software; you can redistribute it and/or modify it
-# under the terms of the GNU Lesser General Public License as published by
-# the Free Software Foundation; either version 2.1 of the License, or
-# (at your option) any later version.
-#
-# Cockpit is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-# Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
 
 # This module can convert profile data from CDP to LCOV, produce a
 # HTML report, and post review comments.
@@ -32,9 +20,9 @@ import re
 import shutil
 import subprocess
 import sys
+import urllib.parse
 from bisect import bisect_left
-
-from task import github
+from typing import Any, Mapping, Sequence
 
 BASE_DIR = os.path.realpath(f'{__file__}/../../..')
 
@@ -91,8 +79,16 @@ def parse_sourcemap(f, line_starts, dir_name):
 
     our_sources = set()
     for s in sources:
-        if "node_modules" not in s and (s.endswith(('.js', '.jsx'))):
-            our_sources.add(s)
+        # reject any absolute paths or URLs (like webpack://)
+        if not s.startswith('../'):
+            continue
+        # don't generate coverage for node_modules/ code
+        if "node_modules" in s:
+            continue
+        # and only for these file types...
+        if not s.endswith(('.js', '.jsx', '.ts', '.tsx')):
+            continue
+        our_sources.add(s)
 
     dst_col, src_id, src_line = 0, 0, 0
     for dst_line, line in enumerate(lines):
@@ -158,6 +154,12 @@ def get_dist_map(package):
 
 
 def get_distfile(url, dist_map):
+    path = urllib.parse.urlparse(url).path
+    if path.startswith('/qunit/'):
+        relpath = path[1:]
+        if os.path.exists(relpath) and os.path.exists(f'{relpath}.map'):
+            return DistFile(path[1:])
+
     parts = url.split("/")
     if len(parts) < 3 or "cockpit" not in parts:
         return None
@@ -287,12 +289,12 @@ def print_diff_coverage(path, file_hits, out):
     out.write("end_of_record\n")
 
 
-def write_lcov(covdata, outlabel):
+def write_lcov(covdata: Sequence[Mapping[str, str]], outlabel: str) -> None:
 
     with open(f"{BASE_DIR}/package.json") as f:
         package = json.load(f)
     dist_map = get_dist_map(package)
-    file_hits = {}
+    file_hits: Any = {}
 
     def covranges(functions):
         for f in functions:
@@ -370,7 +372,7 @@ def write_lcov(covdata, outlabel):
         if distfile:
             ranges = sorted(covranges(script['functions']),
                             key=lambda r: r['endOffset'] - r['startOffset'], reverse=True)
-            hits = {}
+            hits: Any = {}
             for r in ranges:
                 record_range(hits, r, distfile)
             merge_hits(file_hits, hits)
@@ -398,14 +400,13 @@ def get_review_comments(diff_info_file):
         # Don't complain about lines that contain only punctuation, or
         # nothing but "else".  We don't seem to get reliable
         # information for them.
-        if not re.search('[a-zA-Z0-9]', text.replace("else", "")):
+        if not re.search(r'[a-zA-Z0-9]', text.replace("else", "")):
             return False
         return True
 
     def flush_cur_comment():
         nonlocal comments
         if cur_src:
-            ta_url = os.environ.get("TEST_ATTACHMENTS_URL", None)
             comment = {"path": cur_src,
                        "line": cur_line}
             if start_line != cur_line:
@@ -413,8 +414,9 @@ def get_review_comments(diff_info_file):
                 body = f"These {cur_line - start_line + 1} added lines are not executed by any test."
             else:
                 body = "This added line is not executed by any test."
-            if ta_url:
-                body += f"  [Details]({ta_url}/Coverage/lcov/github-pr.diff.gcov.html)"
+            log_url = os.environ.get("COCKPIT_CI_LOG_URL", None)
+            if log_url is not None:
+                body += f"  [Details]({os.path.dirname(log_url)}/Coverage/lcov/github-pr.diff.gcov.html)"
             comment["body"] = body
             comments.append(comment)
 
@@ -443,7 +445,7 @@ def get_review_comments(diff_info_file):
     return comments
 
 
-def prepare_for_code_coverage():
+def prepare_for_code_coverage() -> None:
     # This gives us a convenient link at the top of the logs, see link-patterns.json
     print("Code coverage report in Coverage/index.html")
     if os.path.exists("lcov"):
@@ -459,7 +461,24 @@ def prepare_for_code_coverage():
         subprocess.check_call(["git", "-c", "diff.noprefix=false", "diff", "--patience", branch], stdout=f)
 
 
-def create_coverage_report():
+def limit_comments(comments: list[dict[str, str]]) -> tuple[list[dict[str, str]], str]:
+    """Limit the number of code coverage comments to 10, if there are more add a link to the full report"""
+
+    if len(comments) <= 10:
+        return comments, ""
+
+    log_url = os.environ.get("COCKPIT_CI_LOG_URL", None)
+    if log_url is not None:
+        base_url = os.path.dirname(log_url)
+        coverage_report = f"{base_url}/Coverage/lcov/github-pr.diff.gcov.html"
+        report_link_comment = f"There are more than 10 code coverage comments, see [the full report here]({coverage_report})."
+    else:
+        report_link_comment = ""
+
+    return comments[:10], report_link_comment
+
+
+def create_coverage_report() -> None:
     output = os.environ.get("TEST_ATTACHMENTS", BASE_DIR)
     lcov_files = glob.glob(f"{BASE_DIR}/lcov/*.info.gz")
     try:
@@ -471,7 +490,7 @@ def create_coverage_report():
         diff_file = f"{BASE_DIR}/lcov/diff.info"
         excludes = []
         # Exclude pkg/lib in Cockpit projects such as podman/machines.
-        if title != "cockpit.git":
+        if title != "cockpit.git" and title != "cockpit":
             excludes = ["--exclude", "pkg/lib"]
         subprocess.check_call(["lcov", "--quiet", "--output", all_file, *excludes,
                                *itertools.chain(*[["--add", f] for f in lcov_files])])
@@ -487,10 +506,12 @@ def create_coverage_report():
         if match:
             print("Overall line coverage:", match.group(1))
 
-        comments = get_review_comments(diff_file)
+        comments, review_body = limit_comments(get_review_comments(diff_file))
         rev = os.environ.get("TEST_REVISION", None)
         pull = os.environ.get("TEST_PULL", None)
         if rev and pull:
+            from lib import github
+
             api = github.GitHub()
             old_comments = api.get(f"pulls/{pull}/comments?sort=created&direction=desc&per_page=100") or []
             for oc in old_comments:
@@ -500,6 +521,6 @@ def create_coverage_report():
             if len(comments) > 0:
                 api.post(f"pulls/{pull}/reviews",
                          {"commit_id": rev, "event": "COMMENT",
-                          "comments": comments})
+                          "comments": comments, "body": review_body})
     else:
         sys.stderr.write("Error: no code coverage files generated\n")

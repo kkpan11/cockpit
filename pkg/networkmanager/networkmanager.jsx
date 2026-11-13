@@ -1,22 +1,9 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2021 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
-import '../lib/patternfly/patternfly-5-cockpit.scss';
+import '../lib/patternfly/patternfly-6-cockpit.scss';
+import "./anaconda/network-anaconda.scss";
 import cockpit from "cockpit";
 import 'cockpit-dark-theme'; // once per page
 import React, { useRef } from 'react';
@@ -38,6 +25,8 @@ import { PlotState } from 'plot';
 
 import { useObject, useEvent, usePageLocation } from "hooks";
 import { WithDialogs } from "dialogs.jsx";
+import { AnacondaNetworkPage } from "./anaconda/anaconda-main";
+import { in_anaconda_mode } from "utils";
 
 const _ = cockpit.gettext;
 
@@ -53,20 +42,25 @@ const App = () => {
     const nmRunning_ref = useRef(undefined);
     useEvent(model.client, "owner", (event, owner) => { nmRunning_ref.current = owner !== null });
 
-    const { path } = usePageLocation();
-
     useEvent(superuser, "changed");
 
-    const usage_monitor = useObject(() => new UsageMonitor(), null, []);
-    const plot_state_main = useObject(() => new PlotState(), null, []);
-    const plot_state_iface = useObject(() => new PlotState(), null, []);
-
-    if (model.curtain == 'testing' || model.curtain == 'restoring') {
-        return <EmptyStatePanel loading title={model.curtain == 'testing' ? _("Testing connection") : _("Restoring connection")} />;
+    if (model.curtain === 'testing' || model.curtain === 'restoring') {
+        return <EmptyStatePanel loading title={model.curtain === 'testing' ? _("Testing connection") : _("Restoring connection")} />;
     }
 
     if (model.ready === undefined)
         return <EmptyStatePanel loading />;
+
+    const anaconda_mode = in_anaconda_mode();
+
+    // No services page in anaconda mode
+    const emptyStateSecondary = anaconda_mode
+        ? null
+        : (<Button component="a"
+                    variant="secondary"
+                    onClick={() => cockpit.jump("/system/services#/NetworkManager.service", cockpit.transport.host)}>
+            {_("Troubleshoot…")}
+        </Button>);
 
     /* Show EmptyStatePanel when nm is not running */
     if (!nmRunning_ref.current) {
@@ -75,15 +69,10 @@ const App = () => {
                 <div id="networking-nm-crashed">
                     <EmptyStatePanel icon={ ExclamationCircleIcon }
                                      title={ _("NetworkManager is not running") }
-                                     action={ name ? _("Start service") : null }
+                                     action={nmService.exists ? _("Start service") : null}
                                      onAction={ nmService.start }
-                                     secondary={
-                                         <Button component="a"
-                                                 variant="secondary"
-                                                 onClick={() => cockpit.jump("/system/services#/NetworkManager.service", cockpit.transport.host)}>
-                                             {_("Troubleshoot…")}
-                                         </Button>
-                                     } />
+                                     secondary={emptyStateSecondary}
+                    />
                 </div>
             );
         } else if (!nmService.exists) {
@@ -99,7 +88,7 @@ const App = () => {
                 <div id="networking-nm-disabled">
                     <EmptyStatePanel icon={ ExclamationCircleIcon }
                                      title={ _("Network devices and graphs require NetworkManager") }
-                                     action={ name ? _("Enable service") : null }
+                                     action={nmService.exists ? _("Enable service") : null}
                                      onAction={() => {
                                          nmService.enable();
                                          nmService.start();
@@ -110,13 +99,37 @@ const App = () => {
         }
     }
 
+    if (anaconda_mode) {
+        return (
+            <ModelContext.Provider value={model}>
+                <WithDialogs key="networking-anaconda">
+                    <AnacondaNetworkPage privileged={superuser.allowed}
+                                         operationInProgress={model.operationInProgress}
+                                         interfaces={model.list_interfaces()} />
+                </WithDialogs>
+            </ModelContext.Provider>
+        );
+    }
+
+    return (
+        <CockpitNetworkPage model={model} />
+    );
+};
+
+const CockpitNetworkPage = ({ model }) => {
+    const { path } = usePageLocation();
+
+    const usage_monitor = useObject(() => new UsageMonitor(), null, []);
+    const plot_state_main = useObject(() => new PlotState(), null, []);
+    const plot_state_iface = useObject(() => new PlotState(), null, []);
+
     const interfaces = model.list_interfaces();
 
     /* At this point NM is running and the model is ready */
-    if (path.length == 0) {
+    if (path.length === 0) {
         return (
             <ModelContext.Provider value={model}>
-                <WithDialogs key="1">
+                <WithDialogs key="networking">
                     <NetworkPage privileged={superuser.allowed}
                                  operationInProgress={model.operationInProgress}
                                  usage_monitor={usage_monitor}
@@ -125,13 +138,13 @@ const App = () => {
                 </WithDialogs>
             </ModelContext.Provider>
         );
-    } else if (path.length == 1) {
-        const iface = interfaces.find(iface => iface.Name == path[0]);
+    } else if (path.length === 1) {
+        const iface = interfaces.find(iface => iface.Name === path[0]);
 
         if (iface) {
             return (
                 <ModelContext.Provider value={model}>
-                    <WithDialogs key="2">
+                    <WithDialogs key="networking-interface">
                         <NetworkInterfacePage privileged={superuser.allowed}
                                               operationInProgress={model.operationInProgress}
                                               usage_monitor={usage_monitor}
@@ -140,6 +153,15 @@ const App = () => {
                                               iface={iface} />
                     </WithDialogs>
                 </ModelContext.Provider>
+            );
+        } else {
+            return (
+                <EmptyStatePanel icon={ ExclamationCircleIcon }
+                                 title={cockpit.format(_("Network interface '$0' not found"), path[0])}
+                                 action={_("Return to overview page")}
+                                 actionVariant="link"
+                                 onAction={() => cockpit.location.go("/")}
+                />
             );
         }
     }

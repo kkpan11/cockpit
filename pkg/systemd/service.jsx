@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2020 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import React, { useRef, useState } from "react";
@@ -37,7 +23,7 @@ import s_bus from "./busnames.js";
 const _ = cockpit.gettext;
 
 function debug() {
-    if (window.debugging == "all" || window.debugging?.includes("service-details")) // not-covered: debugging
+    if (window.debugging === "all" || window.debugging?.includes("service-details")) // not-covered: debugging
         console.debug.apply(console, arguments); // not-covered: debugging
 }
 
@@ -134,19 +120,19 @@ export const Service = ({ dbusClient, owner, unitId, unitIsValid, addTimerProper
     // resolve Alias name to primary ID
     const cur_unit_id = unitProps.Id;
 
-    const unit_type = owner == "system" ? "UNIT" : "USER_UNIT";
+    const unit_type = owner === "system" ? "UNIT" : "USER_UNIT";
     const match = [
         "_SYSTEMD_" + unit_type + "=" + cur_unit_id, "+",
         "COREDUMP_" + unit_type + "=" + cur_unit_id, "+",
         unit_type + "=" + cur_unit_id,
     ];
-    const service_type = owner == "system" ? "service" : "user-service";
+    const service_type = owner === "system" ? "service" : "user-service";
     const url = "/system/logs/#/?prio=debug&" + service_type + "=" + cur_unit_id;
     const load_state = unitProps.LoadState;
 
     return (
         <WithDialogs>
-            <PageBreadcrumb stickyOnBreakpoint={{ default: "top" }}>
+            <PageBreadcrumb hasBodyWrapper={false} stickyOnBreakpoint={{ default: "top" }}>
                 <Breadcrumb>
                     <BreadcrumbItem to={"#" + cockpit.location.href.replace(/\/[^?]*/, '')}>{_("Services")}</BreadcrumbItem>
                     <BreadcrumbItem isActive>
@@ -154,7 +140,7 @@ export const Service = ({ dbusClient, owner, unitId, unitIsValid, addTimerProper
                     </BreadcrumbItem>
                 </Breadcrumb>
             </PageBreadcrumb>
-            <PageSection id="service-details">
+            <PageSection hasBodyWrapper={false} id="service-details">
                 <Stack hasGutter>
                     <ServiceDetails unit={unitProps}
                                     owner={owner}

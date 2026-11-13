@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2016 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -23,7 +9,9 @@ import { createRoot } from "react-dom/client";
 import PropTypes from "prop-types";
 import { Alert } from "@patternfly/react-core/dist/esm/components/Alert/index.js";
 import { Button } from "@patternfly/react-core/dist/esm/components/Button/index.js";
-import { Modal } from "@patternfly/react-core/dist/esm/components/Modal/index.js";
+import {
+    Modal, ModalBody, ModalFooter, ModalHeader
+} from '@patternfly/react-core/dist/esm/components/Modal/index.js';
 import { Popover } from "@patternfly/react-core/dist/esm/components/Popover/index.js";
 import { Stack, StackItem } from "@patternfly/react-core/dist/esm/layouts/Stack/index.js";
 import { HelpIcon, ExternalLinkAltIcon } from '@patternfly/react-icons';
@@ -56,10 +44,10 @@ class DialogFooter extends React.Component {
         super(props);
         this.state = {
             action_in_progress: false,
-            action_in_progress_promise: null,
             action_progress_message: '',
             action_progress_cancel: null,
             action_canceled: false,
+            action_caption_in_progress: '',
         };
         this.update_progress = this.update_progress.bind(this);
         this.cancel_click = this.cancel_click.bind(this);
@@ -100,7 +88,6 @@ class DialogFooter extends React.Component {
         if (p.progress)
             p.progress(this.update_progress);
 
-        this.setState({ action_in_progress_promise: p });
         if (e)
             e.stopPropagation();
     }
@@ -114,10 +101,6 @@ class DialogFooter extends React.Component {
         // an action might be in progress, let that handler decide what to do if they added a cancel function
         if (this.state.action_in_progress && this.state.action_progress_cancel) {
             this.state.action_progress_cancel();
-            return;
-        }
-        if (this.state.action_in_progress && 'cancel' in this.state.action_in_progress_promise) {
-            this.state.action_in_progress_promise.cancel();
             return;
         }
 
@@ -136,12 +119,10 @@ class DialogFooter extends React.Component {
         // via the progress reporting.
 
         let wait_element;
-        let actions_disabled;
-        let cancel_disabled;
+        let actions_disabled = false;
+        const cancel_disabled = this.state.action_in_progress && !this.state.action_progress_cancel;
         if (this.state.action_in_progress) {
             actions_disabled = true;
-            if (!(this.state.action_in_progress_promise && this.state.action_in_progress_promise.cancel) && !this.state.action_progress_cancel)
-                cancel_disabled = true;
             wait_element = <div className="dialog-wait-ct">
                 <span>{ this.state.action_progress_message }</span>
             </div>;
@@ -159,14 +140,14 @@ class DialogFooter extends React.Component {
                 caption = _("Ok");
 
             let variant = action.style || "secondary";
-            if (variant == "primary" && action.danger)
+            if (variant === "primary" && action.danger)
                 variant = "danger";
 
             return (<Button
                 key={ caption }
                 className="apply"
                 variant={ variant }
-                isLoading={ this.state.action_in_progress && this.state.action_caption_in_progress == caption }
+                isLoading={ this.state.action_in_progress && this.state.action_caption_in_progress === caption }
                 isDanger={ action.danger }
                 onClick={ this.action_click.bind(this, action.clicked, caption) }
                 isDisabled={ actions_disabled || action.disabled }
@@ -207,9 +188,8 @@ DialogFooter.propTypes = {
  *  - static_error optional, always show this error after the body element
  *  - footer (react element, top element should be of class modal-footer)
  *  - id optional, id that is assigned to the top level dialog node, but not the backdrop
- *  - variant: See PF4 Modal component's 'variant' property
- *  - titleIconVariant: See PF4 Modal component's 'titleIconVariant' property
- *  - showClose optional, specifies if 'X' button for closing the dialog is present
+ *  - variant: See PF6 Modal component's 'variant' property
+ *  - titleIconVariant: See PF6 ModalHeader component's 'titleIconVariant' property
  */
 class Dialog extends React.Component {
     componentDidMount() {
@@ -238,9 +218,7 @@ class Dialog extends React.Component {
                   bodyContent={this.props.helpMessage}
                   footerContent={footer}
             >
-                <Button variant="plain" aria-label={_("Learn more")}>
-                    <HelpIcon />
-                </Button>
+                <Button icon={<HelpIcon />} variant="plain" aria-label={_("Learn more")} />
             </Popover>;
 
         const error = this.props.error || this.props.static_error;
@@ -248,19 +226,24 @@ class Dialog extends React.Component {
 
         return (
             <Modal position="top" variant={this.props.variant || "medium"}
-                   titleIconVariant={this.props.titleIconVariant}
                    onEscapePress={() => undefined}
-                   showClose={!!this.props.showClose}
                    id={this.props.id}
-                   isOpen
-                   help={help}
-                   footer={this.props.footer} title={this.props.title}>
-                <Stack hasGutter>
-                    { error_alert }
-                    <StackItem>
-                        { this.props.body }
-                    </StackItem>
-                </Stack>
+                   isOpen>
+                <ModalHeader title={this.props.title}
+                    titleIconVariant={this.props.titleIconVariant}
+                    help={help}
+                />
+                <ModalBody>
+                    <Stack hasGutter>
+                        { error_alert }
+                        <StackItem>
+                            { this.props.body }
+                        </StackItem>
+                    </Stack>
+                </ModalBody>
+                <ModalFooter>
+                    {this.props.footer}
+                </ModalFooter>
             </Modal>
         );
     }
@@ -273,7 +256,6 @@ Dialog.propTypes = {
     error: PropTypes.string,
     footer: PropTypes.element, // is effectively required, see above
     id: PropTypes.string,
-    showClose: PropTypes.bool,
 };
 
 /* Create and show a dialog
@@ -330,7 +312,7 @@ export function show_modal_dialog(props, footerProps) {
     }
     dialogObj.setFooterProps = function(footerProps) {
         dialogObj.footerProps = footerProps;
-        if (dialogObj.footerProps.dialog_done != closeCallback) {
+        if (dialogObj.footerProps.dialog_done !== closeCallback) {
             origCallback = dialogObj.footerProps.dialog_done;
             dialogObj.footerProps.dialog_done = closeCallback;
         }

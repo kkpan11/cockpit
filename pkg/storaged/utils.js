@@ -1,29 +1,19 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2015 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
+
+import { atob_utf8, btoa_utf8 } from "utils";
 
 import * as service from "service";
 import * as timeformat from "timeformat";
 
 const _ = cockpit.gettext;
 const C_ = cockpit.gettext;
+
+export const BTRFS_TOOL_MOUNT_PATH = "/run/cockpit/btrfs/";
 
 /* UTILITIES
  */
@@ -39,7 +29,7 @@ export function compare_versions(a, b) {
     let i;
 
     for (i = 0; i < len; i++) {
-        if (a_ints[i] == b_ints[i])
+        if (a_ints[i] === b_ints[i])
             continue;
         return a_ints[i] - b_ints[i];
     }
@@ -51,7 +41,7 @@ export function parse_options(options) {
     if (options)
         return (options.split(",")
                 .map(function (s) { return s.trim() })
-                .filter(function (s) { return s != "" }));
+                .filter(function (s) { return s !== "" }));
     else
         return [];
 }
@@ -71,7 +61,8 @@ export function extract_option(split, opt) {
 }
 
 export function edit_crypto_config(block, modify) {
-    let old_config, new_config;
+    let old_config;
+    let new_config;
 
     function commit() {
         new_config[1]["track-parents"] = { t: 'b', v: true };
@@ -83,7 +74,7 @@ export function edit_crypto_config(block, modify) {
 
     return block.GetSecretConfiguration({}).then(
         function (items) {
-            old_config = items.find(c => c[0] == "crypttab");
+            old_config = items.find(c => c[0] === "crypttab");
             new_config = ["crypttab", old_config ? Object.assign({ }, old_config[1]) : { }];
 
             // UDisks insists on always having a "passphrase-contents" field when
@@ -102,6 +93,7 @@ export function set_crypto_options(block, readonly, auto, nofail, netdev) {
         const opts = config.options ? parse_options(decode_filename(config.options.v)) : [];
         if (readonly !== null) {
             extract_option(opts, "readonly");
+            extract_option(opts, "read-only");
             if (readonly)
                 opts.push("readonly");
         }
@@ -150,14 +142,8 @@ export function flatten(array_of_arrays) {
         return [];
 }
 
-export function decode_filename(encoded) {
-    return cockpit.utf8_decoder().decode(cockpit.base64_decode(encoded).slice(0, -1));
-}
-
-export function encode_filename(decoded) {
-    return cockpit.base64_encode(cockpit.utf8_encoder().encode(decoded)
-            .concat([0]));
-}
+export const decode_filename = encoded => atob_utf8(encoded).replace('\u0000', '');
+export const encode_filename = decoded => btoa_utf8(decoded + '\u0000');
 
 export function get_block_mntopts(config) {
     // treat an absent field as "default", like util-linux
@@ -169,8 +155,8 @@ export function fmt_size(bytes) {
 }
 
 export function fmt_size_long(bytes) {
-    const with_decimal_unit = cockpit.format_bytes(bytes, 1000);
-    const with_binary_unit = cockpit.format_bytes(bytes, 1024);
+    const with_decimal_unit = cockpit.format_bytes(bytes);
+    const with_binary_unit = cockpit.format_bytes(bytes, { base2: true });
     /* Translators: Used in "..." */
     return with_decimal_unit + ", " + with_binary_unit + ", " + bytes + " " + C_("format-bytes", "bytes");
 }
@@ -187,10 +173,11 @@ export function format_temperature(kelvin) {
 
 export function format_fsys_usage(used, total) {
     let text = "";
-    let parts = cockpit.format_bytes(total, undefined, { separate: true, precision: 2 });
+    let parts = cockpit.format_bytes(total, { separate: true, precision: 2 });
     text = " / " + parts.join(" ");
     const unit = parts[1];
 
+    // FIXME: passing explicit unit is deprecated, redesign this
     parts = cockpit.format_bytes(used, unit, { separate: true, precision: 2 });
     return parts[0] + text;
 }
@@ -231,11 +218,11 @@ export function validate_fsys_label(label, type) {
     };
 
     const limit = fs_label_max[type.replace("luks+", "")];
-    const bytes = cockpit.utf8_encoder().encode(label);
+    const bytes = new TextEncoder().encode(label);
     if (limit && bytes.length > limit) {
         // Let's not confuse people with encoding issues unless
         // they use funny characters.
-        if (bytes.length == label.length)
+        if (bytes.length === label.length)
             return cockpit.format(_("Name cannot be longer than $0 characters"), limit);
         else
             return cockpit.format(_("Name cannot be longer than $0 bytes"), limit);
@@ -256,7 +243,7 @@ export function mdraid_name(mdraid) {
 
     const parts = mdraid.Name.split(":");
 
-    if (parts.length != 2)
+    if (parts.length !== 2)
         return mdraid.Name;
 
     /* Check the static (from /etc/hostname) and transient (acquired from DHCP server via
@@ -268,7 +255,7 @@ export function mdraid_name(mdraid) {
      * fulfilled, it will not be valid yet (hostnamed properties are undefined);
      * it's too inconvenient to make this function asynchronous, so just don't
      * show the host name in this case. */
-    if (hostnamed.StaticHostname === undefined || parts[0] == hostnamed.StaticHostname || parts[0] == hostnamed.Hostname)
+    if (hostnamed.StaticHostname === undefined || parts[0] === hostnamed.StaticHostname || parts[0] === hostnamed.Hostname)
         return parts[1];
     else
         return cockpit.format(_("$name (from $host)"),
@@ -280,11 +267,11 @@ export function mdraid_name(mdraid) {
 
 export function lvol_name(lvol) {
     let type;
-    if (lvol.Type == "pool")
+    if (lvol.Type === "pool")
         type = _("Pool for thin logical volumes");
-    else if (lvol.ThinPool != "/")
+    else if (lvol.ThinPool !== "/")
         type = _("Thin logical volume");
-    else if (lvol.Origin != "/")
+    else if (lvol.Origin !== "/")
         type = _("Logical volume (snapshot)");
     else
         type = _("Logical volume");
@@ -308,7 +295,9 @@ export function drive_name(drive) {
 }
 
 export function get_block_link_parts(client, path) {
-    let is_part, is_crypt, is_lvol;
+    let is_part;
+    let is_crypt;
+    let is_lvol;
 
     while (true) {
         if (client.blocks_part[path] && client.blocks_ptable[client.blocks_part[path].Table]) {
@@ -328,7 +317,8 @@ export function get_block_link_parts(client, path) {
     if (!block)
         return;
 
-    let location, link;
+    let location;
+    let link;
     if (client.mdraids[block.MDRaid]) {
         location = ["mdraid", client.mdraids[block.MDRaid].UUID];
         link = cockpit.format(_("MDRAID device $0"), mdraid_name(client.mdraids[block.MDRaid]));
@@ -386,7 +376,11 @@ export function get_partitions(client, block) {
         let n;
         let last_end = container_start;
         const total_end = container_start + container_size;
-        let block, start, size, is_container, is_contained;
+        let block;
+        let start;
+        let size;
+        let is_container;
+        let is_contained;
 
         const result = [];
 
@@ -428,7 +422,7 @@ export function get_partitions(client, block) {
             if (level === 0 && is_contained)
                 continue;
 
-            if (level == 1 && !is_contained)
+            if (level === 1 && !is_contained)
                 continue;
 
             if (start < container_start || start + size > container_start + container_size)
@@ -456,97 +450,39 @@ export function get_partitions(client, block) {
     return process_level(0, 0, block.Size);
 }
 
-export function is_available_block(client, block, honor_ignore_hint) {
-    const block_ptable = client.blocks_ptable[block.path];
-    const block_part = client.blocks_part[block.path];
-    const block_pvol = client.blocks_pvol[block.path];
+let available_spaces = [];
 
-    function has_fs_label() {
-        if (!block.IdUsage)
-            return false;
-        // Devices with a LVM2_member label need to actually be
-        // associated with a volume group.
-        if (block.IdType == 'LVM2_member' && (!block_pvol || !client.vgroups[block_pvol.VolumeGroup]))
-            return false;
-        return true;
-    }
-
-    function is_mpath_member() {
-        if (!client.drives[block.Drive])
-            return false;
-        if (!client.drives_block[block.Drive]) {
-            // Broken multipath drive
-            return true;
-        }
-        const members = client.drives_multipath_blocks[block.Drive];
-        for (let i = 0; i < members.length; i++) {
-            if (members[i] == block)
-                return true;
-        }
-        return false;
-    }
-
-    function is_vdo_backing_dev() {
-        return !!client.legacy_vdo_overlay.find_by_backing_block(block);
-    }
-
-    function is_swap() {
-        return !!block && client.blocks_swap[block.path];
-    }
-
-    return (!(block.HintIgnore && honor_ignore_hint) &&
-            block.Size > 0 &&
-            !has_fs_label() &&
-            !is_mpath_member() &&
-            !is_vdo_backing_dev() &&
-            !is_swap() &&
-            !block_ptable &&
-            !(block_part && block_part.IsContainer) &&
-            !should_ignore(client, block.path));
+export function get_available_spaces() {
+    return available_spaces.sort((a, b) => block_cmp(a.block, b.block));
 }
 
-export function get_available_spaces(client) {
-    function make(path) {
-        const block = client.blocks[path];
-        const parts = get_block_link_parts(client, path);
-        const text = cockpit.format(parts.format, parts.link);
-        return { type: 'block', block, size: block.Size, desc: text };
-    }
+export function reset_available_spaces() {
+    available_spaces = [];
+}
 
-    const spaces = Object.keys(client.blocks).filter(p => is_available_block(client, client.blocks[p], true))
-            .sort(make_block_path_cmp(client))
-            .map(make);
+export function register_available_block_space(client, block) {
+    const parts = get_block_link_parts(client, block.path);
+    const text = cockpit.format(parts.format, parts.link);
+    available_spaces.push({ type: 'block', block, size: block.Size, desc: text });
+}
 
-    function add_free_spaces(block) {
-        const parts = get_partitions(client, block);
-        let i, p, link_parts, text;
-        for (i in parts) {
-            p = parts[i];
-            if (p.type == 'free') {
-                link_parts = get_block_link_parts(client, block.path);
-                text = cockpit.format(link_parts.format, link_parts.link);
-                spaces.push({
-                    type: 'free',
-                    block,
-                    start: p.start,
-                    size: p.size,
-                    desc: cockpit.format(_("unpartitioned space on $0"), text)
-                });
-            }
-        }
-    }
-
-    for (const p in client.blocks_ptable)
-        add_free_spaces(client.blocks[p]);
-
-    return spaces;
+export function register_available_free_space(client, block, partition) {
+    const link_parts = get_block_link_parts(client, block.path);
+    const text = cockpit.format(link_parts.format, link_parts.link);
+    available_spaces.push({
+        type: 'free',
+        block,
+        start: partition.start,
+        size: partition.size,
+        desc: cockpit.format(_("unpartitioned space on $0"), text)
+    });
 }
 
 export function prepare_available_spaces(client, spcs) {
     function prepare(spc) {
-        if (spc.type == 'block')
+        if (spc.type === 'block')
             return Promise.resolve(spc.block.path);
-        else if (spc.type == 'free') {
+        else if (spc.type === 'free') {
             const block_ptable = client.blocks_ptable[spc.block.path];
             return block_ptable.CreatePartition(spc.start, spc.size, "", "", { });
         }
@@ -557,7 +493,7 @@ export function prepare_available_spaces(client, spcs) {
 
 export function is_snap(client, block) {
     const block_fsys = client.blocks_fsys[block.path];
-    return block_fsys && block_fsys.MountPoints.map(decode_filename).some(mp => mp.indexOf("/snap/") == 0 || mp.indexOf("/var/lib/snapd/snap/") == 0);
+    return block_fsys && block_fsys.MountPoints.map(decode_filename).some(mp => mp.indexOf("/snap/") === 0 || mp.indexOf("/var/lib/snapd/snap/") === 0);
 }
 
 export function get_other_devices(client) {
@@ -566,11 +502,11 @@ export function get_other_devices(client) {
         const block_part = client.blocks_part[path];
         const block_lvm2 = client.blocks_lvm2[path];
 
-        return ((!block_part || block_part.Table == "/") &&
-                block.Drive == "/" &&
-                block.CryptoBackingDevice == "/" &&
-                block.MDRaid == "/" &&
-                (!block_lvm2 || block_lvm2.LogicalVolume == "/") &&
+        return ((!block_part || block_part.Table === "/") &&
+                block.Drive === "/" &&
+                block.CryptoBackingDevice === "/" &&
+                block.MDRaid === "/" &&
+                (!block_lvm2 || block_lvm2.LogicalVolume === "/") &&
                 !block.HintIgnore &&
                 block.Size > 0 &&
                 !client.legacy_vdo_overlay.find_by_block(block) &&
@@ -660,21 +596,35 @@ export function get_parent_blocks(client, path) {
 export function is_netdev(client, path) {
     const block = client.blocks[path];
     const drive = block && client.drives[block.Drive];
-    if (drive && drive.Vendor == "LIO-ORG")
+    if (drive && drive.Vendor === "LIO-ORG")
         return true;
-    if (block && block.Major == 43) // NBD
+    if (block && block.Major === 43) // NBD
         return true;
     return false;
 }
 
 export function should_ignore(client, path) {
+    const block = client.blocks[path];
+
+    // HACK - https://github.com/stratis-storage/stratisd/issues/3801
+    //
+    // Filter out Stratis private device mapper devices. This normally
+    // happens by setting the DM_UDEV_DISABLE_OTHER_RULES_FLAG in the
+    // udev database (which causes UDisks2 to ignore the block
+    // device), but since Stratis 3.8 the "*-crypt" devices don't have
+    // them.
+
+    if (block && decode_filename(block.PreferredDevice).startsWith("/dev/mapper/stratis-1-private"))
+        return true;
+
+    // Check what Anaconda tells us.
+
     if (!client.in_anaconda_mode())
         return false;
 
     const parents = get_direct_parent_blocks(client, path);
-    if (parents.length == 0) {
-        const b = client.blocks[path];
-        return b && client.should_ignore_block(b);
+    if (parents.length === 0) {
+        return block && client.should_ignore_block(block);
     } else {
         return parents.some(p => should_ignore(client, p));
     }
@@ -683,13 +633,13 @@ export function should_ignore(client, path) {
 /* GET_CHILDREN gets the direct children of the storage object at
    PATH, like the partitions of a partitioned block device, or the
    volume group of a physical volume.  By calling GET_CHILDREN
-   recursively, you can traverse the whole storage hierachy from
+   recursively, you can traverse the whole storage hierarchy from
    hardware drives at the bottom to filesystems at the top.
 
    GET_CHILDREN_FOR_TEARDOWN is similar but doesn't consider things
    like volume groups to be children of their physical volumes.  This
    is appropriate for teardown processing, where tearing down a
-   physical volume does not imply tearing down the whole volume groups
+   physical volume does not imply tearing down the whole volume group
    with everything that it contains.
 */
 
@@ -746,45 +696,69 @@ export function get_children(client, path) {
 
     if (client.blocks[path]) {
         const mdraid = client.blocks[path].MDRaidMember;
-        if (mdraid != "/")
+        if (mdraid !== "/")
             children.push(mdraid);
     }
 
     if (client.blocks_pvol[path]) {
         const vgroup = client.blocks_pvol[path].VolumeGroup;
-        if (vgroup != "/")
+        if (vgroup !== "/")
             children.push(vgroup);
     }
 
     if (client.blocks_stratis_blockdev[path]) {
         const pool = client.blocks_stratis_blockdev[path].Pool;
-        if (pool != "/")
+        if (pool !== "/")
             children.push(pool);
     }
 
     return children;
 }
 
-export function find_children_for_mount_point(client, mount_point, self) {
+/**
+ * True if `active_mount` refers to a path strictly below `parent_mount`.
+ *
+ * Examples: `/home` is below `/`; `/srv/jail` is below `/srv`.  `/etc` is not below `/srv`.
+ *
+ * Root is special: the only character shared by `/` and `/home` is the leading slash, so we
+ * cannot require a "/" immediately after the parent string (that would look at `h` in `/home`).
+ */
+function is_strict_descendant_mount_path(parent_mount, active_mount) {
+    if (active_mount.length <= parent_mount.length)
+        return false;
+    if (!active_mount.startsWith(parent_mount))
+        return false;
+    if (parent_mount === "/")
+        return true;
+    return active_mount[parent_mount.length] === "/";
+}
+
+export function find_children_for_mount_point(client, mount_point, self, self_subvol) {
     const children = {};
 
     function is_self(b) {
-        return self && (b == self || client.blocks[b.CryptoBackingDevice] == self);
+        return self && (b === self || client.blocks[b.CryptoBackingDevice] === self);
     }
 
     for (const p in client.blocks) {
         const b = client.blocks[p];
         const fs = client.blocks_fsys[p];
 
-        if (is_self(b))
+        if (!fs)
             continue;
 
-        if (fs) {
-            for (const mp of fs.MountPoints) {
-                const mpd = decode_filename(mp);
-                if (mpd.length > mount_point.length && mpd.indexOf(mount_point) == 0 && mpd[mount_point.length] == "/")
-                    children[mpd] = b;
-            }
+        // Skip self block except btrfs (subvolumes share one block); then ignore only this subvol's mounts.
+        if (is_self(b) && !client.blocks_fsys_btrfs[self.path])
+            continue;
+
+        const skip = is_self(b) && self_subvol ? get_mount_points(client, fs, self_subvol) : [];
+
+        for (const mp of fs.MountPoints) {
+            const active = decode_filename(mp);
+            if (skip.includes(active))
+                continue;
+            if (is_strict_descendant_mount_path(mount_point, active))
+                children[active] = b;
         }
     }
 
@@ -793,7 +767,7 @@ export function find_children_for_mount_point(client, mount_point, self) {
 
 export function get_fstab_config_with_client(client, block, also_child_config, subvol) {
     function match(c) {
-        if (c[0] != "fstab")
+        if (c[0] !== "fstab")
             return false;
         if (subvol !== undefined) {
             if (!c[1].opts)
@@ -802,7 +776,7 @@ export function get_fstab_config_with_client(client, block, also_child_config, s
             const opts = decode_filename(c[1].opts.v).split(",");
             if (opts.indexOf("subvolid=" + subvol.id) >= 0)
                 return true;
-            if (opts.indexOf("subvol=" + subvol.pathname) >= 0)
+            if (opts.indexOf("subvol=" + subvol.pathname) >= 0 || opts.indexOf("subvol=/" + subvol.pathname) >= 0)
                 return true;
 
             // btrfs mounted without subvol argument.
@@ -819,9 +793,9 @@ export function get_fstab_config_with_client(client, block, also_child_config, s
     let config = block.Configuration.find(match);
 
     if (!config && also_child_config && client.blocks_crypto[block.path])
-        config = client.blocks_crypto[block.path]?.ChildConfiguration.find(c => c[0] == "fstab");
+        config = client.blocks_crypto[block.path]?.ChildConfiguration.find(c => c[0] === "fstab");
 
-    if (config && decode_filename(config[1].type.v) != "swap") {
+    if (config && decode_filename(config[1].type.v) !== "swap") {
         const mnt_opts = get_block_mntopts(config[1]).split(",");
         let dir = decode_filename(config[1].dir.v);
         let opts = mnt_opts
@@ -830,16 +804,16 @@ export function get_fstab_config_with_client(client, block, also_child_config, s
         const parents = mnt_opts
                 .filter(function (s) { return s.indexOf("x-parent") === 0 })
                 .join(",");
-        if (dir[0] != "/")
+        if (dir[0] !== "/")
             dir = "/" + dir;
-        if (opts == "defaults")
+        if (opts === "defaults")
             opts = "";
         return [config, dir, opts, parents];
     } else
         return [];
 }
 
-export function get_active_usage(client, path, top_action, child_action, is_temporary, subvol) {
+export function get_active_usage(client, path, top_action, child_action, is_temporary, subvol, allow_multi_device_delete) {
     function get_usage(usage, path, level) {
         const block = client.blocks[path];
         const fsys = client.blocks_fsys[path];
@@ -858,7 +832,7 @@ export function get_active_usage(client, path, top_action, child_action, is_temp
             const actions = [];
             if (teardown_action)
                 actions.push(teardown_action);
-            const global_action = (level == 0 || (block && client.blocks[block.CryptoBackingDevice] && level == 1)) ? top_action : child_action || top_action;
+            const global_action = (level === 0 || (block && client.blocks[block.CryptoBackingDevice] && level === 1)) ? top_action : child_action || top_action;
             if (global_action)
                 actions.push(global_action);
             return actions;
@@ -866,10 +840,15 @@ export function get_active_usage(client, path, top_action, child_action, is_temp
 
         function enter_unmount(block, location, is_top) {
             const [, mount_point] = get_fstab_config_with_client(client, block);
-            const has_fstab_entry = is_temporary && location == mount_point;
+            const has_fstab_entry = is_temporary && location === mount_point;
+
+            // Ignore the secret btrfs mount point unless we are
+            // formatting (in which case subvol is false).
+            if (btrfs_volume && subvol && location.startsWith(BTRFS_TOOL_MOUNT_PATH))
+                return;
 
             for (const u of usage) {
-                if (u.usage == 'mounted' && u.location == location) {
+                if (u.usage === 'mounted' && u.location === location) {
                     if (is_top) {
                         u.actions = get_actions(_("unmount"));
                         u.set_noauto = false;
@@ -885,7 +864,7 @@ export function get_active_usage(client, path, top_action, child_action, is_temp
                 has_fstab_entry,
                 set_noauto: !is_top && !is_temporary,
                 actions: (is_top ? get_actions(_("unmount")) : [_("unmount")]).concat(has_fstab_entry ? [_("mount")] : []),
-                blocking: client.strip_mount_point_prefix(location) === false,
+                blocking: client.strip_mount_point_prefix(location) === false && !location.startsWith(BTRFS_TOOL_MOUNT_PATH),
             });
         }
 
@@ -895,7 +874,7 @@ export function get_active_usage(client, path, top_action, child_action, is_temp
 
         // We allow a btrfs volume with one device to be formatted as this
         // looks the most like a normal filesystem use case.
-        if (btrfs_volume && btrfs_volume.data.num_devices !== 1 && !subvol) {
+        if (btrfs_volume && btrfs_volume.data.num_devices !== 1 && !subvol && !allow_multi_device_delete) {
             usage.push({
                 level,
                 usage: 'btrfs-device',
@@ -925,7 +904,7 @@ export function get_active_usage(client, path, top_action, child_action, is_temp
                 });
             }
         } else if (mdraid) {
-            const active_state = mdraid.ActiveDevices.find(as => as[0] == block.path);
+            const active_state = mdraid.ActiveDevices.find(as => as[0] === block.path);
             usage.push({
                 level,
                 usage: 'mdraid-member',
@@ -944,7 +923,7 @@ export function get_active_usage(client, path, top_action, child_action, is_temp
                 pvol,
                 location: vgroup.Name,
                 actions: get_actions(_("remove from LVM2")),
-                blocking: pvol.FreeSize != pvol.Size
+                blocking: pvol.FreeSize !== pvol.Size
             });
         } else if (vdo) {
             usage.push({
@@ -977,22 +956,22 @@ export function get_active_usage(client, path, top_action, child_action, is_temp
         return usage;
     }
 
-    let usage = [];
+    const usage = [];
     get_usage(usage, path, 0);
-
-    if (usage.length == 1 && usage[0].level == 0 && usage[0].usage == "none")
-        usage = [];
 
     usage.Blocking = usage.some(u => u.blocking);
     usage.Teardown = usage.some(u => !u.blocking);
+
+    if (usage.length === 1 && usage[0].level === 0 && usage[0].usage === "none")
+        usage.Teardown = false;
 
     return usage;
 }
 
 async function set_fsys_noauto(client, block, mount_point) {
     for (const conf of block.Configuration) {
-        if (conf[0] == "fstab" &&
-            decode_filename(conf[1].dir.v) == mount_point) {
+        if (conf[0] === "fstab" &&
+            decode_filename(conf[1].dir.v) === mount_point) {
             const options = parse_options(get_block_mntopts(conf[1]));
             if (options.indexOf("noauto") >= 0)
                 continue;
@@ -1061,7 +1040,7 @@ export function teardown_active_usage(client, usage) {
             const pvs = by_vgroup[p];
             // If we would remove all physical volumes of a volume
             // group, remove the whole volume group instead.
-            if (pvs.length == client.vgroups_pvols[p].length) {
+            if (pvs.length === client.vgroups_pvols[p].length) {
                 return vg.Delete(true, { 'tear-down': { t: 'b', v: true } }).then(reload_systemd);
             } else {
                 return Promise.all(pvs.map(pv => vg.RemoveDevice(pv.path, true, {})));
@@ -1072,17 +1051,17 @@ export function teardown_active_usage(client, usage) {
     }
 
     return Promise.all(Array.prototype.concat(
-        unmount(usage.filter(function(use) { return use.usage == "mounted" })),
-        stop_swap(usage.filter(function(use) { return use.usage == "swap" })),
-        mdraid_remove(usage.filter(function(use) { return use.usage == "mdraid-member" })),
-        pvol_remove(usage.filter(function(use) { return use.usage == "pvol" }))
+        unmount(usage.filter(function(use) { return use.usage === "mounted" })),
+        stop_swap(usage.filter(function(use) { return use.usage === "swap" })),
+        mdraid_remove(usage.filter(function(use) { return use.usage === "mdraid-member" })),
+        pvol_remove(usage.filter(function(use) { return use.usage === "pvol" }))
     ));
 }
 
 export async function undo_temporary_teardown(client, usage) {
     for (let i = usage.length - 1; i >= 0; i--) {
         const u = usage[i];
-        if (u.usage == "mounted" && u.has_fstab_entry) {
+        if (u.usage === "mounted" && u.has_fstab_entry) {
             await client.mount_at(u.block, u.location);
         }
     }
@@ -1103,7 +1082,7 @@ export function reload_systemd() {
 
 export function is_mounted_synch(block) {
     return (cockpit.spawn(["findmnt", "-n", "-o", "TARGET", "-S", decode_filename(block.Device)],
-                          { superuser: true, err: "message" })
+                          { superuser: "require", err: "message" })
             .then(data => data.trim())
             .catch(() => false));
 }
@@ -1138,4 +1117,39 @@ export function get_mount_points(client, block_fsys, subvol) {
     }
 
     return mounted_at;
+}
+
+export function get_byte_units(guide_value) {
+    const units = [
+        { factor: 1000 ** 2, name: "MB" },
+        { factor: 1000 ** 3, name: "GB" },
+        { factor: 1000 ** 4, name: "TB" },
+    ];
+    // Find the biggest unit which gives two digits left of the decimal point (>= 10)
+    let unit;
+    for (unit = units.length - 1; unit >= 0; unit--)
+        if (guide_value / units[unit].factor >= 10)
+            break;
+    // Mark it selected.  If we couldn't find one (-1), then use MB.
+    units[Math.max(0, unit)].selected = true;
+    return units;
+}
+
+/** @type (client: any, path: string) => boolean */
+export function contains_rootfs(client, path) {
+    const block = client.blocks[path];
+    const crypto = client.blocks_crypto[path];
+    let fsys_config = null;
+
+    if (block)
+        fsys_config = block.Configuration.find(c => c[0] === "fstab");
+    if (!fsys_config && crypto)
+        fsys_config = crypto.ChildConfiguration.find(c => c[0] === "fstab");
+
+    if (fsys_config) {
+        const dir = decode_filename(fsys_config[1].dir.v);
+        return dir === "/";
+    }
+
+    return get_children(client, path).some(p => contains_rootfs(client, p));
 }

@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2023 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -59,16 +45,16 @@ export function iscsi_discover() {
                                 return;
 
                             // HACK - https://github.com/storaged-project/udisks/issues/26
-                            if (error.message.indexOf("initiator failed authorization") != -1)
+                            if (error.message.indexOf("initiator failed authorization") !== -1)
                                 error = {
                                     username: true, // make it red without text below
                                     password: _("Invalid username or password")
                                 };
-                            else if (error.message.indexOf("cannot resolve host name") != -1)
+                            else if (error.message.indexOf("cannot resolve host name") !== -1)
                                 error = {
                                     address: _("Unknown host name")
                                 };
-                            else if (error.message.indexOf("connection login retries") != -1)
+                            else if (error.message.indexOf("connection login retries") !== -1)
                                 error = {
                                     address: _("Unable to reach server")
                                 };
@@ -121,7 +107,7 @@ function iscsi_add(discover_vals, nodes) {
             action: function (vals) {
                 return iscsi_login(vals.target, discover_vals)
                         .catch(err => {
-                            if (err.message.indexOf("authorization") != -1)
+                            if (err.message.indexOf("authorization") !== -1)
                                 iscsi_add_with_creds(discover_vals, vals);
                             else
                                 return Promise.reject(err);
@@ -146,7 +132,7 @@ function iscsi_add_with_creds(discover_vals, login_vals) {
                 return iscsi_login(login_vals.target, vals)
                         .catch(err => {
                         // HACK - https://github.com/storaged-project/udisks/issues/26
-                            if (err.message.indexOf("authorization") != -1)
+                            if (err.message.indexOf("authorization") !== -1)
                                 err = {
                                     username: true, // makes it red without text below
                                     password: _("Invalid username or password")

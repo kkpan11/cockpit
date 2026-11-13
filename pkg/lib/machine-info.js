@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2018 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -44,6 +30,8 @@ export const cpu_ram_info = () =>
                     model_match = text.match(/^cpu\s*:\s*(.*)$/m); // PowerPC
                 if (!model_match)
                     model_match = text.match(/^vendor_id\s*:\s*(.*)$/m); // s390x
+                if (!model_match)
+                    model_match = text.match(/^Model Name\s*:\s*(.*)$/m); // LoongArch
                 if (model_match)
                     info.cpu_model = model_match[1];
 
@@ -126,11 +114,12 @@ export function dmi_info() {
 
 // decode a binary Uint8Array with a trailing null byte
 function decode_proc_str(s) {
-    return cockpit.utf8_decoder().decode(s.slice(0, -1));
+    return new TextDecoder().decode(s.slice(0, -1));
 }
 
 export function devicetree_info() {
-    let model, serial;
+    let model;
+    let serial;
 
     return Promise.all([
         // these succeed with content === null if files are absent
@@ -230,13 +219,13 @@ function processMemory(info) {
         }
 
         let memoryTechnology = memoryProperty["Memory technology"];
-        if (!memoryTechnology || memoryTechnology == "<OUT OF SPEC>")
+        if (!memoryTechnology || memoryTechnology === "<OUT OF SPEC>")
             memoryTechnology = _("Unknown");
 
         let memoryRank = memoryProperty.Rank || _("Unknown");
-        if (memoryRank == 1)
+        if (memoryRank === "1")
             memoryRank = _("Single rank");
-        if (memoryRank == 2)
+        if (memoryRank === "2")
             memoryRank = _("Dual rank");
 
         memoryArray.push({
@@ -244,7 +233,7 @@ function processMemory(info) {
             technology: memoryTechnology,
             type: memoryProperty.Type || _("Unknown"),
             size: memorySize,
-            state: memoryProperty["Total Width"] == "Unknown" ? _("Absent") : _("Present"),
+            state: memoryProperty["Total Width"] === "Unknown" ? _("Absent") : _("Present"),
             rank: memoryRank,
             speed: memoryProperty.Speed || _("Unknown")
         });

@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2020 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
@@ -22,8 +8,6 @@
 #include <unistd.h>
 
 #include "cockpitwebcertificate.h"
-
-#include "cockpitsystem.h"
 
 #include "testlib/cockpittest.h"
 
@@ -66,7 +50,7 @@ test_locate (void)
   int cert_dir_fd;
 
   g_assert (g_mkdtemp (workdir) == workdir);
-  cockpit_setenv_check ("XDG_CONFIG_DIRS", workdir, TRUE);
+  cockpit_test_setenv ("XDG_CONFIG_DIRS", workdir);
 
   /* nonexisting dir, nothing found */
   do_locate_test (-1, NULL, NULL, "No certificate found in dir: */ws-certs.d");

@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2020 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -67,7 +53,7 @@ export class JournalBox extends React.Component {
     }
 
     componentDidUpdate(prevProps) {
-        if (prevProps.dataFollowing != this.props.dataFollowing) {
+        if (prevProps.dataFollowing !== this.props.dataFollowing) {
             if (this.props.dataFollowing) {
                 const cursor = document.querySelector(".cockpit-logline");
                 if (cursor)
@@ -168,7 +154,7 @@ export class JournalBox extends React.Component {
             const serviceTag = entries[i].SYSLOG_IDENTIFIER;
             this.renderer.prepend(entries[i]);
             // Only update if the service is not yet known
-            if (serviceTag && !this.props.currentIdentifiers.includes(serviceTag))
+            if (serviceTag && !this.props.currentIdentifiers?.includes(serviceTag))
                 // Due to asynchronous nature it needs to be checked whether this
                 // identifier is not yet defined. The previous check could be omitted
                 // and only this one used but let's try to trigger as few updates as possible
@@ -205,7 +191,7 @@ export class JournalBox extends React.Component {
         this.followingProcs.push(journal.journalctl(this.match, journalctlOptions)
                 .fail(this.queryError)
                 .stream(entries => {
-                    if (entries[0].__CURSOR == cursor)
+                    if (entries[0].__CURSOR === cursor)
                         entries.shift();
                     this.prependEntries(entries);
                 }));
@@ -216,16 +202,17 @@ export class JournalBox extends React.Component {
         // without `sh -ec`, grep, sort, replaceAll and all of those ugly stuff
         // For that we however need newer systemd that includes https://github.com/systemd/systemd/issues/13937
         const currentServices = new Set();
-        const service_options = Object.assign({ output: "verbose" }, options);
+        const service_options = Object.assign({ output: "verbose", "output-fields": "SYSLOG_IDENTIFIER" }, options);
         let cmd = journal.build_cmd(match, service_options);
 
-        cmd = cmd.map(i => i.replaceAll(" ", "\\ ")).join(" ");
+        // cribbed from Python's shlex.quote()
+        cmd = cmd.map(i => `'` + i.replaceAll(`'`, `'"'"'`) + `'`).join(" ");
         cmd = "set -o pipefail; " + cmd + " | grep SYSLOG_IDENTIFIER= | sort -u";
         cockpit.spawn(["/bin/bash", "-ec", cmd], { superuser: "try", err: "message" })
                 .then(entries => {
                     entries.split("\n").forEach(entry => {
                         if (entry)
-                            currentServices.add(entry.substr(entry.indexOf('=') + 1));
+                            currentServices.add(entry.substring(entry.indexOf('=') + 1));
                     });
                 })
                 .catch(e => {
@@ -276,10 +263,11 @@ export class JournalBox extends React.Component {
                     {error}
                     <EmptyStatePanel action={_("Clear all filters")}
                                      icon={ExclamationCircleIcon}
+                                     actionVariant="link"
                                      onAction={() => cockpit.location.go('/')}
                                      paragraph={_("Can not find any logs using the current combination of filters.")}
                                      title={_("No logs found")}
-                                     loading={false} />
+                    />
                 </div>
             );
         }
@@ -287,7 +275,6 @@ export class JournalBox extends React.Component {
             /* Show 'Load earlier entries' button if we didn't reach start yet */
             this.state.didntReachStart
                 ? <EmptyStatePanel action={_("Load earlier entries")}
-                             actionInProgressText={_("Loading earlier entries")}
                              icon={noLogs ? ExclamationCircleIcon : undefined}
                              isActionInProgress={this.state.loading}
                              onAction={() => {
@@ -305,7 +292,7 @@ export class JournalBox extends React.Component {
                                  const promise = journal.journalctl(this.match, journalctlOptions)
                                          .fail(this.queryError)
                                          .stream(entries => {
-                                             if (entries[0].__CURSOR == this.state.cursor)
+                                             if (entries[0].__CURSOR === this.state.cursor)
                                                  entries.shift();
                                              count += entries.length;
                                              this.appendEntries(entries);
@@ -322,7 +309,7 @@ export class JournalBox extends React.Component {
                              }}
                              paragraph={noLogs ? _("You may try to load older entries.") : ""}
                              title={noLogs ? _("No logs found") : ""}
-                             loading={false} />
+                             loading={this.state.loading} />
                 : null
         );
 

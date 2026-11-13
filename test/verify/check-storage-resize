@@ -1,23 +1,11 @@
 #!/usr/bin/python3 -cimport os, sys; os.execv(os.path.dirname(sys.argv[1]) + "/../common/pywrap", sys.argv)
 
-# This file is part of Cockpit.
 #
 # Copyright (C) 2015 Red Hat, Inc.
-#
-# Cockpit is free software; you can redistribute it and/or modify it
-# under the terms of the GNU Lesser General Public License as published by
-# the Free Software Foundation; either version 2.1 of the License, or
-# (at your option) any later version.
-#
-# Cockpit is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-# Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: LGPL-2.1-or-later
 
-import unittest
+
+import os
 
 import storagelib
 import testlib
@@ -25,9 +13,10 @@ import testlib
 
 class TestStorageResize(storagelib.StorageCase):
 
-    # LUKS uses memory hard PBKDF, 1 GiB is not enough; see https://bugzilla.redhat.com/show_bug.cgi?id=1881829
+    # on RHEL 8, provide enough RAM for cryptsetup's PBKDF (https://issues.redhat.com/browse/RHEL-8258)
+    # On any newer OS, cryptsetup gets along with less RAM
     provision = {
-        "0": {"memory_mb": 1536}
+        "0": {"memory_mb": 1400 if os.environ.get("TEST_OS", "").startswith("rhel-8-") else None}
     }
 
     def checkResize(self, fsys, crypto, can_shrink, can_grow, shrink_needs_unmount=None, grow_needs_unmount=None):
@@ -44,7 +33,7 @@ class TestStorageResize(storagelib.StorageCase):
         disk = m.add_disk("500M", serial="DISK1")
         b.wait_visible(self.card_row("Storage", name=f"/dev/{disk['dev']}"))
 
-        m.execute("vgcreate TEST /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_DISK1")
+        m.execute("vgcreate TEST /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_DISK1; udevadm trigger")
         b.wait_visible(self.card_row("Storage", name="TEST"))
 
         m.execute("lvcreate TEST -n vol -L 320m")  # minimum xfs size is ~300MB
@@ -59,7 +48,7 @@ class TestStorageResize(storagelib.StorageCase):
         self.dialog_wait_apply_enabled()
         self.dialog_set_val("name", "FSYS")
         self.dialog_set_val("type", fsys)
-        self.dialog_set_val("mount_point", "/run/foo")
+        self.dialog_set_val("mount_point", f"{self.mnt_dir}/foo")
         if crypto:
             self.dialog_set_val("crypto", self.default_crypto_type)
             self.dialog_set_val("passphrase", "vainu-reku-toma-rolle-kaja")
@@ -69,10 +58,10 @@ class TestStorageResize(storagelib.StorageCase):
             self.dialog_wait_close()
 
         b.wait_text(self.card_row_col("LVM2 logical volumes", 1, 2), filesystem_desc_enc)
-        b.wait_text(self.card_row_col("LVM2 logical volumes", 1, 3), "/run/foo")
+        b.wait_text(self.card_row_col("LVM2 logical volumes", 1, 3), f"{self.mnt_dir}/foo")
 
         if can_grow:
-            b.click(self.card_row_col("LVM2 logical volumes", 1, 1))
+            self.click_card_row("LVM2 logical volumes", 1)
             b.click(self.card_button("LVM2 logical volume", "Grow"))
             self.dialog_wait_open()
             self.dialog_wait_apply_enabled()
@@ -86,7 +75,7 @@ class TestStorageResize(storagelib.StorageCase):
             b.wait_in_text(self.card_desc("LVM2 logical volume", "Size"), "398 MB")
             with b.wait_timeout(30):
                 self.wait_mounted(filesystem_desc)
-            size = int(m.execute("df -k --output=size /run/foo | tail -1").strip())
+            size = int(m.execute(f"df -k --output=size {self.mnt_dir}/foo | tail -1").strip())
             self.assertGreater(size, 300000)
         else:
             self.wait_card_button_disabled("LVM2 logical volume", "Grow")
@@ -104,7 +93,7 @@ class TestStorageResize(storagelib.StorageCase):
             self.dialog_wait_close()
             b.wait_in_text(self.card_desc("LVM2 logical volume", "Size"), "201 MB")
             self.wait_mounted(filesystem_desc)
-            size = int(m.execute("df -k --output=size /run/foo | tail -1").strip())
+            size = int(m.execute(f"df -k --output=size {self.mnt_dir}/foo | tail -1").strip())
             self.assertLess(size, 300000)
         else:
             self.wait_card_button_disabled("LVM2 logical volume", "Shrink")
@@ -146,10 +135,6 @@ class TestStorageResize(storagelib.StorageCase):
         m = self.machine
         b = self.browser
 
-        if self.storaged_version < [2, 7, 6]:
-            # No Filesystem.Size property
-            raise unittest.SkipTest("UDisks2 too old")
-
         self.login_and_go("/storage")
         disk = m.add_disk("500M", serial="DISK1")
         b.wait_visible(self.card_row("Storage", name=f"/dev/{disk['dev']}"))
@@ -164,7 +149,7 @@ class TestStorageResize(storagelib.StorageCase):
         b.wait_visible(self.card("LVM2 volume group"))
         b.wait_text(self.card_row_col("LVM2 logical volumes", 1, 1), "vol")
 
-        mountpoint = "/run/foo"
+        mountpoint = f"{self.mnt_dir}/foo"
         self.click_dropdown(self.card_row("LVM2 logical volumes", 1), "Format")
         self.dialog_wait_open()
         self.dialog_set_val("name", "FSYS")
@@ -176,7 +161,7 @@ class TestStorageResize(storagelib.StorageCase):
         b.wait_text(self.card_row_col("LVM2 logical volumes", 1, 3), mountpoint)
 
         # Click on the card to check the label
-        b.click(self.card_row_col("LVM2 logical volumes", 1, 1))
+        self.click_card_row("LVM2 logical volumes", 1)
         b.wait_text(self.card_desc("ext4 filesystem", "Name"), "FSYS")
 
         # Grow the logical volume and let Cockpit grow the filesystem
@@ -198,13 +183,10 @@ class TestStorageResize(storagelib.StorageCase):
         size = int(m.execute("lvs TEST/vol -o lv_size --noheading --units b --nosuffix"))
         self.assertLess(size, 250000000)
 
+    @testlib.skipImage("cryptsetup uses too much memory, OOM on our test VMs", "rhel-8-*")
     def testGrowShrinkEncryptedHelp(self):
         m = self.machine
         b = self.browser
-
-        if self.storaged_version < [2, 8, 0]:
-            # No Encrypted.MetadataSize property
-            raise unittest.SkipTest("UDisks2 too old")
 
         self.login_and_go("/storage")
         disk = m.add_disk("500M", serial="DISK1")
@@ -220,7 +202,7 @@ class TestStorageResize(storagelib.StorageCase):
         b.wait_visible(self.card("LVM2 volume group"))
         b.wait_text(self.card_row_col("LVM2 logical volumes", 1, 1), "vol")
 
-        mountpoint = "/run/foo"
+        mountpoint = f"{self.mnt_dir}/foo"
         self.click_dropdown(self.card_row("LVM2 logical volumes", 1), "Format")
         self.dialog_wait_open()
         self.dialog_set_val("name", "FSYS")
@@ -246,7 +228,7 @@ class TestStorageResize(storagelib.StorageCase):
             self.dialog_apply()
             self.dialog_wait_close()
 
-        b.click(self.card_row_col("LVM2 logical volumes", 1, 1))
+        self.click_card_row("LVM2 logical volumes", 1)
         b.click(self.card_button("LVM2 logical volume", "Grow content"))
         confirm_with_passphrase()
         b.wait_not_present(self.card_button("LVM2 logical volume", "Grow content"))
@@ -329,17 +311,17 @@ class TestStorageResize(storagelib.StorageCase):
 
         fake_fstype("udf")  # UDF is a real filesystem type that UDisks knows about. It can definitely not be resized.
         b.wait_text(self.card_row_col("LVM2 logical volumes", 1, 2), "udf filesystem")
-        b.click(self.card_row_col("LVM2 logical volumes", 1, 1))
+        self.click_card_row("LVM2 logical volumes", 1)
         check_btn("Shrink", "udf can not be resized")
         check_btn("Grow", "udf can not be resized")
-        b.click(".pf-v5-c-breadcrumb__link:contains('TEST')")
+        b.click(".pf-v6-c-breadcrumb__link:contains('TEST')")
 
         fake_fstype("fake")  # This is not a real filesystem and UDisks2 knows nothing about it.
         b.wait_text(self.card_row_col("LVM2 logical volumes", 1, 2), "fake filesystem")
-        b.click(self.card_row_col("LVM2 logical volumes", 1, 1))
+        self.click_card_row("LVM2 logical volumes", 1)
         check_btn("Shrink", "fake can not be resized here")
         check_btn("Grow", "fake can not be resized here")
-        b.click(".pf-v5-c-breadcrumb__link:contains('TEST')")
+        b.click(".pf-v6-c-breadcrumb__link:contains('TEST')")
 
 
 if __name__ == '__main__':

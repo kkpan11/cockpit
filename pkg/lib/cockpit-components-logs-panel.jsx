@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2017 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -23,7 +9,7 @@ import React from "react";
 import { Badge } from "@patternfly/react-core/dist/esm/components/Badge/index.js";
 import { Button } from "@patternfly/react-core/dist/esm/components/Button/index.js";
 import { Card, CardBody, CardHeader, CardTitle } from '@patternfly/react-core/dist/esm/components/Card/index.js';
-import { ExclamationTriangleIcon, TimesCircleIcon } from '@patternfly/react-icons';
+import { ExclamationTriangleIcon } from '@patternfly/react-icons';
 
 import { journal } from "journal";
 import "journal.css";
@@ -62,30 +48,22 @@ export class JournalOutput {
     }
 
     render_line(ident, prio, message, count, time, entry) {
-        let problem = false;
         let warning = false;
 
-        if (ident === 'abrt-notification') {
-            problem = true;
-            ident = entry.PROBLEM_BINARY;
-        } else if (prio < 4) {
+        if (prio < 4) {
             warning = true;
         }
 
         const full_content = [time, message, ident].join("\n");
 
         return (
-            <div className="cockpit-logline" role="row" tabIndex="0" key={entry.__CURSOR}
+            <div className="cockpit-logline" role="row" tabIndex={0} key={entry.__CURSOR}
                 data-cursor={entry.__CURSOR}
                 onClick={ev => this.onEvent(ev, entry.__CURSOR, full_content)}
                 onKeyDown={ev => this.onEvent(ev, entry.__CURSOR, full_content)}>
                 <div className="cockpit-log-warning" role="cell">
                     { warning
                         ? <ExclamationTriangleIcon className="ct-icon-exclamation-triangle" />
-                        : null
-                    }
-                    { problem
-                        ? <TimesCircleIcon className="ct-icon-times-circle" />
                         : null
                     }
                 </div>
@@ -169,7 +147,7 @@ export class LogsPanel extends React.Component {
         const actions = (this.state.logs.length > 0 && this.props.goto_url) && <Button variant="secondary" onClick={e => cockpit.jump(this.props.goto_url)}>{_("View all logs")}</Button>;
 
         return (
-            <Card className="cockpit-log-panel">
+            <Card isPlain className="cockpit-log-panel">
                 <CardHeader actions={{ actions }}>
                     <CardTitle>{this.props.title}</CardTitle>
                 </CardHeader>

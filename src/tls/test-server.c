@@ -1,24 +1,11 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2019 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
 
+#include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -38,13 +25,14 @@
 #include "server.h"
 #include "utils.h"
 #include "testlib/cockpittest.h"
-#include "common/cockpithacks-glib.h"
 
 #define SOCKET_ACTIVATION_HELPER BUILDDIR "/socket-activation-helper"
 #define COCKPIT_WS BUILDDIR "/cockpit-ws"
 /* this has a corresponding mock-server.key */
-#define CERTFILE SRCDIR "/src/bridge/mock-server.crt"
-#define KEYFILE SRCDIR "/src/bridge/mock-server.key"
+#define CERTFILE SRCDIR "/test/data/mock-server.crt"
+#define KEYFILE SRCDIR "/test/data/mock-server.key"
+#define ECC_CERTFILE SRCDIR "/test/data/mock-ecc.crt"
+#define ECC_KEYFILE SRCDIR "/test/data/mock-ecc.key"
 
 #define CLIENT_CERTFILE SRCDIR "/src/tls/ca/alice.pem"
 #define CLIENT_KEYFILE SRCDIR "/src/tls/ca/alice.key"
@@ -58,18 +46,27 @@ typedef struct {
   gchar *clients_dir;
   gchar *cgroup_line;
   GPid ws_spawner;
-  struct sockaddr_in server_addr;
+  struct sockaddr_in6 server_addr;
 } TestCase;
 
 typedef struct {
   const char *certfile;
   const char *keyfile;
+  const char *certfile2;
+  const char *keyfile2;
   int cert_request_mode;
   int idle_timeout;
   const char *client_crt;
   const char *client_key;
   const char *client_fingerprint;
+  const char *priority;
+  int expected_pk_algo;
+  unsigned int max_connection_count;
 } TestFixture;
+
+static const TestFixture fixture_max_connection_count_10 = {
+  .max_connection_count = 10,
+};
 
 static const TestFixture fixture_separate_crt_key = {
   .certfile = CERTFILE,
@@ -91,7 +88,7 @@ static const TestFixture fixture_expired_client_cert = {
   .cert_request_mode = GNUTLS_CERT_REQUEST,
   .client_crt = CLIENT_EXPIRED_CERTFILE,
   .client_key = CLIENT_KEYFILE,
-  .client_fingerprint = CLIENT_CERT_FINGERPRINT,
+  .client_fingerprint = CLIENT_EXPIRED_FINGERPRINT,
 };
 
 static const TestFixture fixture_alternate_client_cert = {
@@ -105,6 +102,24 @@ static const TestFixture fixture_alternate_client_cert = {
 
 static const TestFixture fixture_run_idle = {
   .idle_timeout = 1,
+};
+
+static const TestFixture fixture_multiple_certs_ecdsa = {
+  .certfile = CERTFILE,
+  .keyfile = KEYFILE,
+  .certfile2 = ECC_CERTFILE,
+  .keyfile2 = ECC_KEYFILE,
+  .priority = "NORMAL:-SIGN-ALL:+SIGN-ECDSA-SECP256R1-SHA256",
+  .expected_pk_algo = GNUTLS_PK_ECDSA,
+};
+
+static const TestFixture fixture_multiple_certs_rsa = {
+  .certfile = CERTFILE,
+  .keyfile = KEYFILE,
+  .certfile2 = ECC_CERTFILE,
+  .keyfile2 = ECC_KEYFILE,
+  .priority = "NORMAL:-SIGN-ALL:+SIGN-RSA-SHA256:+SIGN-RSA-PSS-RSAE-SHA256",
+  .expected_pk_algo = GNUTLS_PK_RSA,
 };
 
 /* for forking test cases, where server's SIGCHLD handling gets in the way */
@@ -154,9 +169,56 @@ check_for_certfile (TestCase *tc,
 static int
 do_connect (TestCase *tc)
 {
-  int fd = socket (AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  int fd = socket (AF_INET6, SOCK_STREAM | SOCK_CLOEXEC, 0);
   g_assert_cmpint (fd, >, 0);
   if (connect (fd, (struct sockaddr *) &tc->server_addr, sizeof (tc->server_addr)) < 0)
+    {
+      close (fd);
+      return -errno;
+    }
+  else
+    {
+      return fd;
+    }
+}
+
+/* Explicitly connect using IPv4 to the dual-stack server */
+static int
+do_connect_ipv4 (TestCase *tc)
+{
+  struct sockaddr_in sa;
+  int fd = socket (AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  g_assert_cmpint (fd, >, 0);
+
+  memset (&sa, 0, sizeof (sa));
+  sa.sin_family = AF_INET;
+  sa.sin_addr.s_addr = htonl (INADDR_LOOPBACK);
+  sa.sin_port = tc->server_addr.sin6_port;
+
+  if (connect (fd, (struct sockaddr *) &sa, sizeof (sa)) < 0)
+    {
+      close (fd);
+      return -errno;
+    }
+  else
+    {
+      return fd;
+    }
+}
+
+/* Connect using IPv4-mapped IPv6 address (::ffff:x.x.x.x) */
+static int
+do_connect_ipv4_mapped (TestCase *tc, const char *ipv4_mapped_addr)
+{
+  struct sockaddr_in6 sa;
+  int fd = socket (AF_INET6, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  g_assert_cmpint (fd, >, 0);
+
+  /* Use server_addr but change address to specified IPv4-mapped address */
+  memcpy (&sa, &tc->server_addr, sizeof (sa));
+  g_assert_cmpint (inet_pton (AF_INET6, ipv4_mapped_addr, &sa.sin6_addr), ==, 1);
+
+  if (connect (fd, (struct sockaddr *) &sa, sizeof (sa)) < 0)
     {
       close (fd);
       return -errno;
@@ -190,10 +252,9 @@ recv_reply (int fd, char *buf, size_t buflen)
 }
 
 static const char*
-do_request (TestCase *tc, const char *request)
+do_request_fd (int fd, const char *request)
 {
   static char buf[4096];
-  int fd = do_connect (tc);
   int res;
 
   send_request (fd, request);
@@ -207,6 +268,13 @@ do_request (TestCase *tc, const char *request)
   }
 
   g_error ("timed out waiting for enough data to become available: res=%d, error: %m", res);
+}
+
+static const char*
+do_request (TestCase *tc, const char *request)
+{
+  int fd = do_connect (tc);
+  return do_request_fd (fd, request);
 }
 
 static void
@@ -257,7 +325,10 @@ assert_https_outcome (TestCase *tc,
 
       g_assert_cmpint (gnutls_init (&session, GNUTLS_CLIENT), ==, GNUTLS_E_SUCCESS);
       gnutls_transport_set_int (session, fd);
-      g_assert_cmpint (gnutls_set_default_priority (session), ==, GNUTLS_E_SUCCESS);
+      if (fixture && fixture->priority)
+        g_assert_cmpint (gnutls_priority_set_direct (session, fixture->priority, NULL), ==, GNUTLS_E_SUCCESS);
+      else
+        g_assert_cmpint (gnutls_set_default_priority (session), ==, GNUTLS_E_SUCCESS);
       gnutls_handshake_set_timeout(session, 5000);
       g_assert_cmpint (gnutls_certificate_allocate_credentials (&xcred), ==, GNUTLS_E_SUCCESS);
       g_assert_cmpint (gnutls_certificate_set_x509_system_trust (xcred), >=, 0);
@@ -285,6 +356,17 @@ assert_https_outcome (TestCase *tc,
       server_certs = gnutls_certificate_get_peers (session, &server_certs_len);
       g_assert (server_certs);
       g_assert_cmpuint (server_certs_len, ==, expected_server_certs);
+
+      /* check server certificate algorithm if requested */
+      if (fixture && fixture->expected_pk_algo)
+        {
+          gnutls_x509_crt_t cert;
+          g_assert_cmpint (gnutls_x509_crt_init (&cert), ==, GNUTLS_E_SUCCESS);
+          g_assert_cmpint (gnutls_x509_crt_import (cert, &server_certs[0], GNUTLS_X509_FMT_DER),
+                           ==, GNUTLS_E_SUCCESS);
+          g_assert_cmpint (gnutls_x509_crt_get_pk_algorithm (cert, NULL), ==, fixture->expected_pk_algo);
+          gnutls_x509_crt_deinit (cert);
+        }
 
       /* send request, read response */
       len = gnutls_record_send (session, request, sizeof (request));
@@ -391,11 +473,33 @@ setup (TestCase *tc, gconstpointer data)
     }
   close (socket_dir_fd);
 
+  unsigned max_connection_count = (fixture && fixture->max_connection_count != 0) ? fixture->max_connection_count : 500;
+
   /* Let the kernel assign a port */
-  server_init (tc->ws_socket_dir, tc->runtime_dir, fixture ? fixture->idle_timeout : 0, 0);
+  server_init (tc->ws_socket_dir, tc->runtime_dir, fixture ? fixture->idle_timeout : 0, 0, max_connection_count);
 
   if (fixture && fixture->certfile)
-    connection_crypto_init (fixture->certfile, fixture->keyfile, false, fixture->cert_request_mode);
+    {
+      /* Set up certs directory with 0.crt and 0.key */
+      g_autofree gchar *certs_dir = g_build_filename (tc->runtime_dir, "tls/server", NULL);
+      g_assert_cmpint (g_mkdir_with_parents (certs_dir, 0700), ==, 0);
+
+      const char *sources[] = { fixture->certfile, fixture->keyfile,
+                                fixture->certfile2, fixture->keyfile2 };
+      const char *dests[] = { "0.crt", "0.key", "1.crt", "1.key" };
+      for (int i = 0; i < G_N_ELEMENTS (sources) && sources[i]; i++)
+        {
+          g_autofree gchar *contents = NULL;
+          g_autofree gchar *dest = g_build_filename (certs_dir, dests[i], NULL);
+          g_assert (g_file_get_contents (sources[i], &contents, NULL, NULL));
+          g_assert (g_file_set_contents (dest, contents, -1, NULL));
+        }
+
+      int cert_dirfd = open (certs_dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+      g_assert_cmpint (cert_dirfd, >=, 0);
+      connection_crypto_init (cert_dirfd, false, fixture->cert_request_mode);
+      close (cert_dirfd);
+    }
 
   /* Figure out the socket address we ought to connect to */
   socklen_t addrlen = sizeof tc->server_addr;
@@ -404,7 +508,7 @@ setup (TestCase *tc, gconstpointer data)
 
   /* Sanity check */
   g_assert_cmpint (addrlen, ==, sizeof tc->server_addr);
-  g_assert_cmpint (tc->server_addr.sin_family, ==, AF_INET);
+  g_assert_cmpint (tc->server_addr.sin6_family, ==, AF_INET6);
 }
 
 static void
@@ -431,6 +535,7 @@ teardown (TestCase *tc, gconstpointer data)
   g_assert_cmpint (unlinkat (socket_dir_fd, "https-factory.sock", 0), ==, 0);
   g_assert_cmpint (unlinkat (socket_dir_fd, "https@" SHA256_NIL ".sock", 0), ==, 0);
   g_assert_cmpint (unlinkat (socket_dir_fd, "https@" CLIENT_CERT_FINGERPRINT ".sock", 0), ==, 0);
+  g_assert_cmpint (unlinkat (socket_dir_fd, "https@" CLIENT_EXPIRED_FINGERPRINT ".sock", 0), ==, 0);
   g_assert_cmpint (unlinkat (socket_dir_fd, "https@" ALTERNATE_FINGERPRINT ".sock", 0), ==, 0);
   g_assert_cmpint (unlinkat (socket_dir_fd, "ready", 0), ==, 0);
   close (socket_dir_fd);
@@ -442,6 +547,16 @@ teardown (TestCase *tc, gconstpointer data)
   g_assert_cmpint (g_rmdir (tc->clients_dir), ==, 0);
   g_free (tc->clients_dir);
 
+  /* We use only rmdir() to verity that certificate_load() definitely
+   * deleted all of the key material.  We want to make sure we don't see
+   * `ENOTEMPTY`.
+   */
+  g_autofree gchar *tls_dir = g_build_filename (tc->runtime_dir, "tls", NULL);
+  g_autofree gchar *certs_dir = g_build_filename (tls_dir, "server", NULL);
+  if (g_rmdir (certs_dir) != 0 && errno != ENOENT)
+    g_error ("rmdir %s: %s", certs_dir, g_strerror (errno));
+  if (g_rmdir (tls_dir) != 0 && errno != ENOENT)
+    g_error ("rmdir %s: %s", tls_dir, g_strerror (errno));
   g_assert_cmpint (g_rmdir (tc->runtime_dir), ==, 0);
   g_free (tc->runtime_dir);
 
@@ -564,13 +679,52 @@ test_no_tls_many_parallel (TestCase *tc, gconstpointer data)
 }
 
 static void
+test_no_tls_too_many_parallel (TestCase *tc, gconstpointer data)
+{
+  int i;
+  int fds[20];
+
+  const char *request =  "GET / HTTP/1.0\r\nHost: localhost\r\n\r\n";
+
+  for (i = 0; i < 20; ++i)
+    {
+      fds[i] = do_connect (tc);
+      g_assert_cmpint (fds[i], >, 0);
+      server_poll_event (50);
+    }
+
+  for (i = 0; i < 20; ++i)
+    {
+      if (i < 10)
+        {
+          /* the first 10 are allowed to connect and will receive a reply */
+          do_request_fd (fds[i], request);
+        }
+      else
+        {
+          /* the rest gets disconnected immediately */
+          int r = write (fds[i], request, strlen (request));
+          g_assert (r == -1 && errno == ECONNRESET);
+        }
+
+      close(fds[i]);
+    }
+}
+
+static void
 test_no_tls_redirect (TestCase *tc, gconstpointer data)
 {
-  /* Make sure we connect on something other than localhost */
-  tc->server_addr.sin_addr.s_addr = htonl (INADDR_LOOPBACK + 1);
+  struct sockaddr *sa = (struct sockaddr *) &tc->server_addr;
+
+  /* Server uses IPv6 dual-stack socket */
+  g_assert_cmpint (sa->sa_family, ==, AF_INET6);
+
+  /* Connect to non-localhost address (127.0.0.2 as IPv4-mapped IPv6) to test redirect logic */
+  int fd = do_connect_ipv4_mapped (tc, "::ffff:127.0.0.2");
+  g_assert_cmpint (fd, >, 0);
 
   /* without TLS support it should not redirect */
-  const char *res = do_request (tc, "GET / HTTP/1.0\r\nHost: some.remote:1234\r\n\r\n");
+  const char *res = do_request_fd (fd, "GET / HTTP/1.0\r\nHost: some.remote:1234\r\n\r\n");
   /* This succeeds (200 OK) when building in-tree, but fails with dist-check due to missing doc root */
   if (strstr (res, "200 OK"))
     cockpit_assert_strmatch (res, "HTTP/1.1 200 OK*");
@@ -595,12 +749,54 @@ test_tls_no_server_cert (TestCase *tc, gconstpointer data)
 static void
 test_tls_redirect (TestCase *tc, gconstpointer data)
 {
-  /* Make sure we connect on something other than localhost */
-  tc->server_addr.sin_addr.s_addr = htonl (INADDR_LOOPBACK + 1);
+  struct sockaddr *sa = (struct sockaddr *) &tc->server_addr;
+
+  /* Server uses IPv6 dual-stack socket */
+  g_assert_cmpint (sa->sa_family, ==, AF_INET6);
+
+  /* Connect to non-localhost address (127.0.0.2 as IPv4-mapped IPv6) to test redirect logic */
+  int fd = do_connect_ipv4_mapped (tc, "::ffff:127.0.0.2");
+  g_assert_cmpint (fd, >, 0);
 
   /* with TLS support it should redirect */
-  const char *res = do_request (tc, "GET / HTTP/1.0\r\nHost: some.remote:1234\r\n\r\n");
+  const char *res = do_request_fd (fd, "GET / HTTP/1.0\r\nHost: some.remote:1234\r\n\r\n");
   cockpit_assert_strmatch (res, "HTTP/1.1 301 Moved Permanently*");
+}
+
+static void
+test_tls_redirect_header_safety (TestCase *tc, gconstpointer data)
+{
+  /* verify that the redirect response doesn't contain any headers from the request,
+   * possibly through crafted host/path values. */
+  int fd = do_connect_ipv4_mapped (tc, "::ffff:127.0.0.2");
+  g_assert_cmpint (fd, >, 0);
+
+  const char *res = do_request_fd (fd, "GET /test HTTP/1.0\r\nHost: some.remote:1234\r\nX-Injected: evil\r\n\r\n");
+
+  cockpit_assert_strmatch (res, "HTTP/1.1 301 Moved Permanently*");
+  cockpit_assert_strmatch (res, "*Location: https://some.remote:1234/test*");
+  g_assert_null (strstr (res, "X-Injected"));
+  g_assert_null (strstr (res, "evil"));
+
+  /* Request headers should not leak into response */
+  fd = do_connect_ipv4_mapped (tc, "::ffff:127.0.0.2");
+  g_assert_cmpint (fd, >, 0);
+
+  res = do_request_fd (fd, "GET /path?query HTTP/1.0\r\nHost: example.org\r\nCookie: secret=data\r\n\r\n");
+  cockpit_assert_strmatch (res, "HTTP/1.1 301 Moved Permanently*");
+  cockpit_assert_strmatch (res, "*Location: https://example.org/path?query*");
+  g_assert_null (strstr (res, "Cookie"));
+  g_assert_null (strstr (res, "secret"));
+
+  /* Verify URL-encoded CRLF in path is safely handled (preserved as literal %0D%0A) */
+  fd = do_connect_ipv4_mapped (tc, "::ffff:127.0.0.2");
+  g_assert_cmpint (fd, >, 0);
+  res = do_request_fd (fd, "GET /path%0D%0A HTTP/1.0\r\nHost: example.org\r\n\r\n");
+  cockpit_assert_strmatch (res, "HTTP/1.1 301 Moved Permanently*");
+  cockpit_assert_strmatch (res, "*Location: https://example.org/path%0D%0A*");
+  /* The URL encoding should not be decoded into actual CRLF */
+  g_assert_null (strstr (res, "path\r\n"));
+  g_assert_null (strstr (res, "path\n"));
 }
 
 static void
@@ -787,6 +983,22 @@ test_run_idle (TestCase *tc, gconstpointer data)
   server_run ();
 }
 
+static void
+test_ipv4_connection (TestCase *tc, gconstpointer data)
+{
+  /* Explicitly connect using IPv4 to the dual-stack server */
+  int fd = do_connect_ipv4 (tc);
+  g_assert_cmpint (fd, >, 0);
+
+  const char *reply = do_request_fd (fd, "GET / HTTP/1.0\r\nHost: localhost\r\n\r\n");
+
+  /* This succeeds (200 OK) when building in-tree, but fails with dist-check due to missing doc root */
+  if (strstr (reply, "200 OK"))
+    cockpit_assert_strmatch (reply, "HTTP/1.1 200 OK*");
+  else
+    cockpit_assert_strmatch (reply, "HTTP/1.1 404 Not Found*");
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -798,6 +1010,8 @@ main (int argc, char *argv[])
               setup, test_no_tls_many_serial, teardown);
   g_test_add ("/server/no-tls/many-parallel", TestCase, NULL,
               setup, test_no_tls_many_parallel, teardown);
+  g_test_add ("/server/no-tls/too-many-parallel", TestCase, &fixture_max_connection_count_10,
+              setup, test_no_tls_too_many_parallel, teardown);
   g_test_add ("/server/no-tls/redirect", TestCase, NULL,
               setup, test_no_tls_redirect, teardown);
   g_test_add ("/server/tls/no-client-cert", TestCase, &fixture_separate_crt_key,
@@ -816,12 +1030,20 @@ main (int argc, char *argv[])
               setup, test_tls_no_server_cert, teardown);
   g_test_add ("/server/tls/redirect", TestCase, &fixture_separate_crt_key,
               setup, test_tls_redirect, teardown);
+  g_test_add ("/server/tls/redirect-header-safety", TestCase, &fixture_separate_crt_key,
+              setup, test_tls_redirect_header_safety, teardown);
   g_test_add ("/server/tls/blocked-handshake", TestCase, &fixture_separate_crt_key,
               setup, test_tls_blocked_handshake, teardown);
   g_test_add ("/server/mixed-protocols", TestCase, &fixture_separate_crt_key,
               setup, test_mixed_protocols, teardown);
+  g_test_add ("/server/tls/multiple-certs/ecdsa", TestCase, &fixture_multiple_certs_ecdsa,
+              setup, test_tls_no_client_cert, teardown);
+  g_test_add ("/server/tls/multiple-certs/rsa", TestCase, &fixture_multiple_certs_rsa,
+              setup, test_tls_no_client_cert, teardown);
   g_test_add ("/server/run-idle", TestCase, &fixture_run_idle,
               setup, test_run_idle, teardown);
+  g_test_add ("/server/ipv4/connection", TestCase, NULL,
+              setup, test_ipv4_connection, teardown);
 
   return g_test_run ();
 }

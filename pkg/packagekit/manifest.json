@@ -2,7 +2,7 @@
     "name": "updates",
     "priority": 0,
     "conditions": [
-        {"path-exists": "/lib/systemd/system/packagekit.service"},
+        {"any": [{"path-exists": "/lib/systemd/system/packagekit.service"}, {"path-exists": "/lib/systemd/system/dnf5daemon-server.service"}]},
         {"path-not-exists": "/sysroot/ostree"}
     ],
 
@@ -11,19 +11,17 @@
             "label": "Software updates",
             "docs": [
                 {
-                    "label": "Managing software updates",
-                    "url": "https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/9/html/managing_systems_using_the_rhel_9_web_console/managing-software-updates-in-the-web-console_system-management-using-the-rhel-9-web-console"
+                    "label": "Applying live kernel patching",
+		    "url": "https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/managing_monitoring_and_updating_the_kernel/applying-patches-with-kernel-live-patching_assembly_managing-kernel-command-line-parameters-with-uki#proc_applying-patches-witch-kernel-live-patching-in-the-web-console_applying-patches-with-kernel-live-patching"
                 }
             ],
             "keywords": [
                 {
-                    "matches": ["package", "packagekit", "dnf", "yum", "apt-get", "security"]
+                    "matches": ["package", "packagekit", "dnf", "yum", "apt-get", "security", "kpatch", "updates"]
                 }
             ]
         }
     },
 
-    "preload": [ "index" ],
-
-    "content-security-policy": "default-src 'self'; img-src 'self' data:; font-src 'self' data:;"
+    "preload": [ "index" ]
 }

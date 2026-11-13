@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2019 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
@@ -60,6 +46,7 @@ static bool
 write_error (FILE *output)
 {
   fprintf (output, "HTTP/1.1 400 Client Error\r\n"
+                   "Connection: close\r\n"
                    "\r\n"
                    "Incorrect request.\r\n");
 
@@ -110,9 +97,16 @@ http_redirect (FILE *input,
   if (!host)
     return write_error (output);
 
+  /* Defense-in-depth: validate that host and path don't contain CR or LF. The current read_line() implementation
+   * already prevents this, but add explicit validation just in case, and reject invalid values.
+   */
+  if (strchr (host, '\r') || strchr (host, '\n') ||
+      strchr (path, '\r') || strchr (path, '\n'))
+    return write_error (output);
+
   fprintf (output, "HTTP/1.1 301 Moved Permanently\r\n"
-                   "Content-Type: text/html\r\n"
                    "Location: https://%s%s\r\n"
+                   "Connection: close\r\n"
                    "\r\n", host, path);
 
   return true;

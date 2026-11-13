@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2021 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import React, { useState, useContext } from 'react';
@@ -55,6 +41,12 @@ const bond_monitoring_choices =
         { choice: 'arp', title: _("ARP") }
     ];
 
+const modes_with_primary = [
+    'active-backup',
+    'balance-tlb',
+    'balance-alb'
+];
+
 export const BondDialog = ({ connection, dev, settings }) => {
     const Dialogs = useDialogs();
     const idPrefix = "network-bond-settings";
@@ -77,9 +69,12 @@ export const BondDialog = ({ connection, dev, settings }) => {
     const [memberChoices, setMemberChoices] = useState(memberChoicesInit);
     const [mode, setMode] = useState(options.mode);
     const [monitoringTargets, setMonitoringTargets] = useState(options.arp_ip_target);
-    const [primary, setPrimary] = useState(undefined);
+    const [primary, setPrimary] = useState(options.primary);
 
     const onSubmit = (ev) => {
+        const options = settings.bond.options;
+        delete options.primary;
+
         const createSettingsObj = () => ({
             ...settings,
             connection: {
@@ -94,9 +89,9 @@ export const BondDialog = ({ connection, dev, settings }) => {
                 ...settings.bond,
                 interface_name: iface,
                 options: {
-                    ...settings.bond.options,
+                    ...options,
                     mode,
-                    ...(linkMonitoring == 'mii' && {
+                    ...(linkMonitoring === 'mii' && {
                         miimon: linkMonitoringInterval,
                         updelay: linkUpDelay,
                         downdelay: linkDownDelay,
@@ -105,7 +100,7 @@ export const BondDialog = ({ connection, dev, settings }) => {
                         arp_interval: linkMonitoringInterval,
                         arp_ip_target: monitoringTargets,
                     }),
-                    ...(mode == "active-backup" && { primary })
+                    ...(modes_with_primary.includes(mode) && primary && { primary })
                 }
             }
         });
@@ -122,8 +117,8 @@ export const BondDialog = ({ connection, dev, settings }) => {
         });
 
         // Prevent dialog from closing because of <form> onsubmit event
-        if (event)
-            event.preventDefault();
+        if (ev)
+            ev.preventDefault();
 
         return false;
     };
@@ -148,14 +143,12 @@ export const BondDialog = ({ connection, dev, settings }) => {
                                           variant='link'
                                           isInline
                                           icon={<ExternalLinkSquareAltIcon />} iconPosition="right"
-                                          href="https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/9/html/managing_systems_using_the_rhel_9_web_console/configuring-network-bonds-using-the-web-console_system-management-using-the-rhel-9-web-console">
+                                          href="https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/configuring_and_managing_networking/configuring-network-bonding_configuring-and-managing-networking#proc_configuring-a-network-bond-by-using-the-rhel-web-console_configuring-network-bonding">
                                       {_("Learn more")}
                                   </Button>
                               }
                           >
-                              <Button id="bond-help-popup-button" variant="plain" aria-label="Help">
-                                  <HelpIcon />
-                              </Button>
+                              <Button icon={<HelpIcon />} id="bond-help-popup-button" variant="plain" aria-label="Help" />
                           </Popover>
                       }
                       isCreateDialog={!connection}
@@ -174,11 +167,11 @@ export const BondDialog = ({ connection, dev, settings }) => {
                         {bond_mode_choices.map(choice => <FormSelectOption value={choice.choice} label={choice.title} key={choice.choice} />)}
                     </FormSelect>
                 </FormGroup>
-                {mode == "active-backup" && <FormGroup fieldId={idPrefix + "-primary-select"} label={_("Primary")}>
+                {modes_with_primary.includes(mode) && <FormGroup fieldId={idPrefix + "-primary-select"} label={_("Primary")}>
                     <FormSelect id={idPrefix + "-primary-select"} onChange={(_, val) => setPrimary(val)}
                                 value={primary}>
                         <>
-                            <FormSelectOption key='-' value={null} label='-' />
+                            <FormSelectOption key='-' value='' label='-' />
                             {Object.keys(memberChoices)
                                     .filter(iface => memberChoices[iface])
                                     .map(iface => <FormSelectOption key={iface} label={iface} value={iface} />)}
@@ -194,7 +187,7 @@ export const BondDialog = ({ connection, dev, settings }) => {
                 <FormGroup fieldId={idPrefix + "-link-monitoring-interval-input"} label={_("Monitoring interval")}>
                     <TextInput id={idPrefix + "-link-monitoring-interval-input"} className="network-number-field" value={linkMonitoringInterval} onChange={(_event, value) => setLinkMonitoringInterval(value)} />
                 </FormGroup>
-                {linkMonitoring == 'mii' && <>
+                {linkMonitoring === 'mii' && <>
                     <FormGroup fieldId={idPrefix + "-link-up-delay-input"} label={_("Link up delay")}>
                         <TextInput id={idPrefix + "-link-up-delay-input"} className="network-number-field" value={linkUpDelay} onChange={(_event, value) => setLinkUpDelay(value)} />
                     </FormGroup>
@@ -202,7 +195,7 @@ export const BondDialog = ({ connection, dev, settings }) => {
                         <TextInput id={idPrefix + "-link-down-delay-input"} className="network-number-field" value={linkDownDelay} onChange={(_event, value) => setLinkDownDelay(value)} />
                     </FormGroup>
                 </>}
-                {linkMonitoring == 'arp' && <FormGroup fieldId={idPrefix + "-monitoring-targets-input"} label={_("Monitoring targets")}>
+                {linkMonitoring === 'arp' && <FormGroup fieldId={idPrefix + "-monitoring-targets-input"} label={_("Monitoring targets")}>
                     <TextInput id={idPrefix + "-monitoring-targets-input"} value={monitoringTargets} onChange={(_event, value) => setMonitoringTargets(value)} />
                 </FormGroup>}
             </>

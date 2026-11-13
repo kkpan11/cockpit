@@ -1,27 +1,14 @@
 #!/usr/bin/python3 -cimport os, sys; os.execv(os.path.dirname(sys.argv[1]) + "/../common/pywrap", sys.argv)
 
-# This file is part of Cockpit.
 #
 # Copyright (C) 2013 Red Hat, Inc.
-#
-# Cockpit is free software; you can redistribute it and/or modify it
-# under the terms of the GNU Lesser General Public License as published by
-# the Free Software Foundation; either version 2.1 of the License, or
-# (at your option) any later version.
-#
-# Cockpit is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-# Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
 
 import netlib
 import testlib
 
 
-@testlib.skipDistroPackage()
 @testlib.nondestructive
 class TestNetworkingOther(netlib.NetworkCase):
     def testOther(self):
@@ -51,7 +38,13 @@ class TestNetworkingOther(netlib.NetworkCase):
         b.click("#network-ip-settings-dialog button:contains('Save')")
         self.addCleanup(m.execute, "nmcli con del tun0")
         b.wait_not_present("#network-ip-settings-dialog")
-        self.wait_for_iface_setting('Status', '1.2.3.4/24')
+        b.wait_visible("#network-interface")
+        b.wait_text("#network-interface-name", "tun0")
+        self.wait_for_iface_setting('IPv4', 'Address 1.2.3.4/24')
+        self.toggle_onoff("label[for='interface-switch']")
+        self.wait_onoff("#network-interface .pf-v6-c-card__header", val=True)
+        with b.wait_timeout(60):
+            self.wait_for_iface_setting('Status', '1.2.3.4/24')
 
 
 if __name__ == '__main__':

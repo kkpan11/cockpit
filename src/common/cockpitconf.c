@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2015 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
@@ -54,7 +40,6 @@ static bool cockpit_conf_loaded = false;
 static Entry *cockpit_conf = NULL;
 
 const char *cockpit_config_file = "cockpit.conf";
-const char *cockpit_config_dirs[] = { PACKAGE_SYSCONF_DIR, NULL };
 
 /*
  * some helper functions for safe memory allocation
@@ -288,24 +273,24 @@ cockpit_conf_cleanup (void)
 const char * const *
 cockpit_conf_get_dirs (void)
 {
-  static const char ** system_config_dirs = NULL;
+  static const char * const * system_config_dirs = NULL;
   static bool initialized = false;
 
   if (!initialized)
     {
-      static char *env;
 
       initialized = true;
-      env = getenv ("XDG_CONFIG_DIRS");
-      if (env && env[0])
-        {
-          /* strsplit() modifies the string inline, so copy and keep a ref */
-          env = strdup (env);
-          system_config_dirs = strsplit (env, ':');
-        }
+      const char *env = getenv ("XDG_CONFIG_DIRS");
+
+      /* prepend PACKAGE_SYSCONF_DIR; we read all config files, so XDG_CONFIG_DIRS files override/win */
+      char *dirs_string;
+      asprintfx (&dirs_string, "%s%s%s", PACKAGE_SYSCONF_DIR,
+                 (env && env[0]) ? ":" : "",
+                 (env && env[0]) ? env : "");
+      system_config_dirs = strsplit (dirs_string, ':');
     }
 
-  return (const char * const *) system_config_dirs ?: cockpit_config_dirs;
+  return system_config_dirs;
 }
 
 const char *
@@ -346,7 +331,8 @@ cockpit_conf_strv (const char *section,
     {
       /* strip off trailing whitespace (leading whitespace is already stripped by regexp) */
       entry->strv_value = strdupx (entry->value);
-      for (char *c = entry->strv_value + strlen (entry->strv_value) - 1; c >= entry->strv_value && isspace (*c); --c)
+      for (char *c = entry->strv_value + strlen (entry->strv_value) - 1;
+           c >= entry->strv_value && isspace ((unsigned char) *c); --c)
         *c = '\0';
       entry->strv_cache = strsplit (entry->strv_value, delimiter);
       entry->strv_delimiter = delimiter;

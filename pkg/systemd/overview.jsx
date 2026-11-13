@@ -1,23 +1,9 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2019 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
-import '../lib/patternfly/patternfly-5-cockpit.scss';
+import '../lib/patternfly/patternfly-6-cockpit.scss';
 import 'polyfills';
 import 'cockpit-dark-theme'; // once per page
 import cockpit from "cockpit";
@@ -26,7 +12,8 @@ import React from 'react';
 import { createRoot } from "react-dom/client";
 import { Page, PageSection, PageSectionVariants } from "@patternfly/react-core/dist/esm/components/Page/index.js";
 import { Gallery } from "@patternfly/react-core/dist/esm/layouts/Gallery/index.js";
-import { Dropdown, DropdownItem, DropdownPosition, DropdownToggle, DropdownToggleAction } from '@patternfly/react-core/dist/esm/deprecated/components/Dropdown/index.js';
+import { Dropdown, DropdownItem, DropdownList } from '@patternfly/react-core/dist/esm/components/Dropdown/index.js';
+import { MenuToggle, MenuToggleAction } from "@patternfly/react-core/dist/esm/components/MenuToggle";
 
 import { superuser } from "superuser";
 
@@ -36,11 +23,12 @@ import { HealthCard } from './overview-cards/healthCard.jsx';
 import { MotdCard } from './overview-cards/motdCard.jsx';
 import { UsageCard } from './overview-cards/usageCard.jsx';
 import { SuperuserAlert } from './superuser-alert.jsx';
-import { SuperuserIndicator } from "../shell/superuser.jsx";
+import { superuser_proxy, SuperuserIndicator } from "superuser-dialogs";
 import { ShutdownModal } from 'cockpit-components-shutdown.jsx';
 import { WithDialogs, DialogsContext } from "dialogs.jsx";
 
 import "./overview.scss";
+import { Title, TitleSizes } from '@patternfly/react-core/dist/esm/components/Title';
 
 const _ = cockpit.gettext;
 
@@ -57,7 +45,7 @@ class OverviewPage extends React.Component {
         this.hostnameMonitor = this.hostnameMonitor.bind(this);
         this.onPermissionChanged = this.onPermissionChanged.bind(this);
 
-        this.superuser = cockpit.dbus(null, { bus: "internal" }).proxy("cockpit.Superuser", "/superuser");
+        this.superuser = superuser_proxy();
     }
 
     componentDidMount() {
@@ -82,7 +70,7 @@ class OverviewPage extends React.Component {
         const static_hostname = this.state.hostnameData.StaticHostname;
         let str = this.state.hostnameData.Hostname;
 
-        if (pretty_hostname && static_hostname && static_hostname != pretty_hostname)
+        if (pretty_hostname && static_hostname && static_hostname !== pretty_hostname)
             str = pretty_hostname + " (" + static_hostname + ")";
         else if (static_hostname)
             str = static_hostname;
@@ -118,42 +106,46 @@ class OverviewPage extends React.Component {
         let headerActions = null;
         if (this.state.privileged)
             headerActions = (
-                <Dropdown onSelect={() => this.setState({ actionIsOpen: true })}
-                    toggle={
-                        <DropdownToggle
+                <Dropdown onSelect={() => this.setState({ actionIsOpen: false })}
+                    toggle={(toggleRef) => (
+                        <MenuToggle
+                            ref={toggleRef}
+                            variant="secondary"
                             splitButtonItems={[
-                                <DropdownToggleAction id='reboot-button'
-                                    key='reboot-button'
-                                    onClick={() => Dialogs.show(<ShutdownModal />)}>
+                                <MenuToggleAction
+                                        id='reboot-button'
+                                        key='reboot-button'
+                                        onClick={() => Dialogs.show(<ShutdownModal />)}
+                                >
                                     {_("Reboot")}
-                                </DropdownToggleAction>
+                                </MenuToggleAction>
                             ]}
-                            toggleVariant="secondary"
-                            splitButtonVariant="action"
-                            onToggle={(_event, isOpen) => this.setState({ actionIsOpen: isOpen })}
+                            onClick={() => this.setState({ actionIsOpen: !actionIsOpen })}
                             id="shutdown-group"
                         />
-                    }
+                    )}
                     isOpen={actionIsOpen}
-                    position={DropdownPosition.right}
-                    dropdownItems={dropdownItems}
-                />);
+                    popperProps={{ position: "right" }}
+                >
+                    <DropdownList>
+                        {dropdownItems}
+                    </DropdownList>
+                </Dropdown>
+            );
 
         const show_superuser = (
-            cockpit.transport.host && cockpit.transport.host != "localhost" &&
-            !(window.parent.name == "cockpit1" && window.parent.features &&
+            cockpit.transport.host && cockpit.transport.host !== "localhost" &&
+            !(window.parent.name === "cockpit1" && window.parent.features &&
               window.parent.features.navbar_is_for_current_machine));
 
         return (
-            <Page>
-                <PageSection variant={PageSectionVariants.light} padding={{ default: 'noPadding' }}>
-                    <SuperuserAlert />
-                </PageSection>
-                <PageSection variant={PageSectionVariants.light} className='ct-overview-header' padding={{ default: 'padding' }}>
+            <Page className='pf-m-no-sidebar'>
+                <SuperuserAlert />
+                <PageSection hasBodyWrapper={false} className='ct-overview-header' padding={{ default: 'padding' }}>
                     <div className='ct-overview-header-hostname'>
-                        <h1>
+                        <Title size={TitleSizes['3xl']} headingLevel='h1'>
                             {this.hostname_text()}
-                        </h1>
+                        </Title>
                         {this.state.hostnameData &&
                          this.state.hostnameData.OperatingSystemPrettyName &&
                          <div className="ct-overview-header-subheading" id="system_information_os_text">{cockpit.format(_("running $0"), this.state.hostnameData.OperatingSystemPrettyName)}</div>}
@@ -164,7 +156,7 @@ class OverviewPage extends React.Component {
                         { headerActions }
                     </div>
                 </PageSection>
-                <PageSection variant={PageSectionVariants.default}>
+                <PageSection hasBodyWrapper={false} variant={PageSectionVariants.default}>
                     <Gallery className='ct-system-overview' hasGutter>
                         <MotdCard />
                         <HealthCard />

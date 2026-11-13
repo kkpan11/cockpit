@@ -1,19 +1,7 @@
-# This file is part of Cockpit.
 #
 # Copyright (C) 2023 Red Hat, Inc.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 
 import configparser
 import logging
@@ -47,18 +35,18 @@ def lookup_config(filename: str) -> Path:
 
 
 class Config(bus.Object, interface='cockpit.Config'):
-    def __init__(self):
+    def __init__(self) -> None:
         self.reload()
 
     @bus.Interface.Method(out_types='s', in_types='ss')
-    def get_string(self, section, key):
+    def get_string(self, section: str, key: str) -> str:
         try:
             return self.config[section][key]
         except KeyError as exc:
             raise bus.BusError('cockpit.Config.KeyError', f'key {key} in section {section} does not exist') from exc
 
     @bus.Interface.Method(out_types='u', in_types='ssuuu')
-    def get_u_int(self, section, key, default, maximum, minimum):
+    def get_u_int(self, section: str, key: str, default: int, maximum: int, minimum: int) -> int:
         try:
             value = self.config[section][key]
         except KeyError:
@@ -73,17 +61,22 @@ class Config(bus.Object, interface='cockpit.Config'):
         return min(max(int_val, minimum), maximum)
 
     @bus.Interface.Method()
-    def reload(self):
+    def reload(self) -> None:
         self.config = configparser.ConfigParser(interpolation=None)
         cockpit_conf = lookup_config('cockpit.conf')
         logger.debug("cockpit.Config: loading %s", cockpit_conf)
         # this may not exist, but it's ok to not have a config file and thus leave self.config empty
-        self.config.read(cockpit_conf)
+        try:
+            self.config.read(cockpit_conf)
+        except configparser.Error as exc:
+            logger.warning("cockpit.conf is invalid: %s", exc)
+            self.config.clear()
+            return
 
 
 class Environment(bus.Object, interface='cockpit.Environment'):
     variables = bus.Interface.Property('a{ss}')
 
     @variables.getter
-    def get_variables(self):
+    def get_variables(self) -> 'dict[str, str]':
         return os.environ.copy()

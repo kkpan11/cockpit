@@ -1,4 +1,6 @@
-import child_process from "child_process";
+// SPDX-License-Identifier: LGPL-2.1-or-later
+import child_process from 'node:child_process';
+import process from 'node:process';
 
 const config = {};
 

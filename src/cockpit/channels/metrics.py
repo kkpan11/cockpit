@@ -1,19 +1,7 @@
-# This file is part of Cockpit.
 #
 # Copyright (C) 2022 Red Hat, Inc.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 
 import asyncio
 import json
@@ -21,10 +9,10 @@ import logging
 import sys
 import time
 from collections import defaultdict
-from typing import Dict, List, NamedTuple, Optional, Set, Tuple, Union
+from typing import Dict, List, NamedTuple, Optional, Set, Tuple, Type, Union
 
 from ..channel import AsyncChannel, ChannelError
-from ..jsonutil import JsonList
+from ..jsonutil import JsonList, JsonObject, get_int
 from ..samples import SAMPLERS, SampleDescription, Sampler, Samples
 
 logger = logging.getLogger(__name__)
@@ -40,8 +28,8 @@ class InternalMetricsChannel(AsyncChannel):
     restrictions = [('source', 'internal')]
 
     metrics: List[MetricInfo]
-    samplers: Set
-    samplers_cache: Optional[Dict[str, Tuple[Sampler, SampleDescription]]] = None
+    samplers: Set[Sampler]
+    samplers_cache: Optional[Dict[str, Tuple[Type[Sampler], SampleDescription]]] = None
 
     interval: int = 1000
     need_meta: bool = True
@@ -49,15 +37,15 @@ class InternalMetricsChannel(AsyncChannel):
     next_timestamp: float = 0
 
     @classmethod
-    def ensure_samplers(cls):
+    def ensure_samplers(cls) -> None:
         if cls.samplers_cache is None:
             cls.samplers_cache = {desc.name: (sampler, desc) for sampler in SAMPLERS for desc in sampler.descriptions}
 
-    def parse_options(self, options):
+    def parse_options(self, options: JsonObject) -> None:
         logger.debug('metrics internal open: %s, channel: %s', options, self.channel)
 
-        interval = options.get('interval', self.interval)
-        if not isinstance(interval, int) or interval <= 0 or interval > sys.maxsize:
+        interval = get_int(options, 'interval', self.interval)
+        if interval <= 0 or interval > sys.maxsize:
             raise ChannelError('protocol-error', message=f'invalid "interval" value: {interval}')
 
         self.interval = interval
@@ -67,6 +55,7 @@ class InternalMetricsChannel(AsyncChannel):
             logger.error('invalid "metrics" value: %s', metrics)
             raise ChannelError('protocol-error', message='invalid "metrics" option was specified (not an array)')
 
+        assert self.samplers_cache, "ensure_samples not called"
         sampler_classes = set()
         for metric in metrics:
             # validate it's an object
@@ -88,7 +77,7 @@ class InternalMetricsChannel(AsyncChannel):
 
         self.samplers = {cls() for cls in sampler_classes}
 
-    def send_meta(self, samples: Samples, timestamp: float):
+    def send_meta(self, samples: Samples, timestamp: float) -> None:
         metrics: JsonList = []
         for metricinfo in self.metrics:
             if metricinfo.desc.instanced:
@@ -101,27 +90,29 @@ class InternalMetricsChannel(AsyncChannel):
             else:
                 metrics.append({
                     'name': metricinfo.desc.name,
-                    'derive': metricinfo.derive,  # type: ignore[dict-item]
+                    'derive': metricinfo.derive,
                     'units': metricinfo.desc.units,
                     'semantics': metricinfo.desc.semantics
                 })
 
-        self.send_json(source='internal', interval=self.interval, timestamp=timestamp * 1000, metrics=metrics)
+        now = int(time.time()) * 1000
+        self.send_json(source='internal', interval=self.interval, timestamp=timestamp * 1000,
+                       now=now, metrics=metrics)
         self.need_meta = False
 
-    def sample(self):
-        samples = defaultdict(dict)
+    def sample(self) -> Samples:
+        samples: Samples = defaultdict(dict)
         for sampler in self.samplers:
             sampler.sample(samples)
         return samples
 
     def calculate_sample_rate(self, value: float, old_value: Optional[float]) -> Union[float, bool]:
-        if old_value is not None and self.last_timestamp:
+        if old_value is not None:
             return (value - old_value) / (self.next_timestamp - self.last_timestamp)
         else:
             return False
 
-    def send_updates(self, samples: Samples, last_samples: Samples):
+    def send_updates(self, samples: Samples, last_samples: Samples) -> None:
         data: List[Union[float, List[Optional[Union[float, bool]]]]] = []
         timestamp = time.time()
         self.next_timestamp = timestamp
@@ -160,9 +151,9 @@ class InternalMetricsChannel(AsyncChannel):
             self.send_meta(samples, timestamp)
 
         self.last_timestamp = self.next_timestamp
-        self.send_data(json.dumps([data]).encode())
+        self.send_text(json.dumps([data]))
 
-    async def run(self, options):
+    async def run(self, options: JsonObject) -> None:
         self.metrics = []
         self.samplers = set()
 
@@ -171,15 +162,9 @@ class InternalMetricsChannel(AsyncChannel):
         self.parse_options(options)
         self.ready()
 
-        last_samples = defaultdict(dict)
+        last_samples: Samples = defaultdict(dict)
         while True:
             samples = self.sample()
             self.send_updates(samples, last_samples)
             last_samples = samples
-
-            try:
-                await asyncio.wait_for(self.read(), self.interval / 1000)
-                return
-            except asyncio.TimeoutError:
-                # Continue the while loop, we use wait_for as an interval timer.
-                continue
+            await asyncio.sleep(self.interval / 1000)

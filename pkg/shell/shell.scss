@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2013 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 /* ---------------------------------------------------------------------------------------------------- */
@@ -22,59 +8,23 @@
 @use "page";
 @use "table";
 @use "nav";
-@import "@patternfly/patternfly/components/Select/select.css";
-@import "@patternfly/patternfly/utilities/Text/text.css";
-@import "@patternfly/patternfly/components/Icon/icon.css";
+@use "@patternfly/patternfly/components/Menu/menu.css";
+@use "@patternfly/patternfly/utilities/Text/text.css";
+@use "@patternfly/patternfly/components/Icon/icon.css";
 
 :root {
-  --ct-color-host-accent: var(--pf-v5-global--active-color--100);
-  --ct-topnav-background: var(--pf-v5-global--BackgroundColor--dark-100);
+  --ct-color-host-accent: var(--pf-t--global--color--brand--default);
+  --ct-topnav-background: var(--pf-t--global--background--color--secondary--default);
 }
 
-.pf-v5-theme-dark {
-  --ct-topnav-background: var(--pf-v5-global--BackgroundColor--dark-200);
+#shell {
+    block-size: 100%;
 }
 
 /* Hacks on top for now */
 
 html.index-page body {
   overflow: hidden;
-}
-
-.hide-before::before {
-  display: none;
-}
-
-#machine-change-auth > p {
-  margin-block-end: 5px;
-}
-
-// Fix fingerprint layout
-.add-host-fingerprint {
-  margin-block-start: var(--pf-v5-global--spacer--md);
-
-  td {
-    padding: 0;
-    line-height: inherit;
-    block-size: auto;
-    vertical-align: middle !important;
-
-    &:first-child {
-      padding-inline-end: var(--pf-v5-global--spacer--md);
-    }
-  }
-}
-
-.machine-key {
-  margin: 0;
-  white-space: pre-line;
-  padding-block: var(--pf-v5-global--spacer--xs);
-  padding-inline: var(--pf-v5-global--spacer--sm);
-}
-
-.login-setup-checkbox-wrapper {
-  // Use a flex layout to better vertically align the contents to the grid
-  display: flex;
 }
 
 #edit-machine-port {
@@ -88,26 +38,17 @@ html.index-page body {
   padding-block-start: 120px;
 }
 
-/* System information */
-
-#systime-date-input,
-#systime-time-hours,
-#systime-time-minutes {
-  display: inline;
-}
-
 /* index page */
 
 .display-language-modal {
   /* Do not let the language menu expand to the end of the page */
-  .pf-v5-c-menu__content {
+  .pf-v6-c-menu__content {
     max-block-size: 20rem;
     overflow: auto;
   }
 }
 
 iframe.container-frame {
-  display: none;
   border: none;
   inline-size: 100%;
 }
@@ -126,12 +67,12 @@ $desktop: $phone + 1px;
   // Set masthead and toolbar to transparent, so the background shows through
   // (including the accent line)
 
-  .pf-v5-c-masthead {
-    --pf-v5-c-masthead--BackgroundColor: transparent;
+  .pf-v6-c-masthead {
+    --pf-v6-c-masthead--BackgroundColor: transparent;
   }
 
-  .pf-v5-c-toolbar {
-    --pf-v5-c-toolbar--BackgroundColor: transparent;
+  .pf-v6-c-toolbar {
+    --pf-v6-c-toolbar--BackgroundColor: transparent;
   }
 
   @media (max-width: $phone) {
@@ -147,7 +88,6 @@ $desktop: $phone + 1px;
     .sidebar-toggle {
       grid-area: sidebar;
       display: flex;
-      background: var(--pf-v5-global--BackgroundColor--dark-100);
     }
 
     > .header,
@@ -157,29 +97,38 @@ $desktop: $phone + 1px;
       background: linear-gradient(
         to top,
         var(--ct-color-host-accent),
-        var(--ct-color-host-accent) 0.1875rem,
-        transparent 0.1875rem
-      ),
-        linear-gradient(
-        to top,
-        var(--ct-color-host-accent) -1.5rem,
-        var(--ct-topnav-background) 0.75rem
+        var(--ct-color-host-accent) 3px,
+        transparent 3px
       );
+      /* Toolbar needs visual separation between it and the content */
+      border-block-start: var(--pf-t--global--border--width--regular) solid var(--pf-t--global--border--color--default);
     }
 
     // Remove excess padding from masthead in mobile
-    .pf-v5-c-masthead {
-      --pf-v5-c-masthead--inset: 0;
+    .pf-v6-c-masthead {
+      --pf-v6-c-masthead--inset: 0;
+      --pf-v6-c-masthead--PaddingBlock: 0;
+      --pf-v6-c-masthead--PaddingInline: 0;
+      block-size: 100%;
     }
   }
 
   @media (min-width: $desktop) {
-    grid-template-areas: "switcher header" "sidebar main";
+    // Shadow to the left, Line on top, Base color (with subtle glow)
+    background: linear-gradient(
+      to bottom,
+      var(--ct-color-host-accent),
+      var(--ct-color-host-accent) 3px,
+      transparent 3px
+    );
+
+    grid-template-areas: "switcher switcher header" "sidebar main main";
     grid-template-rows: max-content 1fr;
-    grid-template-columns: minmax(min-content, var(--nav-width)) 1fr;
+    grid-template-columns: minmax(min-content, var(--nav-width)) auto 1fr;
 
     > .navbar {
-      max-inline-size: var(--nav-width);
+      grid-area: switcher;
+      margin-inline-end: calc(-1 * var(--pf-t--global--spacer--sm));
     }
 
     .sidebar {
@@ -191,24 +140,10 @@ $desktop: $phone + 1px;
       display: none;
     }
 
-    > .header {
-      // Shadow to the left, Line on top, Base color (with subtle glow)
-      background: linear-gradient(
-        to right,
-        var(--ct-topnav-background) -1rem,
-        transparent 1rem
-      ),
-        linear-gradient(
-        to bottom,
-        var(--ct-color-host-accent),
-        var(--ct-color-host-accent) 0.1875rem,
-        transparent 0.1875rem
-      ),
-        linear-gradient(
-        to bottom,
-        var(--ct-color-host-accent) -1.5rem,
-        var(--ct-topnav-background) 0.75rem
-      );
+    .view-hosts .sidebar-hosts,
+    .nav-system-menu {
+      /* Top of the navbar should start when the curve of the content area ends. This means the search entry should be bumped down a bit. */
+      padding-block-start: var(--pf-t--global--spacer--md);
     }
   }
 
@@ -234,40 +169,29 @@ $desktop: $phone + 1px;
   margin-block-end: 1.5em;
 }
 
-/* Alert fixups */
-.modal-content .pf-v5-c-alert {
-  text-align: start;
-  margin-block-end: 24px;
-}
-
 .early-failure {
   block-size: 100%;
 }
 
-// Header menu buttons don't need a background color (especially in dark mode)
-.pf-v5-c-toolbar .pf-v5-c-dropdown__toggle {
-  --pf-v5-c-dropdown__toggle--BackgroundColor: transparent;
-}
-
-// Header menu buttons don't need a background color (especially in dark mode)
-.pf-v5-c-toolbar .pf-v5-c-dropdown__toggle {
-  --pf-v5-c-dropdown__toggle--BackgroundColor: transparent;
-}
-
-// PF hardcodes header colors to dark, which does funky things
-// ...so swap them back properly for dropdown menus
-.pf-v5-c-masthead .pf-v5-c-dropdown__menu {
-  --pf-v5-global--BackgroundColor--100: var(--pf-v5-global--BackgroundColor--light-100);
-  --pf-v5-global--Color--100: var(--pf-v5-global--Color--dark-100);
-}
-
 // Customize the about screen with the Cockpit logo
-.pf-v5-c-about-modal-box {
-  --pf-v5-c-about-modal-box--BackgroundImage: linear-gradient(#000d, #000d), url(../shell/images/cockpit-icon.svg);
-  --pf-v5-c-about-modal-box--BackgroundPosition: max(25rem, 143%) 10rem;
-  --pf-v5-c-about-modal-box--BackgroundSize--min-width: 786px;
+.pf-v6-c-about-modal-box {
+  // Gray is best as it works in both light and dark mode
+  // Ideally About modal should allow setting this through DOM instead of CSS
+  // so we can color it easier.
+  //
+  // Or we can see about modifying it inline in scss and changing color there somehow
+  --pf-v6-c-about-modal-box--BackgroundImage: url(../shell/images/cockpit-icon-gray.svg);
+  --pf-v6-c-about-modal-box--BackgroundPosition: max(25rem, 143%) 10rem;
+  --pf-v6-c-about-modal-box--BackgroundSize--min-width: 786px;
+
+  .pf-v6-c-content {
+    /* Don't wrap package names */
+    --pf-v6-c-content--dl--GridTemplateColumns--dt: auto;
+    /* Tidy up the vertical space usage between packages */
+    --pf-v6-c-content--dl--RowGap: var(--pf-t--global--spacer--sm);
+  }
 
   [dir="rtl"] {
-    --pf-v5-c-about-modal-box--BackgroundPosition: calc(100% - 30rem) 10rem;
+    --pf-v6-c-about-modal-box--BackgroundPosition: calc(100% - 30rem) 10rem;
   }
 }

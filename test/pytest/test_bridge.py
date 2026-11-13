@@ -8,21 +8,26 @@ import json
 import os
 import pwd
 import shlex
+import stat
 import subprocess
 import sys
 import unittest.mock
 from collections import deque
 from pathlib import Path
-from typing import Dict, Iterable, Sequence
+from typing import AsyncGenerator, Dict, Generator, Iterator, Sequence, Union
 
 import pytest
+import pytest_asyncio
 
 from cockpit._vendor.systemd_ctypes import bus
 from cockpit.bridge import Bridge
-from cockpit.channel import Channel
+from cockpit.channel import AsyncChannel, Channel, ChannelRoutingRule
 from cockpit.channels import CHANNEL_TYPES
-from cockpit.jsonutil import JsonDict, JsonObject, JsonValue, get_bool, get_dict, get_int, json_merge_patch
+from cockpit.channels.filesystem import tag_from_path
+from cockpit.jsonutil import JsonDict, JsonObject, JsonValue, get_bool, get_dict, get_int, get_str, json_merge_patch
 from cockpit.packages import BridgeConfig
+from cockpit.peer import ConfiguredPeer
+from cockpit.superuser import is_valid_superuser_config
 
 from .mocktransport import MOCK_HOSTNAME, MockTransport
 
@@ -65,13 +70,13 @@ def add_pseudo(bridge: Bridge) -> None:
     ])
 
 
-@pytest.fixture
-def no_init_transport(event_loop: asyncio.AbstractEventLoop, bridge: Bridge) -> Iterable[MockTransport]:
+@pytest_asyncio.fixture
+async def no_init_transport(bridge: Bridge) -> AsyncGenerator[MockTransport, None]:
     transport = MockTransport(bridge)
     try:
         yield transport
     finally:
-        transport.stop(event_loop)
+        await transport.stop()
 
 
 @pytest.fixture
@@ -93,6 +98,15 @@ async def test_echo(transport: MockTransport) -> None:
     transport.send_done(echo)
     await transport.assert_msg('', command='done', channel=echo)
     await transport.assert_msg('', command='close', channel=echo)
+
+
+@pytest.mark.asyncio
+async def test_echo_invalid_utf8(transport: MockTransport) -> None:
+    echo = await transport.check_open('echo')
+
+    # invalid UTF-8 closes the channel with protocol-error
+    transport.send_data(echo, b'\x80\xff\xfe')
+    await transport.assert_msg('', command='close', channel=echo, problem='protocol-error')
 
 
 @pytest.mark.asyncio
@@ -404,19 +418,40 @@ async def test_internal_metrics(transport: MockTransport) -> None:
     # cpu.core.user instances should be the same as meta sent instances
     assert instances == len(data[0][0])
     # all instances should be False, as this is a rate
-    assert not all(d for d in data[0][0])
+    assert all(d is False for d in data[0][0])
     # memory.used should be an integer
     assert isinstance(data[0][1], int)
 
+    # next data for rate should not be False
+    _, data = await transport.next_frame()
+    data = json.loads(data)
+    assert all(d is not False for d in data[0][0])
+
 
 @pytest.mark.asyncio
-async def test_fsread1_errors(transport: MockTransport) -> None:
-    await transport.check_open('fsread1', path='/etc/shadow', problem='access-denied')
+async def test_fsread1_errors(transport: MockTransport, tmp_path: Path) -> None:
+    if os.geteuid() != 0:
+        await transport.check_open('fsread1', path='/etc/shadow', problem='access-denied')
+    else:
+        print('running as root, skipping access-denied check')
     await transport.check_open('fsread1', path='/', problem='internal-error',
                                reply_keys={'message': "[Errno 21] Is a directory: '/'"})
     await transport.check_open('fsread1', path='/etc/passwd', max_read_size="lol",
                                problem='protocol-error',
                                reply_keys={'message': "attribute 'max_read_size': must have type int"})
+    await transport.check_open('fsread1', path='/etc/passwd', max_read_size=1,
+                               problem='too-large')
+    # default read size limit
+    big_file = tmp_path / 'bigfile.img'
+    fd = os.open(big_file, os.O_RDWR | os.O_CREAT)
+    os.posix_fallocate(fd, 0, 17 * 1024 * 1024)
+    os.close(fd)
+    await transport.check_open('fsread1', path=str(big_file),
+                               problem='too-large')
+
+    # -1 implies no limit
+    await transport.check_open('fsread1', path=str(big_file),
+                               max_read_size=-1)
 
 
 @pytest.mark.asyncio
@@ -474,6 +509,28 @@ async def test_fslist1_notexist(transport: MockTransport) -> None:
         reply_keys={'message': "[Errno 2] No such file or directory: '/nonexisting'"})
 
 
+class GrpPwMock:
+    def __init__(self, uid: 'int', gid: 'int | None' = None) -> None:
+        self.pw_uid = uid
+        self.gr_gid = gid
+
+    def __str__(self) -> str:
+        return f'uid={self.pw_uid},gid={self.gr_gid}'
+
+
+@pytest.fixture
+def fchown_mock() -> Generator[unittest.mock.MagicMock, unittest.mock.MagicMock, None]:
+    with unittest.mock.patch('os.fchown', return_value=True) as fchown_mock:
+        yield fchown_mock
+
+
+@pytest.fixture
+def user_group_mock(user_group_mock_arg: GrpPwMock) -> Generator[GrpPwMock, GrpPwMock, None]:
+    with unittest.mock.patch('pwd.getpwnam', return_value=user_group_mock_arg):
+        with unittest.mock.patch('grp.getgrnam', return_value=user_group_mock_arg):
+            yield user_group_mock_arg
+
+
 @pytest.mark.asyncio
 async def test_fsreplace1(transport: MockTransport, tmp_path: Path) -> None:
     # create non-existing file
@@ -486,6 +543,10 @@ async def test_fsreplace1(transport: MockTransport, tmp_path: Path) -> None:
     assert myfile.read_bytes() == b'some stuff'
     # no leftover files
     assert os.listdir(tmp_path) == ['newfile']
+    # default umask is applied
+    prev_umask = os.umask(0)
+    os.umask(prev_umask)
+    assert stat.S_IMODE(myfile.stat().st_mode) == 0o666 & ~prev_umask
 
     # now update its contents
     ch = await transport.check_open('fsreplace1', path=str(myfile))
@@ -496,6 +557,41 @@ async def test_fsreplace1(transport: MockTransport, tmp_path: Path) -> None:
     assert myfile.read_bytes() == b'new new new!'
     # no leftover files
     assert os.listdir(tmp_path) == ['newfile']
+
+    # set funny permissions to check that they are preserved
+    perms = 0o625
+    myfile.chmod(perms)
+
+    # get the current tag
+    ch = await transport.check_open('fsread1', path=str(myfile))
+    transport.send_done(ch)
+    await transport.assert_data(ch, b'new new new!')
+    await transport.assert_msg('', command='done', channel=ch)
+    transport.send_close(ch)
+    close_msg = await transport.next_msg('')
+    assert close_msg['command'] == 'close'
+    tag = close_msg['tag']
+
+    # update contents with expected tag
+    ch = await transport.check_open('fsreplace1', path=str(myfile), tag=tag)
+    transport.send_data(ch, b'even newer')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(channel=ch)
+    assert myfile.read_bytes() == b'even newer'
+
+    # preserves existing permissions when giving expected tag
+    assert stat.S_IMODE(myfile.stat().st_mode) == perms
+
+    # mode supplied via attrs overrides existing permissions
+    new_perms = 0o422
+    ch = await transport.check_open('fsreplace1', path=str(myfile), attrs={'mode': new_perms})
+    transport.send_data(ch, b'in the future')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(channel=ch)
+    assert myfile.read_bytes() == b'in the future'
+    assert stat.S_IMODE(myfile.stat().st_mode) == new_perms
 
     # write empty file
     ch = await transport.check_open('fsreplace1', path=str(myfile))
@@ -512,6 +608,116 @@ async def test_fsreplace1(transport: MockTransport, tmp_path: Path) -> None:
     await transport.check_close(channel=ch)
     assert not myfile.exists()
 
+    # acks
+    ch = await transport.check_open('fsreplace1', path=str(myfile), send_acks='bytes')
+    transport.send_data(ch, b'some stuff')
+    await transport.assert_msg('', command='ack', bytes=10, channel=ch)
+    transport.send_data(ch, b'some more stuff')
+    await transport.assert_msg('', command='ack', bytes=15, channel=ch)
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(channel=ch)
+
+    # tag is "-" and file should not exist
+    newfile = tmp_path / 'new'
+    ch = await transport.check_open('fsreplace1', path=str(newfile), tag='-')
+    transport.send_data(ch, b'some stuff')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(channel=ch)
+    assert newfile.read_text() == 'some stuff'
+
+    # delete the now written newfile with tag='-' the file should now exist so this should fail
+    ch = await transport.check_open('fsreplace1', path=str(newfile), tag='-')
+    transport.send_done(ch)
+    await transport.assert_msg('', problem='change-conflict', channel=ch)
+    assert newfile.exists()
+
+    # create file with a custom mode
+    newfile.unlink()
+    assert not newfile.exists()
+    ch = await transport.check_open('fsreplace1', path=str(newfile), attrs={'mode': perms})
+    transport.send_data(ch, b'some stuff')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(channel=ch)
+    assert newfile.read_text() == 'some stuff'
+    assert stat.S_IMODE(newfile.stat().st_mode) == perms
+
+    # create file with tag='-' and custom mode
+    newfile.unlink()
+    assert not newfile.exists()
+    ch = await transport.check_open('fsreplace1', path=str(newfile), tag='-', attrs={'mode': perms})
+    transport.send_data(ch, b'some stuff')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(channel=ch)
+    assert newfile.read_text() == 'some stuff'
+    assert stat.S_IMODE(newfile.stat().st_mode) == perms
+
+
+@pytest.mark.asyncio
+async def test_fsreplace1_change_conflict(transport: MockTransport, tmp_path: Path) -> None:
+    myfile = tmp_path / 'data'
+    myfile.write_text('hello')
+
+    # get current tag from fsread1
+    ch = await transport.check_open('fsread1', path=str(myfile))
+    transport.send_done(ch)
+    await transport.assert_data(ch, b'hello')
+    await transport.assert_msg('', command='done', channel=ch)
+    transport.send_close(ch)
+    close_msg = await transport.next_msg('')
+    assert close_msg['command'] == 'close'
+    tag = close_msg['tag']
+
+    # modify the file in between read and replace operations
+    # we have to wait a bit, assuming that file systems we run tests on have at least centisecond mtime resolution
+    await asyncio.sleep(0.2)
+    myfile.write_text('goodbye')
+
+    # try to replace it, expecting the old contents (via tag)
+    ch = await transport.check_open('fsreplace1', path=str(myfile), tag=tag)
+    transport.send_data(ch, b'newcontent')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='close', channel=ch, problem='change-conflict')
+    transport.send_close(ch)
+
+    # file was not touched by fsreplace1 due to conflict
+    assert myfile.read_text() == 'goodbye'
+
+
+@pytest.mark.asyncio
+async def test_fsreplace1_change_conflict_mode(transport: MockTransport, tmp_path: Path) -> None:
+    myfile = tmp_path / 'data'
+    myfile.write_text('hello')
+
+    # get current tag
+    ch = await transport.check_open('fsread1', path=str(myfile))
+    transport.send_done(ch)
+    await transport.assert_data(ch, b'hello')
+    await transport.assert_msg('', command='done', channel=ch)
+    transport.send_close(ch)
+    close_msg = await transport.next_msg('')
+    assert close_msg['command'] == 'close'
+    tag = close_msg['tag']
+
+    # modify the stat metadata in between read and replace operations
+    new_mode = 0o741
+    assert stat.S_IMODE(myfile.stat().st_mode) != new_mode
+    myfile.chmod(new_mode)
+
+    # try to replace it, expecting the old mode (via tag)
+    ch = await transport.check_open('fsreplace1', path=str(myfile), tag=tag)
+    transport.send_data(ch, b'newcontent')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='close', channel=ch, problem='change-conflict')
+    transport.send_close(ch)
+
+    # file was not touched by fsreplace1 due to conflict
+    assert stat.S_IMODE(myfile.stat().st_mode) == new_mode
+    assert myfile.read_text() == 'hello'
+
 
 @pytest.mark.asyncio
 async def test_fsreplace1_error(transport: MockTransport, tmp_path: Path) -> None:
@@ -526,6 +732,183 @@ async def test_fsreplace1_error(transport: MockTransport, tmp_path: Path) -> Non
     transport.send_data(ch, b'not me')
     transport.send_done(ch)
     await transport.assert_msg('', command='close', channel=ch, problem='not-found')
+
+    # invalid send-acks option
+    await transport.check_open('fsreplace1', path=str(tmp_path), send_acks='not-valid',
+                               problem='protocol-error',
+                               reply_keys={
+                                   'message': """attribute 'send-acks': invalid value "not-valid" not in ['bytes']"""
+    })
+
+    await transport.check_open('fsreplace1', path=str(tmp_path / 'test'),
+                               attrs={'user': 'cockpit', 'group': 'cockpit', 'selinux': True},
+                               problem='protocol-error',
+                               reply_keys={
+                                   'message': '"attrs" contains unsupported key(s): selinux',
+                                   'unsupported_attrs': ['selinux']
+    })
+
+    await transport.check_open('fsreplace1', path=str(tmp_path / 'test'), attrs={'user': 'cockpit'},
+                               problem='protocol-error',
+                               reply_keys={
+                                   'message': '"group" attribute is empty while "user" is provided'
+    })
+
+    await transport.check_open('fsreplace1', path=str(tmp_path / 'test'), attrs={'group': 'cockpit'},
+                               problem='protocol-error',
+                               reply_keys={
+                                   'message': '"user" attribute is empty while "group" is provided'
+    })
+
+    await transport.check_open('fsreplace1', path=str(tmp_path / 'test'), attrs={'user': 'cockpit', 'group': []},
+                               problem='protocol-error',
+                               reply_keys={
+                                   'message': "attribute 'attrs': attribute 'group': must be a string or integer"
+    })
+
+    await transport.check_open('fsreplace1', path=str(tmp_path / 'test'), attrs={'user': [], 'group': 'test'},
+                               problem='protocol-error',
+                               reply_keys={
+                                   'message': "attribute 'attrs': attribute 'user': must be a string or integer"
+    })
+
+    mock_val = GrpPwMock(uid=0, gid=1000)
+    with unittest.mock.patch('pwd.getpwnam', side_effect=KeyError()):
+        await transport.check_open('fsreplace1', path=str(tmp_path / 'test'),
+                                   attrs={'user': 'bazinga', 'group': 'foo'},
+                                   problem='not-found',
+                                   reply_keys={
+                                       'message': 'uid not found for bazinga'
+        })
+
+    with unittest.mock.patch('pwd.getpwnam', return_value=mock_val):
+        with unittest.mock.patch('grp.getgrnam', side_effect=KeyError()):
+            await transport.check_open('fsreplace1', path=str(tmp_path / 'test'),
+                                       attrs={'user': 'bazinga', 'group': 'test'},
+                                       problem='not-found',
+                                       reply_keys={
+                                           'message': 'gid not found for test'
+            })
+
+
+ATTRS_TEST_DATA = [
+    (GrpPwMock(1111, 1110), {'user': 1111, 'group': 1110}),
+    (GrpPwMock(1111, 1110), {'user': 'monkey', 'group': 'group'}),
+]
+
+
+@pytest.mark.parametrize(('user_group_mock_arg', 'attrs'), ATTRS_TEST_DATA)
+@pytest.mark.asyncio
+async def test_fsreplace1_attrs(transport: MockTransport, fchown_mock: unittest.mock.MagicMock,
+                                tmp_path: Path, user_group_mock, attrs: Dict[str, Union[int, str]]) -> None:
+    async def existing_file_with_attrs(filename: str, tag: str) -> None:
+        test_file = tmp_path / filename
+        ch = await transport.check_open('fsreplace1', path=str(test_file), attrs=attrs, tag=tag)
+        transport.send_data(ch, b'content')
+        transport.send_done(ch)
+        await transport.assert_msg('', command='done', channel=ch)
+        await transport.check_close(ch)
+        assert test_file.read_bytes() == b'content'
+
+    async def create_file_with_attrs(filename: str) -> None:
+        test_file = tmp_path / filename
+        ch = await transport.check_open('fsreplace1', path=str(test_file), attrs=attrs)
+        transport.send_data(ch, b'content')
+        transport.send_done(ch)
+        await transport.assert_msg('', command='done', channel=ch)
+        await transport.check_close(ch)
+        assert test_file.read_bytes() == b'content'
+
+    await create_file_with_attrs('test')
+    fchown_mock.assert_called()
+    _, call_uid, call_gid = fchown_mock.call_args[0]
+    assert call_uid == user_group_mock.pw_uid
+    if user_group_mock.gr_gid is None:
+        assert call_gid == user_group_mock.pw_uid
+    else:
+        assert call_gid == user_group_mock.gr_gid
+
+    # Existing file
+    existing_file = tmp_path / 'existing'
+    existing_file.write_text('new')
+
+    tag = tag_from_path(existing_file)
+    assert tag is not None
+    await existing_file_with_attrs('existing', tag)
+    fchown_mock.assert_called()
+    _, call_uid, call_gid = fchown_mock.call_args[0]
+    assert call_uid == user_group_mock.pw_uid
+    if user_group_mock.gr_gid is None:
+        assert call_gid == user_group_mock.pw_uid
+    else:
+        assert call_gid == user_group_mock.gr_gid
+
+
+@pytest.mark.asyncio
+async def test_fsreplace1_size_hint(transport: MockTransport, tmp_path: Path) -> None:
+    myfile = tmp_path / 'myfile'
+
+    # create a file, no size hint
+    ch = await transport.check_open('fsreplace1', path=str(myfile))
+    assert list(tmp_path.iterdir()) == []  # no temp file should be created yet
+    transport.send_data(ch, b'content')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(ch)
+    assert list(tmp_path.iterdir()) == [myfile]  # no temp file left
+    assert myfile.read_bytes() == b'content'
+
+    # delete it again
+    ch = await transport.check_open('fsreplace1', path=str(myfile))
+    assert list(tmp_path.iterdir()) == [myfile]  # no temp file created
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(ch)
+    assert list(tmp_path.iterdir()) == []  # empty again
+
+    # enospc in advance: 1PB ought to be enough for anybody...
+    ch = transport.send_open('fsreplace1', path=str(myfile), size=1 << 50)  # 1PB
+    err = await transport.assert_msg('', command='close', channel=ch, problem='internal-error')
+    message = get_str(err, 'message')
+    assert 'No space left on device' in message or 'File too large' in message
+    assert list(tmp_path.iterdir()) == []  # still empty
+    assert not myfile.exists()
+
+    # ensure cancellation is always a no-op, even with size specified
+    ch = await transport.check_open('fsreplace1', path=str(myfile), size=1 << 20)  # 1MB
+    assert len(list(tmp_path.iterdir())) == 1  # observe the temp file created immediately
+    await transport.check_close(ch)
+    assert list(tmp_path.iterdir()) == []  # no temp file left
+    assert not myfile.exists()
+
+    # ...but even size=0 will result in the file being created without payload
+    ch = await transport.check_open('fsreplace1', path=str(myfile), size=0)
+    assert len(list(tmp_path.iterdir())) == 1  # observe the temp file created immediately
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(ch)
+    assert list(tmp_path.iterdir()) == [myfile]  # no temp file left
+    assert myfile.read_bytes() == b''
+
+    # check too little data written
+    ch = await transport.check_open('fsreplace1', path=str(myfile), size=1 << 20)  # 1 MB
+    assert len(list(tmp_path.iterdir())) == 2  # observe the temp file created immediately
+    transport.send_data(ch, b'too small')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(ch)
+    assert list(tmp_path.iterdir()) == [myfile]  # no temp file left
+    assert myfile.read_bytes() == b'too small'
+
+    # check too much data written
+    ch = await transport.check_open('fsreplace1', path=str(myfile), size=5)
+    assert len(list(tmp_path.iterdir())) == 2  # observe the temp file created immediately
+    transport.send_data(ch, b'too large')
+    transport.send_done(ch)
+    await transport.assert_msg('', command='done', channel=ch)
+    await transport.check_close(ch)
+    assert list(tmp_path.iterdir()) == [myfile]  # no temp file left
+    assert myfile.read_bytes() == b'too large'
 
 
 @pytest.mark.asyncio
@@ -570,11 +953,15 @@ async def test_channel(bridge: Bridge, transport: MockTransport, channeltype, tm
             args = {'spawn': ['cat']}
         else:
             args = {'unix': srv}
-    elif payload == 'metrics1':
+    elif payload == 'metrics1' and channeltype.restrictions:
         args['metrics'] = [{'name': 'memory.free'}]
+    elif payload == 'metrics1':
+        pytest.skip('no PCP metric data')
     elif payload == 'dbus-json3':
         if not os.path.exists('/run/dbus/system_bus_socket'):
             pytest.skip('no dbus')
+    elif payload == 'session-control':
+        pytest.skip('too special')
     else:
         args = {}
 
@@ -590,6 +977,11 @@ async def test_channel(bridge: Bridge, transport: MockTransport, channeltype, tm
             assert control['channel'] == ch
             command = control['command']
             if command == 'ready':
+                if 'spawn' in args:
+                    assert isinstance(control['pid'], int)
+                    with open(f"/proc/{control['pid']}/cmdline") as f:
+                        # the kernel might not be completely done with exec() yet
+                        assert f.read() in ('cat\0', '')
                 # If we get ready, it's our turn to send data first.
                 # Hopefully we didn't receive any before.
                 assert not saw_data
@@ -603,7 +995,7 @@ async def test_channel(bridge: Bridge, transport: MockTransport, channeltype, tm
     print('sending done')
     transport.send_done(ch)
 
-    if payload in ['dbus-json3', 'fswatch1', 'null']:
+    if payload in ['dbus-json3', 'fswatch1', 'metrics1', 'null']:
         transport.send_close(ch)
 
     while True:
@@ -644,6 +1036,72 @@ async def test_channel(bridge: Bridge, transport: MockTransport, channeltype, tm
 def test_get_os_release(os_release: str, expected: str) -> None:
     with unittest.mock.patch('builtins.open', unittest.mock.mock_open(read_data=os_release)):
         assert Bridge.get_os_release() == expected
+
+
+class AckChannel(AsyncChannel):
+    payload = 'ack1'
+
+    async def run(self, options: JsonObject) -> None:
+        self.semaphore = asyncio.Semaphore(0)
+        self.ready()
+        while await self.read():
+            await self.semaphore.acquire()
+
+
+@pytest.mark.asyncio
+async def test_async_acks(bridge: Bridge, transport: MockTransport) -> None:
+    # Inject our mock channel type
+    for rule in bridge.routing_rules:
+        if isinstance(rule, ChannelRoutingRule):
+            rule.table['ack1'] = [AckChannel]
+
+    # invalid send-acks values
+    await transport.check_open('ack1', send_acks=True, problem='protocol-error')
+    await transport.check_open('ack1', send_acks='x', problem='protocol-error')
+
+    # open the channel with acks off
+    ch = await transport.check_open('ack1')
+    # send a bunch of data and get no acks
+    for _ in range(20):
+        transport.send_data(ch, b'x')
+    # this will assert that we receive only the close message (and no acks)
+    await transport.check_close(ch)
+
+    # open the channel with acks on
+    ch = await transport.check_open('ack1', send_acks='bytes')
+    # send a bunch of data
+    for _ in range(20):
+        transport.send_data(ch, b'x')
+    # we should get exactly one ack (from the first read) before things block
+    await transport.assert_msg('', channel=ch, command='ack', bytes=1)
+    # this will assert that we receive only the close message (and no additional acks)
+    await transport.check_close(ch)
+
+    # open the channel with acks on
+    ch = await transport.check_open('ack1', send_acks='bytes')
+    # fish the open channel out of the bridge
+    ack = bridge.open_channels[ch]
+    assert isinstance(ack, AckChannel)
+    # let's give ourselves a bit more headroom
+    for _ in range(5):
+        ack.semaphore.release()
+    # send a bunch of data and get some acks
+    for _ in range(10):
+        transport.send_data(ch, b'x')
+    for _ in range(6):
+        await transport.assert_msg('', channel=ch, command='ack', bytes=1)
+    # make sure that as we "consume" the data we get more acks:
+    for _ in range(4):
+        # no ack in the queue...
+        await transport.assert_empty()
+        ack.semaphore.release()
+        # ... but now there is.
+        await transport.assert_msg('', channel=ch, command='ack', bytes=1)
+    # make some more room (for data we didn't send)
+    for _ in range(5):
+        ack.semaphore.release()
+    # but we shouldn't have gotten any acks for those
+    await transport.check_close(ch)
 
 
 @pytest.mark.asyncio
@@ -689,7 +1147,7 @@ async def test_flow_control(transport: MockTransport, tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_large_upload(event_loop: asyncio.AbstractEventLoop, transport: MockTransport, tmp_path: Path) -> None:
+async def test_large_upload(transport: MockTransport, tmp_path: Path) -> None:
     fifo = str(tmp_path / 'pipe')
     os.mkfifo(fifo)
 
@@ -708,7 +1166,7 @@ async def test_large_upload(event_loop: asyncio.AbstractEventLoop, transport: Mo
 
     # start draining now, and make sure we get everything we sent.
     with open(fifo, 'rb') as receiver:
-        received = await event_loop.run_in_executor(None, receiver.read)
+        received = await asyncio.get_running_loop().run_in_executor(None, receiver.read)
         assert len(received) == loops * Channel.BLOCK_SIZE
 
     # and now our done and close messages should come
@@ -733,7 +1191,7 @@ class FsInfoClient:
     ) -> 'FsInfoClient':
         channel = await transport.check_open('fsinfo', path=str(path), attrs=attrs,
                                              fnmatch=fnmatch, reply_keys=None,
-                                             absent_keys=(), **kwargs)
+                                             absent_keys=(), **kwargs)  # type: ignore[arg-type]
         return cls(transport, channel)
 
     async def next_state(self) -> JsonObject:
@@ -771,7 +1229,7 @@ def fsinfo_err(err: int) -> JsonObject:
 
 
 @pytest.fixture
-def fsinfo_test_cases(tmp_path: Path) -> 'dict[Path, JsonObject]':
+def fsinfo_test_cases(tmp_path: Path) -> 'Iterator[dict[Path, JsonObject]]':
     # a normal directory
     normal_dir = tmp_path / 'dir'
     normal_dir.mkdir()
@@ -842,7 +1300,15 @@ def fsinfo_test_cases(tmp_path: Path) -> 'dict[Path, JsonObject]':
         del expected_state[no_r_dir]
         del expected_state[no_r_file]
 
-    return expected_state
+    try:
+        yield expected_state
+
+    finally:
+        # restore writable permissions on directories.  pytest has trouble cleaning
+        # these up, otherwise...
+        for path in expected_state:
+            if not path.is_symlink() and path.is_dir():
+                path.chmod(0o700)
 
 
 @pytest.mark.asyncio
@@ -912,7 +1378,7 @@ async def test_fsinfo_onlydir(transport: MockTransport, fsinfo_test_cases: 'dict
 
         # with '/' appended, this should only open dirs
         client = await FsInfoClient.open(transport, str(path) + '/')
-        assert await client.wait() == expected_state
+        assert await client.wait() == expected_state, f'for {path}'
 
 
 @pytest.mark.asyncio
@@ -1124,9 +1590,111 @@ async def test_fsinfo_targets(transport: MockTransport, tmp_path: Path) -> None:
     (tmp_path / 'lloved').symlink_to('loved')
     entries['lloved'] = {'type': 'lnk', 'target': 'loved'}
 
+    # a link to the current directory won't show up in targets since we already
+    # report its attributes directly as our toplevel state structure
+    (tmp_path / 'ldot').symlink_to('.')
+    entries['ldot'] = {'type': 'lnk', 'target': '.'}
+
+    # a link to the parent directory should definitely show up, though
+    (tmp_path / 'ldotdot').symlink_to('..')
+    entries['ldotdot'] = {'type': 'lnk', 'target': '..'}
+    targets['..'] = {'type': 'dir'}
+
     # make sure the watch managed to pick that all up
     assert await watch.next_state() == state
 
     # double-check with the non-watch variant
     client = await FsInfoClient.open(transport, tmp_path, ['type', 'target', 'targets'], fnmatch='l*')
     assert await client.wait() == state
+
+
+@pytest.mark.asyncio
+async def test_fsinfo_access_attrs(transport: MockTransport, fsinfo_test_cases: 'dict[Path, JsonObject]') -> None:
+    for path, expected_state in fsinfo_test_cases.items():
+        # these are errors
+        if path.name == 'dangling' or path.name == 'loopy':
+            continue
+
+        read_ok = True
+        write_ok = True
+        exec_ok = path.is_dir()
+
+        if path.name == 'no-r-dir':
+            read_ok = False
+        elif path.name == 'no-x-dir':
+            exec_ok = False
+        elif path.name == 'no-r-file':
+            read_ok = False
+            write_ok = False
+            exec_ok = False
+
+        expected_state = {'info': {'r-ok': read_ok, 'w-ok': write_ok, 'x-ok': exec_ok}}
+
+        # fnmatch='' to not include entries
+        client = await FsInfoClient.open(transport, path, attrs=['w-ok', 'r-ok', 'x-ok'], fnmatch='')
+        assert await client.wait() == expected_state, f'for path={path.name}'
+
+    # Symlink access bits are always allowed
+    for path, expected_state in fsinfo_test_cases.items():
+        if path.name != 'dev':
+            continue
+
+        expected_state = {'info': {'r-ok': True, 'w-ok': True, 'x-ok': True}}
+        client = await FsInfoClient.open(transport, path, attrs=['w-ok', 'r-ok', 'x-ok'], follow=False)
+        assert await client.wait() == expected_state, f'for path={path.name}'
+
+
+@pytest.mark.parametrize('supports_askpass', [False, True], ids=['no-askpass', 'askpass'])
+def test_is_valid_superuser_config_sudo_askpass(tmp_path: Path, *, supports_askpass: bool) -> None:
+    sudo = tmp_path / 'sudo'
+    sudo.write_text(f'#!/bin/sh\nexit {"0" if supports_askpass else "1"}\n')
+    sudo.chmod(0o755)
+
+    config = BridgeConfig({
+        'privileged': True,
+        'spawn': [str(sudo), '-k', '-A', 'cockpit-bridge', '--privileged'],
+    })
+    assert is_valid_superuser_config(config) == supports_askpass
+
+
+def test_is_valid_superuser_config_not_sudo(tmp_path: Path) -> None:
+    danger = tmp_path / 'danger'
+    pkexec = tmp_path / 'pkexec'
+    pkexec.write_text(f'#!/bin/sh\ntouch {danger}\n')
+    pkexec.chmod(0o755)
+
+    config = BridgeConfig({
+        'privileged': True,
+        'spawn': [str(pkexec), 'cockpit-bridge', '--privileged'],
+    })
+    assert is_valid_superuser_config(config)
+    assert not danger.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('absolute', [False, True], ids=['relpath', 'abspath'])
+@pytest.mark.parametrize('custom_path', [False, True], ids=['default-path', 'custom-path'])
+@pytest.mark.parametrize('exists', [False, True], ids=['missing', 'exists'])
+async def test_is_valid_superuser_config(
+    tmp_path: Path, *, absolute: bool, custom_path: bool, exists: bool
+) -> None:
+    args: JsonObject
+    if absolute:
+        args = {'spawn': ['/usr/bin/true' if exists else '/nonexistent/path/true']}
+    elif custom_path:
+        if exists:
+            (tmp_path / 'my-bridge').write_text('#!/bin/sh\n')
+            (tmp_path / 'my-bridge').chmod(0o755)
+        args = {'spawn': ['my-bridge'], 'environ': [f'PATH={tmp_path}']}
+    else:
+        args = {'spawn': ['true' if exists else 'nonexistent-binary']}
+
+    config = BridgeConfig({**args, 'privileged': True})
+    assert is_valid_superuser_config(config) == exists
+
+    with contextlib.ExitStack() as expected:
+        if not exists:
+            expected.enter_context(pytest.raises(FileNotFoundError))
+        peer = ConfiguredPeer(unittest.mock.Mock(), config)
+        await peer.do_connect_transport()
+        peer.close()

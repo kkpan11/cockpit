@@ -8,7 +8,7 @@ on:
 jobs:
   analyze:
     name: Analyze
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read
@@ -25,10 +25,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4.38.2
         with:
           languages: ${{ matrix.language }}
           queries: +security-and-quality
@@ -36,8 +36,12 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          # disable man-db to speed up package install
+          echo "set man-db/auto-update false" | sudo debconf-communicate
+          sudo dpkg-reconfigure man-db
+
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gettext libssh-dev zlib1g-dev libkrb5-dev libxslt1-dev libglib2.0-dev libgnutls28-dev libsystemd-dev libpolkit-agent-1-dev libpcp3-dev libjson-glib-dev libpam0g-dev libpcp-import1-dev libpcp-pmda3-dev systemd xsltproc xmlto docbook-xsl
+          sudo apt-get install -y --no-install-recommends gettext zlib1g-dev libkrb5-dev libglib2.0-dev libgnutls28-dev libsystemd-dev libpolkit-agent-1-dev libpcp3-dev libjson-glib-dev libpam0g-dev libpcp-import1-dev libpcp-pmda3-dev systemd asciidoctor
         if: ${{ matrix.language == 'cpp' }}
 
       - name: Build
@@ -49,6 +53,6 @@ jobs:
         if: ${{ matrix.language == 'cpp' }}
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4.38.2
         with:
           category: "/language:${{ matrix.language }}"

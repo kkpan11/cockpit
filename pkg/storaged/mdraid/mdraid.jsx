@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2023 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -43,7 +29,7 @@ import {
 import {
     dialog_open, SelectSpaces,
     BlockingMessage, TeardownMessage,
-    init_active_usage_processes
+    init_teardown_usage
 } from "../dialog.jsx";
 
 import { partitionable_block_actions } from "../partitions/actions.jsx";
@@ -81,7 +67,7 @@ function mdraid_stop(mdraid) {
                 }
             },
             Inits: [
-                init_active_usage_processes(client, usage)
+                init_teardown_usage(client, usage)
             ]
         });
         return;
@@ -91,22 +77,29 @@ function mdraid_stop(mdraid) {
 }
 
 function mdraid_delete(mdraid, block, card) {
-    function delete_() {
-        if (mdraid.Delete)
-            return mdraid.Delete({ 'tear-down': { t: 'b', v: true } }).then(reload_systemd);
+    async function delete_() {
+        const members = client.mdraids_members[mdraid.path];
 
-        // If we don't have a Delete method, we simulate
-        // it by stopping the array and wiping all
-        // members.
+        await mdraid.Delete({ 'tear-down': { t: 'b', v: true } });
 
-        function wipe_members() {
-            return Promise.all(client.mdraids_members[mdraid.path].map(member => member.Format('empty', { })));
+        // HACK - https://github.com/storaged-project/udisks/issues/1375
+        //
+        // Now wipe the members again.  This is necessary when
+        // deleting a MDRAID with metadata 1.0, which stores its
+        // superblock at the end of each member, and the superblock of
+        // the actual content of the mdraid is stored at the very
+        // start of each member (for certain raid levels like a
+        // mirror).  The Delete call above will only remove the mdraid
+        // metadata and leave the content superblock in place. Thus,
+        // after deleting, the members might magically turn into the
+        // previous content.  Wiping the members again will remove any
+        // such metadata that might cause them to be misidentified.
+
+        for (const b of members) {
+            await b.Format('empty', { });
         }
 
-        if (mdraid.ActiveDevices && mdraid.ActiveDevices.length > 0)
-            return mdraid.Stop({}).then(wipe_members);
-        else
-            return wipe_members();
+        await reload_systemd();
     }
 
     const usage = get_active_usage(client, block ? block.path : "", _("delete"));
@@ -132,7 +125,7 @@ function mdraid_delete(mdraid, block, card) {
             }
         },
         Inits: [
-            init_active_usage_processes(client, usage)
+            init_teardown_usage(client, usage)
         ]
     });
 }
@@ -142,7 +135,7 @@ function add_disk(mdraid) {
         let block = spc.block;
         if (client.blocks_part[block.path])
             block = client.blocks[client.blocks_part[block.path].Table];
-        return block && block.MDRaid != mdraid.path;
+        return block && block.MDRaid !== mdraid.path;
     }
 
     function rescan(path) {
@@ -160,7 +153,7 @@ function add_disk(mdraid) {
                                  if (disks.length === 0)
                                      return _("At least one disk is needed.");
                              },
-                             spaces: get_available_spaces(client).filter(filter_inside_mdraid)
+                             spaces: get_available_spaces().filter(filter_inside_mdraid)
                          })
         ],
         Action: {
@@ -174,9 +167,19 @@ function add_disk(mdraid) {
 }
 
 function missing_bitmap(mdraid) {
-    return (mdraid.Level != "raid0" &&
+    let policy;
+    if (mdraid.ConsistencyPolicy)
+        policy = mdraid.ConsistencyPolicy;
+    else if (mdraid.ActiveDevices.some(a => a[2].indexOf("journal") >= 0))
+        policy = "journal";
+    else if (mdraid.BitmapLocation && decode_filename(mdraid.BitmapLocation) !== "none")
+        policy = "bitmap";
+    else
+        policy = "resync";
+
+    return (mdraid.Level !== "raid0" &&
             client.mdraids_members[mdraid.path].some(m => m.Size > 100 * 1024 * 1024 * 1024) &&
-            mdraid.BitmapLocation && decode_filename(mdraid.BitmapLocation) == "none");
+            policy === "resync");
 }
 
 export function make_mdraid_page(parent, mdraid) {
@@ -211,7 +214,7 @@ export function make_mdraid_page(parent, mdraid) {
                  action: () => mdraid_start(mdraid),
                  tag: "device"
              }),
-            (mdraid.Level != "raid0" &&
+            (mdraid.Level !== "raid0" &&
              {
                  title: _("Add disk"),
                  action: () => add_disk(mdraid),
@@ -230,7 +233,7 @@ export function make_mdraid_page(parent, mdraid) {
     if (!block) {
         new_page(parent, mdraid_card);
     } else
-        make_block_page(parent, block, mdraid_card);
+        make_block_page(parent, block, mdraid_card, { partitionable: true });
 }
 
 const MDRaidCard = ({ card, mdraid, block }) => {
@@ -271,7 +274,7 @@ const MDRaidCard = ({ card, mdraid, block }) => {
     if (missing_bitmap(mdraid)) {
         alerts.push(
             <Alert isInline variant="warning" key="bitmap"
-                   title={_("This MDRAID device has no write-intent bitmap. Such a bitmap can reduce sychronization times significantly.")}>
+                   title={_("This MDRAID device has no write-intent bitmap. Such a bitmap can reduce synchronization times significantly.")}>
                 <div className="storage-alert-actions">
                     <StorageButton onClick={fix_bitmap}>{_("Add a bitmap")}</StorageButton>
                 </div>
@@ -294,11 +297,10 @@ const MDRaidCard = ({ card, mdraid, block }) => {
                 </DescriptionList>
             </CardBody>
             <CardHeader><strong>{_("Disks")}</strong></CardHeader>
-            <CardBody className="contains-list">
-                <PageTable emptyCaption={_("No disks found")}
-                           aria-label={_("MDRAID disks")}
-                           crossrefs={get_crossrefs(mdraid)} />
-            </CardBody>
+            <PageTable
+                emptyCaption={_("No disks found")}
+                aria-label={_("MDRAID disks")}
+                crossrefs={get_crossrefs(mdraid)} />
         </StorageCard>
     );
 };

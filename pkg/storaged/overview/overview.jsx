@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2023 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -80,7 +66,7 @@ const OverviewCard = ({ card, plot_state }) => {
         const feature_enabled = !feature || feature.is_enabled();
         const required_package = feature && feature.package;
 
-        if (!feature_enabled && !(required_package && client.features.packagekit))
+        if (!feature_enabled && !(required_package && client.features.packagemanager))
             return null;
 
         function install_then_action() {
@@ -113,7 +99,7 @@ const OverviewCard = ({ card, plot_state }) => {
         is_enabled: () => client.features.stratis,
         package: client.get_config("stratis_package", false),
         enable: () => {
-            return cockpit.spawn(["systemctl", "start", "stratisd"], { superuser: true })
+            return cockpit.spawn(["systemctl", "start", "stratisd"], { superuser: "require" })
                     .then(() => client.stratis_start());
         },
 
@@ -149,7 +135,7 @@ const OverviewCard = ({ card, plot_state }) => {
 
     const net_menu_items = [
         !client.in_anaconda_mode() && menu_item(nfs_feature, _("New NFS mount"), () => nfs_fstab_dialog(null, null)),
-        menu_item(iscsi_feature, _("Change iSCSI initiater name"), () => iscsi_change_name()),
+        menu_item(iscsi_feature, _("Change iSCSI initiator name"), () => iscsi_change_name()),
         menu_item(iscsi_feature, _("Add iSCSI portal"), () => iscsi_discover()),
     ].filter(item => !!item);
 
@@ -177,7 +163,7 @@ const OverviewCard = ({ card, plot_state }) => {
         <Stack hasGutter>
             { !client.in_anaconda_mode() &&
             <StackItem>
-                <Card>
+                <Card isPlain>
                     <CardBody>
                         <StoragePlots plot_state={plot_state} />
                     </CardBody>
@@ -186,12 +172,12 @@ const OverviewCard = ({ card, plot_state }) => {
             }
             <StackItem>
                 <StorageCard card={card} actions={actions}>
-                    <CardBody className="contains-list">
-                        <ChildrenTable emptyCaption={_("No storage found")}
-                                       aria-label={_("Storage")}
-                                       show_icons
-                                       page={card.page} />
-                    </CardBody>
+                    <ChildrenTable
+                        emptyCaption={_("No storage found")}
+                        aria-label={_("Storage")}
+                        show_icons
+                        page={card.page}
+                    />
                 </StorageCard>
             </StackItem>
             { !client.in_anaconda_mode() &&

@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2021 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
@@ -36,7 +22,6 @@
 #include <common/cockpitwebcertificate.h>
 #include <common/cockpitmemory.h>
 
-#include "certificate.h"
 #include "utils.h"
 
 #define COCKPIT_CERTIFICATE_HELPER   LIBEXECDIR "/cockpit-certificate-helper"
@@ -222,15 +207,15 @@ certificate_and_key_write (const CertificateKeyPair *self,
   if (fchown (fd, buf.st_uid, buf.st_gid) != 0)
     err (EXIT_FAILURE, "%s: fchown", directory);
 
-  if (symlinkat (self->certificate_filename, fd, "cert.source") != 0)
-    err (EXIT_FAILURE, "%s/%s: symlinkat", directory, "certificate.source");
+  if (symlinkat (self->certificate_filename, fd, "0.crt.source") != 0)
+    err (EXIT_FAILURE, "%s/%s: symlinkat", directory, "0.crt.source");
 
-  if (symlinkat (self->key_filename, fd, "key.source") != 0)
-    err (EXIT_FAILURE, "%s/%s: symlinkat", directory, "key.source");
+  if (symlinkat (self->key_filename, fd, "0.key.source") != 0)
+    err (EXIT_FAILURE, "%s/%s: symlinkat", directory, "0.key.source");
 
-  write_file (fd, directory, "cert", &self->certificate, buf.st_uid, buf.st_gid);
+  write_file (fd, directory, "0.crt", &self->certificate, buf.st_uid, buf.st_gid);
 
-  write_file (fd, directory, "key", &self->key, buf.st_uid, buf.st_gid);
+  write_file (fd, directory, "0.key", &self->key, buf.st_uid, buf.st_gid);
 
   close (dirfd);
   close (fd);
@@ -248,12 +233,14 @@ certificate_and_key_split (CertificateKeyPair *self)
 
   for (int i = 0; i < N_ELEMENTS (pairs); i++)
     {
-      char *start = strstr ((const char *) self->certificate.data, pairs[i][0]);
+      assert (self->certificate.data[self->certificate.size] == '\0');
+      char *start = strstr ((char *) self->certificate.data, pairs[i][0]);
 
       if (!start)
         continue;
 
-      char *end = strstr ((const char *) self->certificate.data, pairs[i][1]);
+      /* NB: certificate.data is `unsigned char *` */
+      char *end = strstr ((char *) self->certificate.data, pairs[i][1]);
       if (!end)
         errx (EXIT_FAILURE, "%s: found '%s' but not '%s'",
               self->certificate_filename, pairs[i][0], pairs[i][1]);

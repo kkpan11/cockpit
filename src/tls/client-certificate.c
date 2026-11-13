@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2021 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 /*
@@ -304,7 +290,7 @@ client_certificate_create_tmpfile (int  dirfd,
  * referenced by @dirfd.  This file will contain the expected cgroup of
  * the cockpit-ws instance in question, plus the client certificate.
  * That data is interpreted by the counterpart to this code, living in
- * src/ws/cockpit-session-client-certificate.c
+ * src/session/client-certificate.c.
  *
  * In any case, %true will be returned in case of success, and %false
  * will be returned in case of an error.  In case of success, any values

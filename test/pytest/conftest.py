@@ -2,14 +2,17 @@ import asyncio
 import os
 import subprocess
 import sys
-from typing import Iterable
+from typing import AsyncGenerator
 
 import pytest
+import pytest_asyncio
 
-from cockpit import polyfills
 from cockpit._vendor.systemd_ctypes import EventLoopPolicy
 
-polyfills.install()
+collect_ignore: list[str] = []
+if sys.version_info < (3, 12):
+    # Not used from cockpit-bridge and only intended for Python 3.12+
+    collect_ignore.append("ws")
 
 
 def any_subprocesses() -> bool:
@@ -22,29 +25,40 @@ def any_subprocesses() -> bool:
         return True  # at least one process (or zombie) still waitable
 
 
-@pytest.fixture(autouse=True)
-def event_loop(monkeypatch) -> Iterable[asyncio.AbstractEventLoop]:
-    loop = EventLoopPolicy().new_event_loop()
+# some issues:
+#   - even sourcing this will break old python versions in ways we don't care to fix
+#   - even sourcing this requires aiohttp, which isn't available everywhere
+#   - there are general issues running under tox which need investigation
+#   - this also requires a bots/ checkout which we don't have in distros
+if "NO_QUNIT" in os.environ:
+    collect_ignore.append("test_browser.py")
+else:
+    pytest_plugins = "js_coverage"
 
-    if sys.version_info < (3, 7, 0):
-        # Polyfills for Python 3.6:
-        def all_tasks(loop=loop):
-            return {t for t in asyncio.Task.all_tasks(loop=loop) if not t.done()}
 
-        monkeypatch.setattr(asyncio, 'get_running_loop', lambda: loop, raising=False)
-        monkeypatch.setattr(asyncio, 'create_task', loop.create_task, raising=False)
-        monkeypatch.setattr(asyncio, 'all_tasks', all_tasks, raising=False)
+@pytest.fixture
+# AbstractEventLoopPolicy is deprecated in 3.14 and will be removed in 3.16
+def event_loop_policy() -> asyncio.AbstractEventLoopPolicy:  # type: ignore[name-defined]
+    return EventLoopPolicy()
 
-    yield loop
+
+@pytest_asyncio.fixture(autouse=True)
+async def _check_settled() -> AsyncGenerator[None, None]:
+    yield
+
+    current_task = asyncio.current_task()
+    assert current_task is not None
+    event_loop = asyncio.get_running_loop()
 
     # Let all tasks and subprocesses run to completion
     for _ in range(200):
-        if not (asyncio.all_tasks(loop) or any_subprocesses()):
+        all_tasks = asyncio.all_tasks(loop=event_loop) - {current_task}
+        if not (all_tasks or any_subprocesses()):
             break
-        loop.run_until_complete(asyncio.sleep(0.005))
+        await asyncio.sleep(0.005)
 
     # No tasks left
-    assert asyncio.all_tasks(loop=loop) == set()
+    assert asyncio.all_tasks(loop=event_loop) == {current_task}
 
     # No subprocesses left
     if any_subprocesses():
@@ -59,5 +73,3 @@ def event_loop(monkeypatch) -> Iterable[asyncio.AbstractEventLoop]:
             pass
 
         pytest.fail('Some subprocesses still running!')
-
-    loop.close()

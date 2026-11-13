@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2019 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 #include "config.h"
 
@@ -44,9 +30,10 @@ static struct instance_type
   const char *argv[MAX_COCKPIT_WS_ARGS];
 } instance_types[] = {
   {"https-factory.sock", {}}, /* treated specially */
-  /* support up to 2 ws instances (+1 special); increase this if the unit test needs more */
+  /* support up to 3 ws instances (+1 special); increase this if the unit test needs more */
   {"https@" SHA256_NIL ".sock", {"--for-tls-proxy", "--port=0"}},
   {"https@" CLIENT_CERT_FINGERPRINT ".sock", {"--for-tls-proxy", "--port=0"}},
+  {"https@" CLIENT_EXPIRED_FINGERPRINT ".sock", {"--for-tls-proxy", "--port=0"}},
   {"https@" ALTERNATE_FINGERPRINT ".sock", {}}, /* treated specially */
   {"http.sock", {"--no-tls", "--port", "0"}},
 };

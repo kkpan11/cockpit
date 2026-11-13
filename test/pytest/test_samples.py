@@ -1,19 +1,7 @@
-# This file is part of Cockpit.
 #
 # Copyright (C) 2022 Red Hat, Inc.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 
 import collections
 import multiprocessing
@@ -78,6 +66,17 @@ def hwmon_mock(tmpdir_factory, monkeypatch):
     with open(hwmon4_dir / 'temp4_label', 'w') as fp:
         fp.write('Core 2')
 
+    # hwmon5 - sensor which reads 0
+    hwmon5_dir = hwmon_dir / 'hwmon5'
+    hwmon5_dir.mkdir()
+
+    with open(hwmon5_dir / 'name', 'w') as fp:
+        fp.write('coretemp')
+    with open(hwmon5_dir / 'temp1_input', 'w') as fp:
+        fp.write('0')
+    with open(hwmon5_dir / 'temp1_label', 'w') as fp:
+        fp.write('Package id 1')
+
     return hwmon_dir
 
 
@@ -102,8 +101,9 @@ def get_checked_samples(sampler: cockpit.samples.Sampler) -> cockpit.samples.Sam
 
 def test_descriptions():
     for cls in cockpit.samples.SAMPLERS:
-        # currently broken in containers with no cgroups or temperatures present
-        if cls in [cockpit.samples.CGroupSampler, cockpit.samples.CPUTemperatureSampler]:
+        # currently broken in containers with no cgroups or temperatures or mounts present
+        if cls in [cockpit.samples.CGroupSampler, cockpit.samples.CPUTemperatureSampler,
+                   cockpit.samples.MountSampler]:
             continue
 
         get_checked_samples(cls())
@@ -145,6 +145,23 @@ def test_cpu_temperature(hwmon_mock):
                 'hwmon2/temp1_input']
     sensors = [os.path.relpath(p, start=hwmon_mock) for p in samples['cpu.temperature']]
     assert sorted(sensors) == sorted(expected)
+
+
+def test_cpu_temperature_zero_reading(hwmon_mock):
+    """A sensor reading 0 must be skipped, not abort sampling of the rest."""
+    sampler = cockpit.samples.CPUTemperatureSampler()
+    # pin the order so the zero-reading sensor comes first and would hide the others
+    sampler.sensors = sorted(cockpit.samples.CPUTemperatureSampler.scan_sensors(),
+                             key=lambda p: 'hwmon5' not in p)
+    assert 'hwmon5' in sampler.sensors[0]
+
+    samples = collections.defaultdict(dict)
+    sampler.sample(samples)
+
+    # the zero-reading sensor is not reported ...
+    assert not any('hwmon5' in name for name in samples['cpu.temperature'])
+    # ... but all the others still are
+    assert len(samples['cpu.temperature']) == 7
 
 
 def test_cgroup_disk_io():

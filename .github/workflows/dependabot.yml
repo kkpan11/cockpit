@@ -1,6 +1,6 @@
 name: update node_modules
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, reopened, synchronize, labeled]
 
 jobs:
@@ -10,20 +10,19 @@ jobs:
       contents: read
       pull-requests: write
     timeout-minutes: 5
-    # 22.04's podman has issues with piping and causes tar errors
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     if: ${{ contains(github.event.pull_request.labels.*.name, 'node_modules') }}
 
     steps:
       - name: Clone repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           repository: ${{ github.event.pull_request.head.repo.full_name }}
           fetch-depth: 0
 
       - name: Clear node_modules label
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             try {
@@ -41,6 +40,18 @@ jobs:
               }
             }
 
+      - name: Rebase pull request and drop node_modules changes
+        run: |
+          set -x
+          git config --global user.name "GitHub Workflow"
+          git config --global user.email "cockpituous@cockpit-project.org"
+          git fetch origin main:main
+          if ! git rebase main; then
+            git reset node_modules
+            GIT_EDITOR=true git rebase --continue
+            git show --stat
+          fi
+
       - name: Update node_modules for package.json changes
         run: |
           make tools/node-modules
@@ -56,7 +67,7 @@ jobs:
 
       - name: Clear [no-test] prefix from PR title
         if: ${{ contains(github.event.pull_request.title, '[no-test]') }}
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           TITLE: '${{ github.event.pull_request.title }}'
         with:

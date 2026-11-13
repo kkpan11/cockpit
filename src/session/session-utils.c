@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2013 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
@@ -23,7 +9,7 @@
 
 #include "common/cockpitframe.h"
 #include "common/cockpitjsonprint.h"
-#include "common/cockpithacks.h"
+#include "common/cockpitmemory.h"
 
 #include <fcntl.h>
 #include <paths.h>
@@ -41,7 +27,6 @@ const char *program_name;
 struct passwd *pwd;
 pid_t child;
 int want_session = 1;
-char *last_err_msg = NULL;
 
 static char *auth_prefix = NULL;
 static size_t auth_prefix_size = 0;
@@ -52,36 +37,52 @@ static FILE *authf = NULL;
 char *
 read_authorize_response (const char *what)
 {
-  const char *auth_response = ",\"response\":\"";
-  size_t auth_response_size = 13;
-  const char *auth_suffix = "\"}";
-  size_t auth_suffix_size = 2;
   unsigned char *message;
-  ssize_t len;
-
   debug ("reading %s authorize message", what);
-
-  len = cockpit_frame_read (STDIN_FILENO, &message);
+  ssize_t len = cockpit_frame_read (STDIN_FILENO, &message);
   if (len < 0)
     err (EX, "couldn't read %s", what);
-
-  /*
-   * The authorize messages we receive always have an exact prefix and suffix:
-   *
-   * \n{"command":"authorize","cookie":"NNN","response":"...."}
-   */
-  if (len <= auth_prefix_size + auth_response_size + auth_suffix_size ||
-      memcmp (message, auth_prefix, auth_prefix_size) != 0 ||
-      memcmp (message + auth_prefix_size, auth_response, auth_response_size) != 0 ||
-      memcmp (message + (len - auth_suffix_size), auth_suffix, auth_suffix_size) != 0)
+  if (len == 0)
     {
-      errx (EX, "didn't receive expected \"authorize\" message");
+       debug ("EOF reading %s authorize message", what);
+       exit (0);
+    }
+  return (char *)message;
+}
+
+char *get_authorize_key (const char *json, const char *key, bool required)
+{
+  /*
+   * The authorize messages we receive always have this structure:
+   *
+   * \n{"command":"authorize","cookie":"NNN","response":"...",...more entries...}
+   *
+   * We make many assumptions/restrictions here to keep the parser simple. In particular, no extra
+   * whitespace, everything is a string, and no escaped ".
+   */
+  if (json == NULL || json[0] != '\n' || json[1] != '{')
+    errx (EX, "authorize message doesn't start with \\n{");
+
+  char *key_match;
+  int key_match_len = asprintfx (&key_match, "\"%s\":\"", key);
+
+  const char *match = strstr (json, key_match);
+  free (key_match);
+  if (!match)
+    {
+      if (required)
+        errx (EX, "authorize message missing required key %s", key);
+      debug ("authorize message missing optional key %s", key);
+      return NULL;
     }
 
-  len -= auth_prefix_size + auth_response_size + auth_suffix_size;
-  memmove (message, message + auth_prefix_size + auth_response_size, len);
-  message[len] = '\0';
-  return (char *)message;
+  /* advance to the start of the value */
+  match += key_match_len;
+  /* find end of value */
+  size_t value_len = strcspn (match, "\"");
+  if (match[value_len] != '"')
+    errx (EX, "syntax error, expected closing quote");
+  return strndup (match, value_len);
 }
 
 void
@@ -146,6 +147,31 @@ write_control_end (void)
   auth_msg = NULL;
   authf = NULL;
   auth_msg_size = 0;
+}
+
+__attribute__((__noreturn__)) void
+exit_init_problem (const char *problem, const char *message)
+{
+  char *payload = NULL;
+  size_t payload_size = 0;
+
+  debug ("writing init problem %s message %s", problem, message);
+
+  FILE *stream = open_memstream (&payload, &payload_size);
+  if (!stream)
+    errx (EX, "couldn't allocate memory for message");
+
+  fprintf (stream, "\n{\"command\":\"init\",\"version\":1");
+  cockpit_json_print_string_property (stream, "problem", problem, -1);
+  cockpit_json_print_string_property (stream, "message", message, -1);
+  fprintf (stream, "}");
+  fclose (stream);
+
+  if (cockpit_frame_write (STDOUT_FILENO, (unsigned char *)payload, payload_size) < 0)
+    err (EX, "couldn't write init message");
+
+  free (payload);
+  exit (5);
 }
 
 void
@@ -310,7 +336,7 @@ scan_btmp (const char *username,
 
       do
         r = read (fd, &entry, sizeof entry);
-      while (r == -1 && errno != EINTR);
+      while (r == -1 && errno == EINTR);
 
       if (r == 0)
         break;
@@ -538,7 +564,7 @@ fd_remap (const int *remap_fds,
         abort_with_message ("dup2(%d, %d) failed: %m", fds[i], i);
 
   /* close everything else */
-  closefrom (n_remap_fds);
+  close_range (n_remap_fds, ~0U, 0);
 }
 
 int
@@ -559,7 +585,7 @@ spawn_and_wait (const char **argv, const char **envp,
         abort_with_message ("setresgid: couldn't set gid to %u: %m\n", (int) gid);
 
       if (setresuid (uid, uid, uid) != 0)
-        abort_with_message ("setresgid: couldn't set uid to %u: %m\n", (int) gid);
+        abort_with_message ("setresuid: couldn't set uid to %u: %m\n", (int) uid);
 
       /* paranoid */
       {

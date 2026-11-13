@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2023 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -26,7 +12,7 @@ import { CardBody } from "@patternfly/react-core/dist/esm/components/Card/index.
 import { DescriptionList } from "@patternfly/react-core/dist/esm/components/DescriptionList/index.js";
 
 import { StorageCard, StorageDescription, new_card, register_crossref } from "../pages.jsx";
-import { format_dialog } from "../block/format-dialog.jsx";
+import { std_format_action } from "../block/actions.jsx";
 import { std_lock_action } from "../crypto/actions.jsx";
 import { StorageUsageBar } from "../storage-controls.jsx";
 
@@ -38,7 +24,10 @@ export function make_lvm2_physical_volume_card(next, backing_block, content_bloc
 
     const pv_card = new_card({
         title: _("LVM2 physical volume"),
-        location: vgroup ? vgroup.Name : null,
+        location: {
+            label: vgroup ? vgroup.Name : null,
+            to: vgroup ? ["vg", vgroup.Name] : null,
+        },
         next,
         page_size: (block_pvol
             ? <StorageUsageBar stats={[block_pvol.Size - block_pvol.FreeSize, block_pvol.Size]} short />
@@ -47,7 +36,7 @@ export function make_lvm2_physical_volume_card(next, backing_block, content_bloc
         props: { backing_block, content_block },
         actions: [
             std_lock_action(backing_block, content_block),
-            { title: _("Format"), action: () => format_dialog(client, backing_block.path), danger: true },
+            std_format_action(backing_block, content_block),
         ]
     });
 

@@ -1,23 +1,10 @@
 #!/usr/bin/python3 -cimport os, sys; os.execv(os.path.dirname(sys.argv[1]) + "/../common/pywrap", sys.argv)
 
-# This file is part of Cockpit.
 #
 # Copyright (C) 2015 Red Hat, Inc.
-#
-# Cockpit is free software; you can redistribute it and/or modify it
-# under the terms of the GNU Lesser General Public License as published by
-# the Free Software Foundation; either version 2.1 of the License, or
-# (at your option) any later version.
-#
-# Cockpit is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-# Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: LGPL-2.1-or-later
 
-import glob
+
 import os.path
 import subprocess
 import tarfile
@@ -26,25 +13,32 @@ import testlib
 
 
 @testlib.skipOstree("No sosreport")
-@testlib.skipImage("No sosreport", "arch")
+@testlib.skipImage("No sosreport", "arch", "opensuse-tumbleweed")
 @testlib.nondestructive
-@testlib.skipDistroPackage()
 class TestSOS(testlib.MachineCase):
 
-    def testBasic(self, urlroot=""):
-        b = self.browser
+    def setUp(self) -> None:
+        super().setUp()
         m = self.machine
 
-        m.execute("rm -rf /var/tmp/*sos*")
+        # Older Debian and Ubuntu systems have sosreport in /tmp
+        # Newer versions of sosreport changed to /var/tmp
+        # https://github.com/sosreport/sos/pull/4090
+        if m.image in ["debian-trixie"]:
+            self.report_dir = "/tmp"
+        else:
+            self.report_dir = "/var/tmp"
 
-        self.write_file("/etc/sos/sos.conf",
-                        """
-[global]
-threads=1
+        m.execute(f"rm -rf {self.report_dir}/*sos*")
 
-[report]
-only-plugins=release,date,host,cgroups,networking
-""")
+        self.restore_file("/etc/sos/sos.conf")
+        m.execute(r"sed -i -e '/\[global\]/a threads=1' "
+                  r"-e '/\[report\]/a only-plugins=release,date,host,cgroups,networking' "
+                  r"/etc/sos/sos.conf")
+
+    def testBasic(self, urlroot: str = "") -> None:
+        b = self.browser
+        m = self.machine
 
         if urlroot != "":
             m.write("/etc/cockpit/cockpit.conf", f"[WebService]\nUrlRoot={urlroot}")
@@ -63,29 +57,30 @@ only-plugins=release,date,host,cgroups,networking
 
         b.click("button:contains('Run report')")
         b.wait_visible("#sos-dialog")
-        b.set_input_text("#sos-dialog .pf-v5-c-form__group:contains(Report label) input", "mylabel")
-        b.set_input_text("#sos-dialog .pf-v5-c-form__group:contains(Encryption passphrase) input", "foobar")
-        b.set_checked("#sos-dialog .pf-v5-c-check:contains(Obfuscate) input", val=True)
+        b.set_input_text("#sos-dialog #sos-dialog-ti-1", "mylabel")
+        b.set_input_text("#sos-dialog #sos-dialog-ti-2", "foobar")
+        b.set_checked("#sos-dialog #sos-dialog-cb-1", val=True)
         if urlroot == "":
             b.assert_pixels("#sos-dialog", "dialog")
-        b.click("#sos-dialog button:contains(Run report)")
+        b.click("#sos-dialog button:contains('Run report')")
         with b.wait_timeout(120):
             b.wait_not_present("#sos-dialog")
 
-        b.wait_visible("tr:contains(mylabel) button:contains(Download)")
+        b.wait_in_text("tr td[data-label='Report']", "mylabel")
         b.allow_download()
 
         def downloaded_sosreports():
-            return glob.glob(os.path.join(b.cdp.download_dir, "*sosreport-*.xz.gpg"))
+            return [str(p) for p in b.driver.download_dir.glob("*sosreport-*.xz.gpg")]
 
-        b.click("tr:contains(mylabel) button:contains(Download)")
+        b.click("tr button:contains('Download')")
         # while the download is ongoing, it will have an *.xz.tmpsuffix name, gets renamed to *.xz when done
         testlib.wait(lambda: len(downloaded_sosreports()) > 0)
         report_gpg = downloaded_sosreports()[0]
+        report = report_gpg.removesuffix(".gpg")
         base_report_gpg = os.path.basename(report_gpg)
-        report = report_gpg.replace(".gpg", "")
+        base_report = base_report_gpg.removesuffix(".gpg")
 
-        m.execute(f"test -f /var/tmp/{base_report_gpg}")
+        m.execute(f"test -f {self.report_dir}/{base_report_gpg}")
 
         # Check that /etc/release was saved. It the files does not exist, getmember raises KeyError
         # Sometimes it takes a bit of time until the file can be opened. Try it 3 times.
@@ -97,10 +92,11 @@ only-plugins=release,date,host,cgroups,networking
             topdir = names[0].split("/")[0]
             tar.getmember(os.path.join(topdir, "etc/os-release"))
 
-        b.click("tr:contains(mylabel) button.pf-v5-c-menu-toggle")
-        b.click("tr:contains(mylabel) .pf-v5-c-menu__list-item:contains(Delete) button")
-        b.click("#sos-remove-dialog button:contains(Delete)")
-        testlib.wait(lambda: m.execute(f"! test -f /var/tmp/{base_report_gpg} && echo yes"))
+        b.click("tr button.pf-v6-c-menu-toggle")
+        b.click(".pf-v6-c-menu__list-item:contains('Delete')")
+        b.click("#sos-remove-dialog button:contains('Delete')")
+        # ensure it removes the report itself, and auxiliary files like .gpg
+        m.execute(f"while ls {self.report_dir}/{base_report}*; do sleep 1; done", stdout=None, timeout=10)
 
         # error reporting
         self.write_file("/usr/sbin/sos", """#!/bin/sh
@@ -108,33 +104,22 @@ echo "EssOhEss is kaputt" >&2
 exit 1""", perm="755")
         b.click("button:contains('Run report')")
         b.wait_visible("#sos-dialog")
-        b.click("#sos-dialog button:contains(Run report)")
-        b.wait_in_text("#sos-dialog .pf-v5-c-alert",
-                       "sos report failed" if self.is_pybridge() else "sos exited with code 1")
-        b.wait_in_text("#sos-dialog .pf-v5-c-alert", "EssOhEss is kaputt")
-        b.click("#sos-dialog button:contains(Cancel)")
+        b.click("#sos-dialog button:contains('Run report')")
+        b.wait_in_text("#sos-dialog .pf-v6-c-alert", "sos report failed")
+        b.wait_in_text("#sos-dialog .pf-v6-c-alert", "EssOhEss is kaputt")
+        b.click("#sos-dialog button:contains('Cancel')")
         b.wait_not_present("#sos-dialog")
 
         self.allow_journal_messages('.*comm="sosreport".*')
-        self.allow_browser_errors('error: Failed to call sos report: {"problem":null,"exit_status":1,"exit_signal":null')
+        self.allow_browser_errors(
+            'error: Failed to call sos report: {"problem":null,"exit_status":1,"exit_signal":null')
 
-    def testWithUrlRoot(self):
+    def testWithUrlRoot(self) -> None:
         self.testBasic(urlroot="/webcon")
 
-    def testVerbose(self):
+    def testVerbose(self) -> None:
         b = self.browser
         m = self.machine
-
-        m.execute("rm -rf /var/tmp/*sos*")
-
-        self.write_file("/etc/sos/sos.conf",
-                        """
-[global]
-threads=1
-
-[report]
-only-plugins=release,date,host,cgroups,networking
-""")
 
         self.login_and_go("/sosreport")
 
@@ -142,34 +127,35 @@ only-plugins=release,date,host,cgroups,networking
 
         b.click("button:contains('Run report')")
         b.wait_visible("#sos-dialog")
-        b.set_input_text("#sos-dialog .pf-v5-c-form__group:contains(Report label) input", "mylabel")
-        b.set_checked("#sos-dialog .pf-v5-c-check:contains(Use verbose logging) input", val=True)
-        b.click("#sos-dialog button:contains(Run report)")
+        b.set_input_text("#sos-dialog #sos-dialog-ti-1", "mylabel")
+        b.set_checked("#sos-dialog #sos-dialog-cb-2", val=True)
+        b.click("#sos-dialog button:contains('Run report')")
         with b.wait_timeout(120):
             b.wait_not_present("#sos-dialog")
 
         # There should be one archive and it should contain a bunch of debug messages
-        self.assertEqual(m.execute("ls -l /var/tmp/sosreport*mylabel*.tar.xz | wc -l").strip(), "1")
-        self.assertGreater(int(m.execute("tar --wildcards -xaOf /var/tmp/sosreport*mylabel*.tar.xz '*/sos_logs/sos.log' | grep -c 'DEBUG: \\[plugin:release\\]'")), 5)
+        self.assertEqual(m.execute(f"ls -l {self.report_dir}/sosreport*mylabel*.tar.xz | wc -l").strip(), "1")
+        messages = m.execute(f"tar --wildcards -xaOf {self.report_dir}/sosreport*mylabel*.tar.xz '*/sos_logs/sos.log'"
+                             "| grep -c 'DEBUG: \\[plugin:release\\]'")
+        self.assertGreater(int(messages), 5)
 
-    def testCancel(self):
+    def testCancel(self) -> None:
         m = self.machine
         b = self.browser
 
-        m.execute("rm -rf /var/tmp/*sos*")
-
         self.login_and_go("/sosreport")
         b.click("button:contains('Run report')")
-        b.click("#sos-dialog button:contains(Run report)")
+        b.click("#sos-dialog button:contains('Run report')")
         m.execute("until pgrep -x sos >/dev/null; do sleep 1; done")
 
         b.click("button:contains('Stop report')")
         b.wait_not_present("#sos-dialog")
         # cleans up properly; unfortunately closing the process is async, so need to retry a few times
         m.execute("while pgrep -a -x sos; do sleep 1; done", timeout=10)
-        self.assertEqual(m.execute("ls /var/tmp/sosreport* 2>/dev/null || true"), "")
+        self.assertEqual(m.execute(f"ls {self.report_dir}/sosreport* 2>/dev/null || true"), "")
 
-    def testAppStream(self):
+    @testlib.skipBeiboot("apps not available in beiboot mode")
+    def testAppStream(self) -> None:
         b = self.browser
         m = self.machine
 
@@ -178,13 +164,13 @@ only-plugins=release,date,host,cgroups,networking
         self.allow_journal_messages(".*xml.*")
 
         self.login_and_go("/apps")
-        b.wait_not_present(".pf-v5-c-empty-state")
+        b.wait_not_present(".pf-v6-c-empty-state")
         image_os = m.image.split('-')[0]
         if image_os in ['fedora', 'debian', 'ubuntu']:
-            b.wait_visible(".app-list .pf-v5-c-data-list__item-row div[rowId='Diagnostic reports']")
-            b.wait_visible(".app-list .pf-v5-c-data-list__item-row div[rowId='Diagnostic reports'] button:contains('Remove')")
+            b.wait_visible(".app-list .pf-v6-c-data-list__item-row div[rowId='Diagnostic reports'] "
+                           "button:contains('Remove')")
         else:
-            b.wait_not_present(".app-list .pf-v5-c-data-list__item-row div[rowId='Diagnostic reports']")
+            b.wait_not_present(".app-list .pf-v6-c-data-list__item-row div[rowId='Diagnostic reports']")
 
 
 if __name__ == '__main__':

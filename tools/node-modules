@@ -72,7 +72,7 @@ cmd_install() {
     # We first read the result directly into the cache, then we unpack it.
     tree="$(bots/npm download < package.json | tar_to_cache)"
     commit="$(sha256sum package.json | git_cache commit-tree "${tree}")"
-    git_cache tag "sha-${commit}" "${commit}"
+    git_cache tag "sha-${commit}" "${commit}" "--no-sign"
     cmd_checkout "${commit}"
 
     cat <<EOF
@@ -114,6 +114,70 @@ cmd_verify() {
         git_cache --no-pager diff "${commit}" "${expected_tree}" -- .package-lock.json
         exit 1
     fi
+}
+
+cmd_runtime_tar() {
+    if [ -z "${1:-}" ]; then
+        echo "Usage: $0 runtime-tar <tarball-path>" >&2
+        exit 1
+    fi
+    if [ ! -e node_modules/.package-lock.json ]; then
+        echo "Error: This requires a checked out node_modules, run 'tools/node-modules checkout' first" >&2
+        exit 1
+    fi
+    local tar_path="$1"
+
+    # Verify lockfile version
+    local lockfile_version
+    lockfile_version="$(jq -r '.lockfileVersion' node_modules/.package-lock.json)"
+    if [ "$lockfile_version" != "3" ]; then
+        echo "Error: this code is only certified for lockfileVersion 3, got $lockfile_version" >&2
+        exit 1
+    fi
+
+    # Collect runtime packages using jq, excluding:
+    #  - devDependencies
+    #  - esbuild (arch dependent, must use distribution packages)
+    #  - unnecessary binary packages (use JavaScript sass, don't need watcher)
+    local runtime_pkgs
+    runtime_pkgs="$(jq -r '
+        .packages | to_entries[] |
+        select(.value.dev != true) |
+        .key |
+        select(test(".*/@?esbuild(/|$)") | not) |
+        select(test("watcher-linux|sass-embedded") | not)
+    ' node_modules/.package-lock.json | while read -r pkg; do
+        # Only include if exists and is not empty
+        [ -n "$(ls -A "$pkg" 2>/dev/null)" ] && echo "$pkg"
+    done)"
+
+    # Validate that we only have architecture independent files
+    # special-case node_modules/iconv-lite/encodings/sbcs-data-generated.js, it's JS with binary strings in it
+    # and resolve/test/resolver/cup.coffee which is a single-byte test file
+    # Ubuntu 24.04's file (or at least not that in the GitHub actions runner) does not detect *.woff2 file type properly
+    # markdown-to-jsx's js/cjs is so minified it gets recognized as "data", not JavaScript.
+    for pkg in $runtime_pkgs; do
+        if find "$pkg" -type f -not -path '*/markdown-to-jsx/dist/*.js' -not -path '*/markdown-to-jsx/dist/*.cjs' -print0 |
+           xargs -0 file --mime |
+           grep -Ev \
+               -e 'text/' \
+               -e 'inode/x-empty' \
+               -e 'application/(javascript|json)' \
+               -e 'font/' \
+               -e 'image/' \
+               -e 'sbcs-data-generated.js' \
+               -e 'cup.coffee' \
+               -e '\.woff'; then
+            echo "Error: package '$pkg' contains architecture dependent files, cannot include in runtime tarball" >&2
+            exit 1
+        fi
+    done
+
+    # Create tarball
+    {
+        echo "node_modules/.package-lock.json"
+        echo "$runtime_pkgs"
+    } | tar --format=ustar --sort=name --owner=root:0 --group=root:0 --xz -cf "$tar_path" -C . -T -
 }
 
 # called from Makefile.am
@@ -179,7 +243,7 @@ EOF
 main() {
     if [ $# = 0 ]; then
         # don't list the "private" ones
-        echo 'This command requires a subcommand: remove checkout install push verify'
+        echo 'This command requires a subcommand: remove checkout install push verify runtime-tar'
         exit 1
     fi
 

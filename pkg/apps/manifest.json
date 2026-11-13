@@ -1,4 +1,9 @@
 {
+    "conditions": [
+        {"path-exists": "/usr/bin/cockpit-bridge"},
+        {"any": [{"path-exists": "/lib/systemd/system/packagekit.service"}, {"path-exists": "/lib/systemd/system/dnf5daemon-server.service"}]},
+        {"path-not-exists": "/sysroot/ostree"}
+    ],
     "tools": {
         "index": {
             "label": "Applications",
@@ -10,14 +15,13 @@
         }
     },
 
-    "content-security-policy": "img-src *",
-
     "config": {
         "appstream_config_packages": {
             "debian": ["appstream"]
         },
         "appstream_data_packages": {
-            "fedora": ["appstream-data"]
+            "fedora": ["appstream-data"],
+            "arch": ["archlinux-appstream-data"]
         }
     }
 }

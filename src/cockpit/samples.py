@@ -1,25 +1,13 @@
-# This file is part of Cockpit.
 #
 # Copyright (C) 2022 Red Hat, Inc.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 
 import errno
 import logging
 import os
 import re
-from typing import Any, DefaultDict, Iterable, List, NamedTuple, Optional, Tuple
+from typing import Any, Callable, DefaultDict, Iterable, List, NamedTuple, Optional, Tuple
 
 from cockpit._vendor.systemd_ctypes import Handle
 
@@ -149,7 +137,7 @@ class CPUTemperatureSampler(Sampler):
 
         if name == 'atk0110':
             # only sample 'CPU Temperature' in atk0110
-            predicate = (lambda label: label == 'CPU Temperature')
+            predicate: 'Callable[[str], bool] | None' = (lambda label: label == 'CPU Temperature')
         elif name == 'cpu_thermal':
             # labels are not used on ARM
             predicate = None
@@ -201,8 +189,9 @@ class CPUTemperatureSampler(Sampler):
         for sensor_path in self.sensors:
             with open(sensor_path) as sensor:
                 temperature = int(sensor.read().strip())
+                # skip this reading, not the remaining sensors
                 if temperature == 0:
-                    return
+                    continue
 
             samples['cpu.temperature'][sensor_path] = temperature / 1000
 
@@ -344,7 +333,7 @@ class CGroupDiskIO(Sampler):
 
             return 0, 0
 
-    def sample(self, samples: Samples):
+    def sample(self, samples: Samples) -> None:
         with Handle.open('/proc', os.O_RDONLY | os.O_DIRECTORY) as proc_fd:
             reads = samples['disk.cgroup.read']
             writes = samples['disk.cgroup.written']
@@ -398,15 +387,23 @@ class MountSampler(Sampler):
                 if line[0] != '/':
                     continue
 
-                path = line.split()[1]
+                fs_spec, fs_file, _fs_vfstype, fs_mntopts, *_rest = line.split()
+
+                # Skip read-only loop mounts
+                if '/loop' in fs_spec and 'ro' in fs_mntopts.split(','):
+                    continue
+                # Hide flatpaks
+                if 'revokefs-fuse' in fs_spec and 'flatpak' in fs_file:
+                    continue
+
                 try:
-                    res = os.statvfs(path)
+                    res = os.statvfs(fs_file)
                 except OSError:
                     continue
                 frsize = res.f_frsize
                 total = frsize * res.f_blocks
-                samples['mount.total'][path] = total
-                samples['mount.used'][path] = total - frsize * res.f_bfree
+                samples['mount.total'][fs_file] = total
+                samples['mount.used'][fs_file] = total - frsize * res.f_bfree
 
 
 class BlockSampler(Sampler):

@@ -1,19 +1,7 @@
-# This file is part of Cockpit.
 #
 # Copyright (C) 2022 Red Hat, Inc.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 
 import asyncio
 import logging
@@ -22,7 +10,7 @@ import subprocess
 from typing import Dict
 
 from ..channel import ChannelError, ProtocolChannel
-from ..jsonutil import JsonDict, JsonObject, get_bool, get_int, get_object, get_str, get_strv
+from ..jsonutil import JsonDict, JsonObject, get_bool, get_enum, get_int, get_object, get_str, get_strv
 from ..transports import SubprocessProtocol, SubprocessTransport, WindowSize
 
 logger = logging.getLogger(__name__)
@@ -81,14 +69,15 @@ class SubprocessStreamChannel(ProtocolChannel, SubprocessProtocol):
             args['message'] = stderr
         return args
 
-    def do_options(self, options):
+    def do_options(self, options: JsonObject) -> None:
         window = get_object(options, 'window', WindowSize, None)
         if window is not None:
+            assert isinstance(self._transport, SubprocessTransport)
             self._transport.set_window_size(window)
 
     async def create_transport(self, loop: asyncio.AbstractEventLoop, options: JsonObject) -> SubprocessTransport:
         args = get_strv(options, 'spawn')
-        err = get_str(options, 'err', 'msg')
+        err = get_enum(options, 'err', ['out', 'ignore', 'message'], 'message')
         cwd = get_str(options, 'directory', '.')
         pty = get_bool(options, 'pty', default=False)
         window = get_object(options, 'window', WindowSize, None)
@@ -109,12 +98,14 @@ class SubprocessStreamChannel(ProtocolChannel, SubprocessProtocol):
 
         try:
             transport = SubprocessTransport(loop, self, args, pty=pty, window=window, env=env, cwd=cwd, stderr=stderr)
-            logger.debug('Spawned process args=%s pid=%i', args, transport.get_pid())
+            pid = transport.get_pid()
+            self._ready_info = {'pid': pid}
+            logger.debug('Spawned process args=%s pid=%i', args, pid)
             return transport
         except FileNotFoundError as error:
             raise ChannelError('not-found') from error
         except PermissionError as error:
             raise ChannelError('access-denied') from error
         except OSError as error:
-            logger.info("Failed to spawn %s: %s", args, str(error))
+            logger.info("Failed to spawn %s: %s", args, error)
             raise ChannelError('internal-error') from error

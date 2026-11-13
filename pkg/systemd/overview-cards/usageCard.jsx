@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2019 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 import React from 'react';
 import { Button } from "@patternfly/react-core/dist/esm/components/Button/index.js";
@@ -55,17 +41,22 @@ export class UsageCard extends React.Component {
             cpuUsed: 0, // percentage
         };
 
+        this.onVisibilityChange = this.onVisibilityChange.bind(this);
+        this.onMetricsUpdate = this.onMetricsUpdate.bind(this);
+    }
+
+    componentDidMount() {
         machine_info.cpu_ram_info()
                 .then(info => this.setState({
                     memTotal: info.memory,
                     numCpu: info.cpus,
                 }));
-
-        this.onVisibilityChange = this.onVisibilityChange.bind(this);
-        this.onMetricsUpdate = this.onMetricsUpdate.bind(this);
-
         cockpit.addEventListener("visibilitychange", this.onVisibilityChange);
         this.onVisibilityChange();
+    }
+
+    componentWillUnmount() {
+        cockpit.removeEventListener("visibilitychange", this.onVisibilityChange);
     }
 
     onVisibilityChange() {
@@ -108,7 +99,8 @@ export class UsageCard extends React.Component {
 
         let used_text;
         if (this.state.memTotal) {
-            const [total_fmt, unit] = cockpit.format_bytes(this.state.memTotal, 1024, { separate: true, precision: 2 });
+            const [total_fmt, unit] = cockpit.format_bytes(this.state.memTotal, { base2: true, separate: true, precision: 2 });
+            // FIXME: passing explicit unit is deprecated, redesign this
             const used_fmt = cockpit.format_bytes(this.samples[3], unit, { separate: true, precision: 2 })[0];
             used_text = cockpit.format("$0 / $1 $2", used_fmt, total_fmt, unit);
         } else {
@@ -126,27 +118,27 @@ export class UsageCard extends React.Component {
             <Card className="system-usage">
                 <CardTitle>{_("Usage")}</CardTitle>
                 <CardBody>
-                    <table className="pf-v5-c-table pf-m-grid-md pf-m-compact">
-                        <tbody className="pf-v5-c-table__tbody">
-                            <tr className="pf-v5-c-table__tr">
-                                <th className="pf-v5-c-table__th" id="system-usage-cpu-progress" scope="row">{_("CPU")}</th>
-                                <td className="pf-v5-c-table__td">
+                    <table className="pf-v6-c-table pf-m-grid-md pf-m-compact">
+                        <tbody className="pf-v6-c-table__tbody">
+                            <tr className="pf-v6-c-table__tr">
+                                <th className="pf-v6-c-table__th" id="system-usage-cpu-progress" scope="row">{_("CPU")}</th>
+                                <td className="pf-v6-c-table__td">
                                     <Progress value={this.state.cpuUsed}
                                         className="pf-m-sm"
                                         min={0} max={100}
-                                        variant={ this.state.cpuUsed > 90 ? ProgressVariant.danger : null }
+                                        variant={ this.state.cpuUsed > 90 ? ProgressVariant.danger : undefined }
                                         label={ this.state.cpuUsed + '% ' + cores_str }
                                         aria-labelledby="system-usage-cpu-progress"
                                         measureLocation={ProgressMeasureLocation.outside} />
                                 </td>
                             </tr>
-                            <tr className="pf-v5-c-table__tr">
-                                <th className="pf-v5-c-table__th" id="system-usage-memory-progress" scope="row">{_("Memory")}</th>
-                                <td className="pf-v5-c-table__td">
+                            <tr className="pf-v6-c-table__tr">
+                                <th className="pf-v6-c-table__th" id="system-usage-memory-progress" scope="row">{_("Memory")}</th>
+                                <td className="pf-v6-c-table__td">
                                     <Progress value={this.state.memUsed}
                                         className="pf-m-sm"
                                         min={0} max={this.state.memTotal}
-                                        variant={fraction > 0.9 ? ProgressVariant.danger : null}
+                                        variant={fraction > 0.9 ? ProgressVariant.danger : undefined}
                                         aria-labelledby="system-usage-memory-progress"
                                         label={this.state.memUsedText}
                                         measureLocation={ProgressMeasureLocation.outside} />

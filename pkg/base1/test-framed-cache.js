@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 import cockpit from "cockpit";
 import QUnit from "qunit-tests";
 
@@ -12,14 +13,14 @@ function parent_window(assert) {
     let child_done = false;
 
     function maybe_done () {
-        if (child_done && count == 2) {
+        if (child_done && count === 2) {
             child_done = null;
             done();
         }
     }
 
     window.addEventListener("message", event => {
-        if (event.data == "child-done") {
+        if (event.data === "child-done") {
             child_done = true;
             window.setTimeout(maybe_done, 0);
         }
@@ -75,7 +76,7 @@ function child_frame() {
         if (count === 1) {
             assert.equal(value.myobject, "value", "child consumer got parent value");
             cache.claim();
-        } else if (count == 2) {
+        } else if (count === 2) {
             assert.equal(value.myobject, "value2", "child consumer got child value");
             window.parent.postMessage("child-done", "*");
         }

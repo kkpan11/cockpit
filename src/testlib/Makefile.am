@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # -----------------------------------------------------------------------------
 # Common cpp and ld flags for tests: these will be used an awful lot
 
@@ -11,6 +12,8 @@ TEST_CPP = \
 TEST_LIBS = \
 	libcockpit-test.a \
 	$(libcockpit_common_a_LIBS) \
+	$(json_glib_LIBS) \
+	$(glib_LIBS) \
 	$(NULL)
 
 # -----------------------------------------------------------------------------
@@ -55,6 +58,4 @@ libcockpit_test_a_SOURCES = \
 	src/testlib/mock-pressure.h \
 	src/testlib/mock-transport.c \
 	src/testlib/mock-transport.h \
-	src/testlib/retest.c \
-	src/testlib/retest.h \
 	$(NULL)

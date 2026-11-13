@@ -1,41 +1,35 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2020 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
 import React from 'react';
 
 import { Alert } from "@patternfly/react-core/dist/esm/components/Alert/index.js";
+import { PageSection } from "@patternfly/react-core/dist/esm/components/Page/index.js";
 
 import { LockIcon } from '@patternfly/react-icons';
 
-import { SuperuserButton } from "../shell/superuser.jsx";
+import { SuperuserButton } from "superuser-dialogs";
 import { superuser } from "superuser.js";
 
 const _ = cockpit.gettext;
 
 export const SuperuserAlert = () => {
-    if (superuser.allowed)
+    if (superuser.allowed || !superuser.configured)
         return null;
 
-    return <Alert className="ct-limited-access-alert"
-                  variant="warning" isInline
-                  customIcon={<LockIcon />}
-                  actionClose={<SuperuserButton />}
-                  title={_("Web console is running in limited access mode.")} />;
+    // @Venefilyn: We have a PageSection here to get padding when rendered
+    // and avoid that padding when Alert is not rendered. If we start using this
+    // in another place we need to make it work in the aforementioned scenarios.
+    return (
+        <PageSection>
+            <Alert className="ct-limited-access-alert"
+                variant="warning" isInline
+                customIcon={<LockIcon />}
+                actionClose={<SuperuserButton />}
+                title={_("Web console is running in limited access mode.")} />
+        </PageSection>
+    );
 };

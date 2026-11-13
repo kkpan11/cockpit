@@ -1,31 +1,18 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2015 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
 
 #include "cockpitchannelresponse.h"
 
-#include "common/cockpitchannel.h"
-#include "common/cockpitflow.h"
-#include "common/cockpitwebinject.h"
-#include "common/cockpitwebserver.h"
-#include "common/cockpitwebresponse.h"
+#include "cockpitchannel.h"
+#include "common/cockpitconf.h"
+#include "cockpitflow.h"
+#include "cockpitwebinject.h"
+#include "cockpitwebserver.h"
+#include "cockpitwebresponse.h"
 
 #include <string.h>
 
@@ -102,6 +89,13 @@ cockpit_channel_inject_perform (CockpitChannelInject *inject,
     {
       prefixed_application = g_strdup_printf ("/%s", cockpit_creds_get_application (creds));
     }
+
+  {
+    const gboolean allow_multihost = cockpit_conf_bool ("WebService", "AllowMultiHost",
+                                                        ALLOW_MULTIHOST_DEFAULT);
+    g_string_append_printf (str, "\n    <meta name=\"allow-multihost\" content=\"%s\">",
+                            allow_multihost ? "yes" : "no");
+  }
 
   if (inject->base_path)
     {
@@ -593,6 +587,7 @@ cockpit_channel_response_serve (CockpitWebService *service,
   gchar *channel = NULL;
   gpointer key;
   gpointer value;
+  gboolean allow_multihost;
 
   g_return_if_fail (COCKPIT_IS_WEB_SERVICE (service));
   g_return_if_fail (in_headers != NULL);
@@ -603,6 +598,14 @@ cockpit_channel_response_serve (CockpitWebService *service,
   if (!parse_host_and_etag (service, in_headers, where, path, &host, &quoted_etag))
     {
       /* Did not recognize the where */
+      goto out;
+    }
+
+  allow_multihost = cockpit_conf_bool ("WebService", "AllowMultiHost", ALLOW_MULTIHOST_DEFAULT);
+  if (!allow_multihost && g_strcmp0 (host, "localhost") != 0)
+    {
+      cockpit_web_response_error (response, 403, NULL, NULL);
+      handled = TRUE;
       goto out;
     }
 
@@ -767,7 +770,11 @@ cockpit_channel_response_open (CockpitWebService *service,
   if (!content_type)
     {
       if (!cockpit_web_service_parse_binary (open, &data_type))
-        g_return_if_reached ();
+        {
+          cockpit_web_response_error (response, 400, NULL, "Bad channel request");
+          g_hash_table_unref (headers);
+          return;
+        }
       if (data_type == WEB_SOCKET_DATA_TEXT)
         content_type = "text/plain";
       else

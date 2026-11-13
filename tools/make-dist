@@ -1,7 +1,8 @@
 #!/bin/sh
 
 set -eu
-cd "$(realpath -m "$0"/../..)"
+ROOT_DIR=$(realpath -m "$0"/../..)
+cd "$ROOT_DIR"
 
 message() { printf "  %-8s %s\n" "$1" "$2" >&2; }
 
@@ -43,14 +44,13 @@ else
     ../../configure \
         CPPFLAGS=-I../../tools/mock-build-env \
         PKG_CONFIG_PATH=../../tools/mock-build-env \
-        --disable-doc \
         --enable-prefix-only \
-        --disable-pcp \
-        --disable-polkit \
-        --disable-ssh \
         > /dev/null
 fi
 
-# Do the actual build
+# Do the actual build; dist creates both the main and node runtime tarballs
 make -s -j"$(nproc)" XZ_OPT='-0' VERSION="${VERSION}" "$@" dist >&2
-realpath cockpit-${VERSION}.tar.xz  # (only) result to stdout
+
+# Output tarball paths to stdout (only)
+realpath "cockpit-${VERSION}.tar.xz"
+realpath "cockpit-node-${VERSION}.tar.xz"

@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 /* An unhandled javascript exception */
-import '../lib/patternfly/patternfly-5-cockpit.scss';
+import '../lib/patternfly/patternfly-6-cockpit.scss';
 import cockpit from "cockpit";
 
 const button = document.getElementById("exception");

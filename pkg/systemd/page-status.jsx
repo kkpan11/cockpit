@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2019 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -23,6 +9,7 @@ import React from "react";
 import { Button } from "@patternfly/react-core/dist/esm/components/Button/index.js";
 import { Flex } from "@patternfly/react-core/dist/esm/layouts/Flex/index.js";
 import { Spinner } from "@patternfly/react-core/dist/esm/components/Spinner/index.js";
+import { Icon } from "@patternfly/react-core/dist/esm/components/Icon/index.js";
 import {
     BugIcon,
     CheckIcon,
@@ -38,26 +25,38 @@ import "./page-status.scss";
 import { page_status } from "notifications";
 
 function icon_for_type(type) {
-    if (type == "error")
-        return <ExclamationCircleIcon className="ct-exclamation-circle" />;
-    else if (type == "warning")
-        return <ExclamationTriangleIcon className="ct-exclamation-triangle" />;
+    if (type === "error")
+        return (
+            <Icon status="danger">
+                <ExclamationCircleIcon />
+            </Icon>
+        );
+    else if (type === "warning")
+        return (
+            <Icon status="warning">
+                <ExclamationTriangleIcon />
+            </Icon>
+        );
     else
-        return <InfoCircleIcon className="ct-info-circle" />;
+        return (
+            <Icon status="info">
+                <InfoCircleIcon />
+            </Icon>
+        );
 }
 
 function get_pficon(name) {
     // set data-pficon for the tests
-    if (name == "security")
-        return <SecurityIcon data-pficon={name} />;
-    if (name == "enhancement")
-        return <EnhancementIcon data-pficon={name} />;
-    if (name == "bug")
-        return <BugIcon data-pficon={name} className="page-status-bug-icon" />;
-    if (name == "check")
-        return <CheckIcon color="green" data-pficon={name} />;
-    if (name == "spinner")
-        return <Spinner size="md" data-pficon={name} />;
+    if (name === "security")
+        return <Icon isInline status="danger"><SecurityIcon data-pficon={name} /></Icon>;
+    if (name === "enhancement")
+        return <Icon isInline status="custom"><EnhancementIcon data-pficon={name} /></Icon>;
+    if (name === "bug")
+        return <Icon isInline className="pf-m-important"><BugIcon data-pficon={name} /></Icon>;
+    if (name === "check")
+        return <Icon isInline status="success"><CheckIcon data-pficon={name} /></Icon>;
+    if (name === "spinner")
+        return <Spinner diameter="1em" data-pficon={name} />;
 
     throw new Error(`get_pficon(): unknown icon name ${name}`);
 }

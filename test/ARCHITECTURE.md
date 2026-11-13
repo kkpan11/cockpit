@@ -21,16 +21,16 @@ usually based on a distribution's cloud image customized with:
 * Disabling system services which interfere with testing
 
 To automate user actions on the web page, Cockpit is tested in a browser
-controlled using the [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/)
-(CDP) which is supported by Firefox and Chromium based browsers.
+controlled using the [Webdriver BiDi](https://w3c.github.io/webdriver-bidi/)
+protocol which is supported by all modern browsers.
 
 The Python test framework in [test/common](./common) is responsible for setting up the
 test environment, running tests and reporting of the test output.
 
-Diagram of the interaction of Browser/Machine/CDP/Test Framework.
+Diagram of the interaction of Browser/Machine/Webdriver/Test Framework.
 ```mermaid
 graph TD;
-    id[Test Framework] <-->|CDP| Browser;
+    id[Test Framework] <-->|Webdriver| Browser;
     Browser <-->|HTTPS/WebSocket| Cockpit;
     id1[Virtual Machine] <-->|HTTP/DBus/OS APIs| Cockpit;
     id[Test Framework] <-->|SSH| id1[Virtual Machine];
@@ -94,8 +94,7 @@ sequenceDiagram
 
     test->>test: test_main()
     test->>test: setUp()
-    test->>machine: start()
-    test->>machine: wait_boot()
+    test->>machine: boot()
     test->>browser: __init__()
     test->>test: setup non-destructive setup
     test->>test: run test
@@ -127,9 +126,9 @@ depending on the test class `provision` variable.
  the browser will be started, so tests which require no browser don't start a
  browser needlessly.
 
-The `CDP` class is responsible for spawning the browser, then spawning a CDP
-driver. This uses the `chrome-remote-interface` npm module to send commands to
-the spawned drivers via standard in (stdin).
+The `WebdriverBidi` class is responsible for spawning the browser and talking
+to it using the [Webdriver BiDi](https://w3c.github.io/webdriver-bidi/)
+protocol (which we implement directly for ourselves, using aiohttp).
 
 On `tearDown` the test status is inspected, if it failed test logs are
 collected and if the user has passed `--sit` the test pauses execution until
@@ -142,14 +141,14 @@ existing global machine.
 
 ### Test runner
 
-Cockpit uses a custom test runner to run the tests, spread the load over jobs
-and special handling of test failures. The test runner is implemented in Python
-in [test/common/run-tests](./common/run-tests) and expects a list of tests to
-be provided.
+Cockpit uses a custom test runner to run the tests, spread the load across
+parallel instances and special handling of test failures. The test runner is
+implemented in Python in [test/common/run-tests](./common/run-tests) and expects
+a list of tests to be provided.
 
 The provided tests are collected and split up in "destructive" and
-"non-destructive" tests, every test is given a "cost" depending on the amount
-of virtual machines required to run the test for scheduling priority. A default
+"non-destructive" tests, every test calculates its RAM requirements based on the
+amount of virtual machines and browser memory needed to run the test. A default
 timeout is added to every test so hanging tests get killed over time, tests
 which take longer can set a custom timeout using a test decorator.
 
@@ -161,10 +160,10 @@ refactors won't retry a lot of tests.
 
 Having collected the "destructive", "non-destructive" and affected tests a
 scheduling loop is started, if a machine was provided it is used for the
-"non-destructive" tests, "destructive" tests will always spawn a new machine. If no
-machine is provided a pool of global machines is created based on the provided
-`--jobs` and "non-destructive" tests. The test runner will first try to assign all
-"non-destructive" tests on the available global machines and start the tests. 
+"non-destructive" tests, "destructive" tests will always spawn a new machine.
+If no machine is provided a pool of global machines for "non-destructive" tests
+depending on available CPUs and RAM. The test runner will first try to assign all
+"non-destructive" tests on the available global machines and start the tests.
 
 The scheduling loop periodically inspects all running tests and polls if the
 test has ended. Depending on the exit code of the test process the test runner
@@ -175,7 +174,7 @@ graph TD;
     succeeded{Test succeeded?}
     affected{"Test affected?"}
     affecteddone["Retry three times"]
-    skipped{Test skipped?}   
+    skipped{Test skipped?}
     todosuccess{Test todo?}
     todonosuccess{Test todo?}
     todosucceeded["Unexpected success
@@ -189,25 +188,25 @@ graph TD;
     test failures"]
     testfailed["Test failed"]
     failure_policy{"Known issue?"}
-    
+
     finished --> skipped
     skipped --> |No| succeeded
     skipped --> |Yes| skiptest[Show as skipped test]
     succeeded --> |No| todonosuccess
     succeeded --> |yes| affected
-   
+
     affected --> |Yes| affecteddone
     affected --> |No| todosuccess
-    
+
     todosuccess --> |Yes| todosucceeded
     todosuccess --> |No| done[Test succeeded]
-    
+
     todonosuccess --> |Yes| todofail
     todonosuccess --> |No| failure_policy
-    
+
     failure_policy --> |Yes| known_issue[Show as known issue]
     failure_policy --> |No| pixel_journal_failure
-    
+
     pixel_journal_failure --> |Yes| testfailed
     pixel_journal_failure --> |No| retry
 ```

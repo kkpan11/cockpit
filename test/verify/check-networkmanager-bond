@@ -1,21 +1,9 @@
 #!/usr/bin/python3 -cimport os, sys; os.execv(os.path.dirname(sys.argv[1]) + "/../common/pywrap", sys.argv)
 
-# This file is part of Cockpit.
 #
 # Copyright (C) 2013 Red Hat, Inc.
-#
-# Cockpit is free software; you can redistribute it and/or modify it
-# under the terms of the GNU Lesser General Public License as published by
-# the Free Software Foundation; either version 2.1 of the License, or
-# (at your option) any later version.
-#
-# Cockpit is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-# Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
 
 import netlib
 import testlib
@@ -23,7 +11,6 @@ from lib.constants import TEST_OS_DEFAULT
 
 
 @testlib.nondestructive
-@testlib.skipDistroPackage()
 class TestBonding(netlib.NetworkCase):
     def testBasic(self):
         b = self.browser
@@ -45,7 +32,7 @@ class TestBonding(netlib.NetworkCase):
         b.wait_visible("#network-bond-settings-dialog")
         # wait until dialog initialized
         b.wait_visible("#network-bond-settings-dialog button[aria-label=Close]")
-        b.wait_visible("#network-bond-settings-mac-input-select-typeahead")
+        b.wait_visible("#network-bond-settings-mac-input")
         # menu is not visible by default, but gets initialized dynamically
         b.assert_pixels("#network-bond-settings-dialog", "networking-bond-settings-dialog",
                         # help icon gets rendered with unstable noise
@@ -65,11 +52,9 @@ class TestBonding(netlib.NetworkCase):
         b.set_checked(f"input[data-iface='{iface2}']", val=True)
         b.click("#network-bond-settings-dialog button:contains('Add')")
         b.wait_not_present("#network-bond-settings-dialog")
-        b.wait_visible("#networking-interfaces tr[data-interface='tbond']")
 
         # Check that the members are displayed and both On
-        b.click("#networking-interfaces tr[data-interface='tbond'] button")
-        b.wait_visible("#network-interface")
+        b.wait_text("#network-interface-name", "tbond")
         b.wait_visible(f"#network-interface-members tr[data-interface='{iface1}']")
         self.wait_onoff(f"#network-interface-members tr[data-interface='{iface1}']", val=True)
         b.wait_visible(f"#network-interface-members tr[data-interface='{iface2}']")
@@ -78,7 +63,7 @@ class TestBonding(netlib.NetworkCase):
         b.wait_text_not("#network-interface-mac", "")
 
         # Check that link monitoring is correctly set up
-        b.click("#network-interface-settings dd:contains('Active backup') button")
+        b.click("#network-interface-settings [data-label='Bond'] button")
         b.wait_val("#network-bond-settings-link-monitoring-select", "mii")
         b.click("#network-bond-settings-dialog button:contains('Cancel')")
         b.wait_not_present("#network-bond-settings-dialog")
@@ -89,15 +74,14 @@ class TestBonding(netlib.NetworkCase):
         b.wait_in_text("#network-interface-settings", "MTU")
         b.wait_not_in_text("#network-interface-settings", "IPv4")
         b.wait_not_in_text("#network-interface-settings", "IPv6")
-        b.click("#network-interface-settings button:contains(tbond)")
+        b.click("#network-interface-settings button:contains('tbond')")
         b.wait_in_text("#network-interface-name", "tbond")
 
         # Deactivate the bond and make sure it is still there after a
         # reload.
-        self.wait_onoff(".pf-v5-c-card__header:contains('tbond')", val=True)
-        self.toggle_onoff(".pf-v5-c-card__header:contains('tbond')")
+        self.wait_onoff("label[for='interface-switch']", val=False)
         self.wait_for_iface_setting('Status', 'Inactive')
-        b.wait_not_present(".pf-v5-c-card__header:contains('tbond') input[type=checkbox]:disabled")
+        b.wait_not_present("#interface-switch:disabled")
 
         b.reload()
         b.enter_page("/network")
@@ -149,8 +133,7 @@ class TestBonding(netlib.NetworkCase):
         b.click("#network-bond-settings-dialog button:contains('Add')")
         b.wait_not_present("#network-bond-settings-dialog")
 
-        b.click("#networking-interfaces tr[data-interface='tbond'] button")
-        b.wait_visible("#network-interface")
+        b.wait_text("#network-interface-name", "tbond")
         self.wait_for_iface_setting('IPv4', 'Link local')
 
     def testRename(self):
@@ -164,23 +147,27 @@ class TestBonding(netlib.NetworkCase):
         iface = m.execute("cd /sys/class/net; ls -d e* | head -n1").strip()
         b.wait_visible(f"tr[data-interface='{iface}']")
 
-        # Make a simple bond without any members.  This is enough to
-        # test the renaming.
+        iface1 = "cockpit1"
+        self.add_veth(iface1, dhcp_cidr="10.111.113.1/24", dhcp_range=['10.111.113.2', '10.111.113.254'])
+        self.nm_activate_eth(iface1)
+        self.wait_for_iface(iface1)
 
         b.click("button:contains('Add bond')")
         b.wait_visible("#network-bond-settings-dialog")
         b.select_from_dropdown("#network-bond-settings-link-monitoring-select", "arp")
         b.set_input_text("#network-bond-settings-monitoring-targets-input", "1.1.1.1")
         b.set_input_text("#network-bond-settings-interface-name-input", "tbond")
+        b.set_checked(f"input[data-iface='{iface1}']", val=True)
         b.click("#network-bond-settings-dialog button:contains('Add')")
         b.wait_not_present("#network-bond-settings-dialog")
 
         # Rename while it is active
         self.addCleanup(m.execute, "nmcli dev delete tbond3000 2>/dev/null || true")
 
-        b.click("#networking-interfaces tr[data-interface='tbond'] button")
-        self.wait_onoff("#network-interface .pf-v5-c-card__header", val=True)
-        self.wait_for_iface_setting('Status', 'Configuring')
+        b.wait_text("#network-interface-name", "tbond")
+        self.wait_onoff("#network-interface .pf-v6-c-card__header", val=False)
+        self.toggle_onoff("label[for='interface-switch']")
+        self.wait_onoff("#network-interface .pf-v6-c-card__header", val=True)
 
         self.configure_iface_setting('Bond')
         b.wait_visible("#network-bond-settings-dialog")
@@ -193,6 +180,10 @@ class TestBonding(netlib.NetworkCase):
         b.click("#network-bond-settings-dialog button:contains('Save')")
         b.wait_not_present("#network-bond-settings-dialog")
         b.wait_text("#network-interface-name", "tbond3000")
+
+        # Check that the member is still there and active
+        b.wait_visible(f"#network-interface-members tr[data-interface='{iface1}']")
+        self.wait_onoff(f"#network-interface-members tr[data-interface='{iface1}']", val=True)
 
     def testActive(self):
         b = self.browser
@@ -213,16 +204,45 @@ class TestBonding(netlib.NetworkCase):
         b.wait_visible("#network-bond-settings-dialog")
         b.set_input_text("#network-bond-settings-interface-name-input", "tbond")
         b.set_checked(f"input[data-iface='{iface}']", val=True)
-        b.click("#network-bond-settings-mac-input")
+        b.click("#network-bond-settings-mac-input input")
         b.click("li button:contains('(cockpit1)')")
         b.click("#network-bond-settings-dialog button:contains('Add')")
         b.wait_not_present("#network-bond-settings-dialog")
 
         # Check that it has the interface and the right IP address
-        b.click("#networking-interfaces tr[data-interface='tbond'] button")
-        b.wait_visible("#network-interface")
+        b.wait_text("#network-interface-name", "tbond")
         b.wait_visible(f"#network-interface-members tr[data-interface='{iface}']")
-        b.wait_in_text("#network-interface .pf-v5-c-card:contains('tbond')", ip)
+        self.toggle_onoff("label[for='interface-switch']")
+        b.wait_in_text("#network-interface .pf-v6-c-card:contains('tbond')", ip)
+
+    def testPrimary(self):
+        b = self.browser
+
+        self.login_and_go("/network")
+
+        b.wait_visible("#networking")
+        iface = "cockpit"
+        self.add_veth(iface, dhcp_cidr="10.111.112.2/20")
+        self.nm_activate_eth(iface)
+        self.wait_for_iface(iface)
+
+        # Create a bond
+        b.click("button:contains('Add bond')")
+        b.wait_visible("#network-bond-settings-dialog")
+        b.set_input_text("#network-bond-settings-interface-name-input", "tbond")
+        # add interface to bond
+        b.set_checked(f"input[data-iface='{iface}']", val=True)
+        # select it as primary
+        b.select_from_dropdown("#network-bond-settings-primary-select", iface)
+        # finish creating the bond
+        b.click("#network-bond-settings-dialog button:contains('Add')")
+        b.wait_not_present("#network-bond-settings-dialog")
+        b.wait_text("#network-interface-name", "tbond")
+        b.click("#network-interface #networking-edit-bond")
+
+        # edit bond dialog
+        b.wait_visible("#network-bond-settings-dialog")
+        b.wait_val("#network-bond-settings-primary-select", iface)
 
     def testAmbiguousMember(self):
         b = self.browser
@@ -260,11 +280,10 @@ class TestBonding(netlib.NetworkCase):
         b.wait_visible(f"#network-interface-members tr[data-interface='{iface}']")
 
 
-@testlib.skipDistroPackage()
 class TestBondingVirt(netlib.NetworkCase):
     provision = {
-        "machine1": {"address": "10.111.113.1/20", "memory_mb": 512},
-        "machine2": {"image": TEST_OS_DEFAULT, "address": "10.111.113.2/20", "dhcp": True, "memory_mb": 256}
+        "machine1": {"address": "10.111.113.1/20"},
+        "machine2": {"image": TEST_OS_DEFAULT, "address": "10.111.113.2/20", "dhcp": True}
     }
 
     @testlib.skipImage("Main interface can't be managed", "debian-*", "ubuntu-*")
@@ -272,7 +291,7 @@ class TestBondingVirt(netlib.NetworkCase):
         b = self.browser
         m = self.machine
 
-        iface = self.get_iface(m, m.networking["mac"])
+        iface = self.get_iface(m.networking["mac"])
 
         self.login_and_go("/network")
         self.wait_for_iface(iface)
@@ -286,10 +305,9 @@ class TestBondingVirt(netlib.NetworkCase):
         b.wait_not_present("#network-bond-settings-dialog")
 
         # Check that it has the main connection and the right IP address
-        b.click("#networking-interfaces tr[data-interface='tbond'] button")
-        b.wait_visible("#network-interface")
+        b.wait_text("#network-interface-name", "tbond")
         b.wait_visible(f"#network-interface-members tr[data-interface='{iface}']")
-        b.wait_in_text("#network-interface .pf-v5-c-card:contains('tbond')", "10.111.113.1")
+        b.wait_in_text("#network-interface .pf-v6-c-card:contains('tbond')", "10.111.113.1")
 
         # Delete the bond
         b.click("#network-interface button:contains('Delete')")
@@ -297,14 +315,14 @@ class TestBondingVirt(netlib.NetworkCase):
         b.wait_not_present("#networking-interfaces tr[data-interface='tbond']")
         b.wait_visible(f"#networking-interfaces tr[data-interface='{iface}']")
 
-    @testlib.skipImage("TODO: no dhclient on Arch image", "arch")
+    @testlib.skipImage("no dhclient on OS image", "arch", "centos-10*", "rhel-10*")
     @testlib.skipImage("Main interface can't be managed", "debian-*", "ubuntu-*")
     @testlib.skipOstree("not using dhclient")
     def testSlowly(self):
         b = self.browser
         m = self.machine
 
-        iface = self.get_iface(m, m.networking["mac"])
+        iface = self.get_iface(m.networking["mac"])
         self.ensure_nm_uses_dhclient()
 
         self.login_and_go("/network")
@@ -325,10 +343,9 @@ class TestBondingVirt(netlib.NetworkCase):
         b.wait_not_present("#network-bond-settings-dialog")
 
         # Check that it has the main connection and the right IP address
-        b.click("#networking-interfaces tr[data-interface='tbond'] button")
-        b.wait_visible("#network-interface")
+        b.wait_text("#network-interface-name", "tbond")
         b.wait_visible(f"#network-interface-members tr[data-interface='{iface}']")
-        b.wait_in_text("#network-interface .pf-v5-c-card:contains('tbond')", "10.111.113.1")
+        b.wait_in_text("#network-interface .pf-v6-c-card:contains('tbond')", "10.111.113.1")
 
 
 if __name__ == '__main__':

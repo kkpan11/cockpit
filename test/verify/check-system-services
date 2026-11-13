@@ -1,30 +1,16 @@
 #!/usr/bin/python3 -cimport os, sys; os.execv(os.path.dirname(sys.argv[1]) + "/../common/pywrap", sys.argv)
 
-# This file is part of Cockpit.
 #
 # Copyright (C) 2013 Red Hat, Inc.
-#
-# Cockpit is free software; you can redistribute it and/or modify it
-# under the terms of the GNU Lesser General Public License as published by
-# the Free Software Foundation; either version 2.1 of the License, or
-# (at your option) any later version.
-#
-# Cockpit is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-# Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
 
 import time
 
 import testlib
-import testvm
+from machine import testvm
 
 
-@testlib.nondestructive
-@testlib.skipDistroPackage()
 class TestServices(testlib.MachineCase):
 
     def setUp(self):
@@ -38,48 +24,53 @@ class TestServices(testlib.MachineCase):
         # We manipulate with `/etc/systemd/system` so `daemon-reload` to keep it in proper state
         # Also `reset-failed` as failed units can be still listed with `systemctl` even when all files
         # were removed and daemon reloaded.
-        self.restore_dir("/etc/systemd/system", "systemctl daemon-reload; systemctl reset-failed", reboot_safe=True)
-        user_post_restore = "su - admin -c 'export XDG_RUNTIME_DIR=/run/user/$(id -u admin); systemctl --user daemon-reload; systemctl --user reset-failed'"
-        self.restore_dir("/etc/systemd/user", user_post_restore, reboot_safe=True)
-        self.restore_dir("/etc/xdg/systemd/user", user_post_restore, reboot_safe=True)
-        self.restore_dir("/home/admin/.config", user_post_restore, reboot_safe=True)
+        self.restore_dir("/etc/systemd/system", "systemctl daemon-reload; systemctl reset-failed")
+        self.restore_dir("/etc/systemd/user")
+        self.restore_dir("/etc/xdg/systemd/user")
+        self.restore_dir("/home/admin/.config")
 
-    def run_systemctl(self, user, cmd):
+    def run_systemctl(self, cmd: str, *, user: bool = False):
         if user:
-            self.machine.execute(f"su - admin -c 'export XDG_RUNTIME_DIR=/run/user/$(id -u admin); systemctl --user {cmd}'")
+            self.machine.execute(
+                f"su - admin -c 'export XDG_RUNTIME_DIR=/run/user/$(id -u admin); systemctl --user {cmd}'")
         else:
             self.machine.execute(f"systemctl {cmd}")
 
-    def pick_tab(self, n):
+    def pick_tab(self, n: int):
         self.browser.click(f'#services-filter li:nth-child({n}) a')
 
-    def wait_onoff(self, val):
-        self.browser.wait_visible(".service-top-panel .pf-v5-c-switch__input" + (":checked" if val else ":not(:checked)"))
+    def wait_onoff(self, val: bool):
+        self.browser.wait_visible(".service-top-panel .pf-v6-c-switch__input" +
+                                  (":checked" if val else ":not(:checked)"))
 
     def toggle_onoff(self):
-        self.browser.click(".service-top-panel .pf-v5-c-switch__input")
+        self.browser.click(".service-top-panel .pf-v6-c-switch__input")
+        # move away from the button again to remove the tooltip; it covers the kebab
+        self.browser.mouse(".service-top-panel .pf-v6-c-switch__input", "mouseleave")
+        self.browser.wait_not_present("[role='tooltip']")
 
-    def do_action(self, action):
-        self.browser.click(".service-top-panel button.pf-v5-c-menu-toggle")
-        self.browser.click(f".service-top-panel .pf-v5-c-menu__list-item:contains('{action}') button")
+    def do_action(self, action: str):
+        self.browser.click(".service-top-panel button.pf-v6-c-menu-toggle")
+        self.browser.click(f"#services-page button.pf-v6-c-menu__item:contains('{action}')")
 
-    def check_service_details(self, statuses, actions, enabled, onoff=True, kebab=True):
+    def check_service_details(self, statuses: list[str], actions: list[str],
+                              enabled: bool, onoff: bool = True, kebab: bool = True):
         with self.browser.wait_timeout(60):
             self.browser.wait_collected_text("#statuses .status", "".join(statuses))
         if onoff:
             self.wait_onoff(val=enabled)
         else:
-            self.browser.wait_not_present(".service-top-panel .pf-v5-c-switch")
+            self.browser.wait_not_present(".service-top-panel .pf-v6-c-switch")
 
         if kebab:
-            self.browser.click(".service-top-panel button.pf-v5-c-menu-toggle")
-            self.browser.wait_text(".service-top-panel .pf-v5-c-menu__list", "".join(actions))
-            # Click away to close the pf-v5-c-menu__list
-            self.browser.click(".service-top-panel button.pf-v5-c-menu-toggle")
+            self.browser.click(".service-top-panel button.pf-v6-c-menu-toggle")
+            self.browser.wait_text("#services-page .pf-v6-c-menu__list", "".join(actions))
+            # Click away to close the pf-v6-c-menu__list
+            self.browser.click(".service-top-panel button.pf-v6-c-menu-toggle")
         else:
-            self.browser.wait_not_present(".service-top-panel .pf-v5-c-menu__list")
+            self.browser.wait_not_present("#services-page .pf-v6-c-menu__list")
 
-    def check_service_on(self, expect_reload=True):
+    def check_service_on(self, expect_reload: bool = True):
         self.check_service_details(
             ["Running", "Automatically starts"],
             ["Reload" if expect_reload else "", "Restart", "Stop", "Disallow running (mask)", "Pin unit"],
@@ -90,13 +81,13 @@ class TestServices(testlib.MachineCase):
                                    ["Start", "Disallow running (mask)", "Pin unit"],
                                    enabled=False)
 
-    def svc_sel(self, service):
+    def svc_sel(self, service: str):
         return f'tr[data-goto-unit="{service}"]'
 
-    def goto_service(self, service):
+    def goto_service(self, service: str):
         return self.browser.click(self.svc_sel(service) + ' a')
 
-    def wait_service_state(self, service, state):
+    def wait_service_state(self, service: str, state: str):
         state_new = state
         if 'inactive' in state:
             state_new = 'Not running'
@@ -107,42 +98,42 @@ class TestServices(testlib.MachineCase):
 
         self.browser.wait_in_text(self.svc_sel(service), state_new)
 
-    def select_file_state(self, states):
+    def select_file_state(self, states: list[str] | str):
         if not isinstance(states, list):
             states = [states]
 
         self.browser.click("#services-dropdown-file-state")
         for state in states:
-            self.browser.set_checked(f".pf-v5-c-select__menu label:contains('{state}') input", val=True)
+            self.browser.set_checked(f".pf-v6-c-menu__list-item[data-label='{state}'] input", val=True)
         self.browser.click("#services-dropdown-file-state")
         for state in states:
-            self.browser.wait_visible(f".pf-v5-c-chip-group__label:contains('File state') + .pf-v5-c-chip-group__list li:contains('{state}')")
+            self.browser.wait_in_text(".pf-v6-c-label-group:contains('File state')", state)
 
-    def select_active_state(self, states):
+    def select_active_state(self, states: list[str] | str):
         if not isinstance(states, list):
             states = [states]
 
         self.browser.click("#services-dropdown-active-state")
         for state in states:
-            self.browser.set_checked(f".pf-v5-c-select__menu label:contains('{state}') input", val=True)
+            self.browser.set_checked(f".pf-v6-c-menu__list-item[data-label='{state}'] input", val=True)
         self.browser.click("#services-dropdown-active-state")
         for state in states:
-            self.browser.wait_visible(f".pf-v5-c-chip-group__label:contains('Active state') + .pf-v5-c-chip-group__list li:contains('{state}')")
+            self.browser.wait_in_text(".pf-v6-c-label-group:contains('Active state')", state)
 
     def wait_page_load(self):
-        self.browser.wait_not_present(".pf-v5-c-empty-state .pf-v5-c-spinner[aria-valuetext='Loading...']")
+        self.browser.wait_not_present(".pf-v6-c-empty-state .pf-v6-c-spinner[aria-valuetext='Loading...']")
 
-    def wait_service_in_panel(self, service, title):
+    def wait_service_in_panel(self, service: str, title: str):
         self.wait_service_state(service, title)
 
-    def wait_service_present(self, service):
+    def wait_service_present(self, service: str):
         service_name = service[:-8] if service.endswith(".service") else service
         self.browser.wait_text(f'tr[data-goto-unit="{service}"] .service-unit-id', service_name)
 
-    def wait_service_not_present(self, service):
+    def wait_service_not_present(self, service: str):
         self.browser.wait_not_present(self.svc_sel(service))
 
-    def make_test_service(self, path="/etc/systemd/system/"):
+    def make_test_service(self, path: str = "/etc/systemd/system/"):
         self.write_file(f"{path}/test.service",
                         """
 [Unit]
@@ -174,8 +165,8 @@ while true; do
 done
 """, perm="755")
         # After writing files out tell systemd about them
-        self.run_systemctl(user=False, cmd="daemon-reload")
-        self.run_systemctl(user=True, cmd="daemon-reload || true")
+        self.run_systemctl("daemon-reload", user=False)
+        self.run_systemctl("daemon-reload || true", user=True)
 
         # When the test fails while `test.service` is active, the process keeps running and
         # `systemctl status test.service` still shows it as active until this process dies
@@ -193,7 +184,8 @@ done
     def testBasicSession(self):
         self._testBasic(user=True)
 
-    def _testBasic(self, user=False):
+    def _testBasic(self, user: bool = False):
+
         m = self.machine
         b = self.browser
 
@@ -210,6 +202,16 @@ ExecStart=/usr/bin/false
 [Install]
 WantedBy=default.target
 """)
+
+        # this can't be in /etc, as we want to test masking
+        self.write_file(f"{path.replace('/etc', '/usr/local/lib')}/test-static.service",
+                        """
+[Unit]
+Description=Static Test Service
+[Service]
+ExecStart=/usr/bin/true
+""")
+
         self.write_file(f"{path}/special@:-characters.service",
                         """
 [Unit]
@@ -232,19 +234,19 @@ WantedBy=default.target
         self.wait_service_in_panel("test.service", "Disabled")
         self.wait_service_state("test.service", "inactive")
 
-        self.run_systemctl(user, "start test.service")
+        self.run_systemctl("start test.service", user=user)
         self.wait_service_state("test.service", "active")
         self.wait_service_in_panel("test.service", "Disabled")
 
-        self.run_systemctl(user, "stop test.service")
+        self.run_systemctl("stop test.service", user=user)
         self.wait_service_state("test.service", "inactive")
         self.wait_service_in_panel("test.service", "Disabled")
 
-        self.run_systemctl(user, "enable test.service")
+        self.run_systemctl("enable test.service", user=user)
         self.wait_service_state("test.service", "inactive")
         self.wait_service_in_panel("test.service", "Enabled")
 
-        self.run_systemctl(user, "start test.service")
+        self.run_systemctl("start test.service", user=user)
 
         b.wait_attr("#services-toolbar", "data-loading", "false")
 
@@ -254,16 +256,18 @@ WantedBy=default.target
 
         # Test breadcrumb link when service id contains special characters
         self.goto_service("special@:-characters.service")
-        b.wait_in_text(".pf-v5-c-breadcrumb", "special@:-characters.service")
-        b.click(".pf-v5-c-breadcrumb a:contains('Services')")
+        b.wait_in_text(".pf-v6-c-breadcrumb", "special@:-characters.service")
+        b.click(".pf-v6-c-breadcrumb a:contains('Services')")
         b.wait_visible("#services-list")
 
         suffix = "?owner=user" if user else ''
 
         # Check empty state error for nonexistent unit with valid name
         b.go(f'/system/services#/nonexistent.service{suffix}')
-        b.wait_in_text(".pf-v5-c-empty-state", "Unit nonexistent.service not found")
-        b.click("a:contains('View all services')")
+        b.wait_in_text(".pf-v6-c-empty-state", "Unit nonexistent.service not found")
+        b.click("button:contains('View all services')")
+        self.wait_page_load()
+        self.wait_service_present("test.service")
         b.switch_to_top()
         b.wait_js_cond('window.location.pathname == "/system/services"')
         if user:
@@ -272,8 +276,9 @@ WantedBy=default.target
         # Check empty state error for invalid unit name
         b.go(f'/system/services#/nonexistent{suffix}')
         b.enter_page("/system/services")
-        b.wait_in_text(".pf-v5-c-empty-state", "Loading unit failed")
-        b.wait_in_text(".pf-v5-c-empty-state", "Unit name nonexistent is not valid")
+        self.wait_page_load()
+        b.wait_in_text(".pf-v6-c-empty-state", "Loading unit failed")
+        b.wait_in_text(".pf-v6-c-empty-state", "Unit name nonexistent is not valid")
 
         b.go(f"#/{suffix}")
 
@@ -300,23 +305,24 @@ WantedBy=default.target
                                    ["Start", "Clear 'Failed to start'", "Disallow running (mask)", "Pin unit"],
                                    enabled=True)
         if not user:
+            b.wait_not_present("#memory")
             b.assert_pixels("#service-details-unit", "details-test-fail",
                             # in medium layout we sometimes get a scrollbar depending on how many test-fail logs exist
                             skip_layouts=["medium"],
                             # ignore the switcher, it causes a tiny flake around the sides.
-                            ignore=[".pf-v5-c-switch__toggle"])
+                            ignore=[".pf-v6-c-switch__toggle"])
         b.click(".action-button:contains('Start service')")
         b.go(f'/system/services#/{suffix}')
         self.wait_service_present("test-fail.service")
         self.wait_service_state("test-fail.service", "failed")
 
         # Check static service
-        self.goto_service("systemd-exit.service")
+        self.goto_service("test-static.service")
         self.check_service_details(["Static", "Not running"],
                                    ["Start", "Disallow running (mask)", "Pin unit"],
                                    enabled=True, onoff=False)
         # Check that journalbox shows empty state
-        b.wait_text('.cockpit-log-panel .pf-v5-c-card__body', "No log entries")
+        b.wait_text('.cockpit-log-panel .pf-v6-c-card__body', "No log entries")
         b.wait_not_present("button:contains('View all logs')")
 
         # Mask and unmask
@@ -344,7 +350,7 @@ WantedBy=default.target
         b.go(f'/system/services#/{suffix}')
 
         # returns index of first unit that isn't failed
-        b.inject_js("""
+        b.eval_js("""
                     function firstWorkingUnitPos() {
                         const services = document.getElementById('services-list');
                         for (let i = 0; i < services.childElementCount; i++) {
@@ -354,6 +360,7 @@ WantedBy=default.target
                         }
                     }
                   """)
+        b.wait_visible("#services-list")
         pos = b.eval_js('firstWorkingUnitPos();')
         b.wait_text(f'#services-list > tbody:nth-child({pos + 1}) > tr > th > div > div > a', 'test')
         b.is_present('#test.service > svg.service-thumbtack-icon-color')
@@ -367,6 +374,8 @@ WantedBy=default.target
         b.go(f'/system/services#/{suffix}')
         b.wait_not_present('#test.service > svg.service-thumbtack-icon-color')
 
+    @testlib.nondestructive
+    @testlib.skipImage("TODO: fix for OpenSUSE", "opensuse-tumbleweed")
     def testFilter(self):
         b = self.browser
 
@@ -386,12 +395,12 @@ WantedBy=default.target
 
         def init_filter_state():
             if not b.is_visible("#services-text-filter"):
-                b.click(".pf-v5-c-toolbar__toggle button")
+                b.click(".pf-v6-c-toolbar__toggle button")
 
-            if b.is_present(".pf-v5-c-toolbar__expandable-content.pf-m-expanded button:contains('Clear all filters')"):
-                b.click(".pf-v5-c-toolbar__expandable-content.pf-m-expanded button:contains('Clear all filters')")
-            elif b.is_present(".pf-v5-c-toolbar__content > .pf-v5-c-toolbar__item > button:contains('Clear all filters')"):
-                b.click(".pf-v5-c-toolbar__content > .pf-v5-c-toolbar__item > button:contains('Clear all filters')")
+            if b.is_present(".pf-v6-c-toolbar__expandable-content.pf-m-expanded button:contains('Clear all filters')"):
+                b.click(".pf-v6-c-toolbar__expandable-content.pf-m-expanded button:contains('Clear all filters')")
+            elif b.is_present(".pf-v6-c-toolbar__content .pf-v6-c-toolbar__item > button:contains('Clear all filters')"):
+                b.click(".pf-v6-c-toolbar__content .pf-v6-c-toolbar__item > button:contains('Clear all filters')")
             else:
                 b.set_input_text("#services-text-filter input", "")
 
@@ -414,17 +423,30 @@ WantedBy=default.target
         # test.service is not loaded, thus description search does not find it
         self.wait_service_present("test-fail.service")
         b.assert_pixels("#services-page", "text-filter-test", skip_layouts=["mobile"])
-        b.set_layout("mobile")
-        # Waiting a bit for the layout to stabilize.  The scrolling of
-        # the header happens asynchronously with an animation.
-        time.sleep(2)
-        # Now scroll the header all the way to the left to get a conistent pixel test result
-        nav_scroll_btn = ".services-header button[aria-label='Scroll back']"
-        while b.call_js_func("ph_attr", nav_scroll_btn, "disabled") is None:
-            b.click(nav_scroll_btn)
-            time.sleep(0.5)
-        b.assert_pixels_in_current_layout("#services-page", "text-filter-test")
-        b.set_layout("desktop")
+
+        if b.pixels_label:
+            b.set_layout("mobile")
+            # HACK: reload for PF 5.4.0 to detect the new layout and breakpoints
+            # https://github.com/patternfly/patternfly-react/issues/10897
+            b.reload()
+            b.enter_page("/system/services")
+            # Waiting a bit for the layout to stabilize.  The scrolling of
+            # the header happens asynchronously with an animation.
+            time.sleep(2)
+
+            # HACK @Venefilyn: This is commented out as we have to work around a
+            # PF bug. In particular the scroll buttons do not appear as they should
+            # so we instead just wrap the whole subnav (ugly but functional).
+            # https://github.com/patternfly/patternfly-react/issues/11751
+
+            # Now scroll the header all the way to the left to get a consistent pixel test result
+            # nav_scroll_btn = ".services-header button[aria-label='Scroll back']"
+            # while b.call_js_func("ph_attr", nav_scroll_btn, "disabled") is None:
+            #     b.click(nav_scroll_btn)
+            #     time.sleep(0.5)
+            b.assert_pixels_in_current_layout("#services-page", "text-filter-test")
+            b.set_layout("desktop")
+            self.wait_page_load()
 
         # Filter by description capitalization not matching the unit description
         init_filter_state()
@@ -477,7 +499,7 @@ WantedBy=default.target
         b.set_input_text("#services-text-filter input", "failing")
         self.select_active_state("Not running")
         self.wait_service_not_present("test.service")
-        b.wait_visible("#services-page .pf-v5-c-empty-state")
+        b.wait_visible("#services-page .pf-v6-c-empty-state")
 
         # Check resetting filter
         b.click("#clear-all-filters")
@@ -491,19 +513,21 @@ WantedBy=default.target
         self.select_active_state("Not running")
         self.select_active_state("Running")
         self.wait_service_present("test.service")
-        b.click(".pf-v5-c-chip-group__label:contains('Active state') + .pf-v5-c-chip-group__list li:contains('Not running') button")
-        b.wait_not_present(".pf-v5-c-chip-group__label:contains('Active state') + .pf-v5-c-chip-group__list li:contains('Not running')")
+        b.click(".pf-v6-c-label-group button[aria-label='Close Not running']")
+        b.wait_not_in_text(".pf-v6-c-label-group:contains('Active state')", "Not running")
         self.wait_service_not_present("test.service")
-        b.click(".pf-v5-c-chip-group:contains('Active state') .pf-v5-c-chip-group__close > button")
-        b.wait_not_present(".pf-v5-c-chip-group")
+        b.click(".pf-v6-c-label-group button[aria-label='Close Running']")
+        b.wait_not_present(".pf-v6-c-label-group")
 
+    @testlib.nondestructive
     def testTimer(self):
         self._testTimer(user=False)
 
+    @testlib.nondestructive
     def testTimerSession(self):
         self._testTimer(user=True)
 
-    def _testTimer(self, user):
+    def _testTimer(self, user: bool):
         m = self.machine
         b = self.browser
 
@@ -528,7 +552,7 @@ Unit=test.service
         self.write_file("/usr/local/lib/systemd/system/cockpit-system.timer",
                         """
 [Unit]
-Description=Not deleteable Timer
+Description=Not deletable Timer
 
 [Timer]
 OnCalendar=*:1/2
@@ -560,8 +584,8 @@ WantedBy=default.target
 
         # ensure we have one running timer; in user mode we do not have
         # a running logind session at this point yet, so enable instead
-        self.run_systemctl(user=False, cmd=("enable --global --runtime" if user else "start") + " deleteme.timer")
-        self.addCleanup(self.run_systemctl, user, "stop deleteme.timer || true")
+        self.run_systemctl(("enable --global --runtime" if user else "start") + " deleteme.timer")
+        self.addCleanup(self.run_systemctl, "stop deleteme.timer || true", user=user)
 
         # Select Timer tab
         self.login_and_go(f'/system/services#/{"?owner=user" if user else ""}')
@@ -575,7 +599,7 @@ WantedBy=default.target
         # timer from initial page/units load
         b.wait_in_text(self.svc_sel('deleteme.timer') + ' .service-unit-next-trigger', today)
         # timer gets updated on PropertiesChanged event
-        self.run_systemctl(user, "start test.timer")
+        self.run_systemctl("start test.timer", user=user)
         b.wait_in_text(self.svc_sel('test.timer') + ' .service-unit-next-trigger', today)  # next run
         b.wait_in_text(self.svc_sel('test.timer') + ' .service-unit-last-trigger', "unknown")  # last trigger
 
@@ -583,13 +607,13 @@ WantedBy=default.target
         self.goto_service("test.timer")
         b.wait_in_text('.service-unit-next-trigger', today)  # next run
         b.wait_in_text('.service-unit-last-trigger', "unknown")  # last trigger
-        b.click(".pf-v5-c-breadcrumb a:contains('Services')")
+        b.click(".pf-v6-c-breadcrumb a:contains('Services')")
 
-        self.run_systemctl(user, "stop test.timer")
+        self.run_systemctl("stop test.timer", user=user)
 
         b.wait_visible(self.svc_sel('test-onboot.timer'))
         b.wait_text(self.svc_sel('test-onboot.timer') + ' .service-unit-triggers', '')
-        self.run_systemctl(user, "start test-onboot.timer")
+        self.run_systemctl("start test-onboot.timer", user=user)
         # Check the next run. Since it triggers 200mins after the boot, it might be today or tomorrow
         # this is too racy to predict accurately
         today = m.execute("date '+%b %-d, %Y'").strip()
@@ -598,13 +622,13 @@ WantedBy=default.target
         b.wait_in_text(sel_next, ", ")
         self.assertRegex(b.text(sel_next), f"{today}|{tomorrow}")
         b.wait_in_text(self.svc_sel('test-onboot.timer') + ' .service-unit-last-trigger', "unknown")  # last trigger
-        self.run_systemctl(user, "stop test-onboot.timer")
+        self.run_systemctl("stop test-onboot.timer", user=user)
 
         if not user:
             self.goto_service("deleteme.timer")
             self.do_action("Delete")
             b.click("#delete-timer-modal-btn")
-            b.wait_not_present(".pf-v5-c-modal-box")
+            b.wait_not_present(".pf-v6-c-modal-box")
             self.wait_page_load()
             self.assertNotIn("deleteme", m.execute("systemctl list-timers"))
             m.execute(f"! test -f {path}/deleteme.service")
@@ -618,27 +642,31 @@ WantedBy=default.target
             b.set_layout("rtl")
             # wait for layout to settle
             time.sleep(1)
-            b.click(".service-top-panel button.pf-v5-c-menu-toggle")
-            b.wait_in_text(".service-top-panel .pf-v5-c-menu__list", "Disallow running")
+            b.click(".service-top-panel button.pf-v6-c-menu-toggle")
+            b.wait_in_text("#services-page .pf-v6-c-menu__list", "Disallow running")
             b.assert_pixels_in_current_layout("#service-details-unit", "services-kebabdropdown-rtl")
             # Close menu
-            b.click(".service-top-panel button.pf-v5-c-menu-toggle")
-            b.wait_not_present(".pf-v5-c-menu__list")
+            b.click(".service-top-panel button.pf-v6-c-menu-toggle")
+            b.wait_not_present(".pf-v6-c-menu__list")
             b.set_layout("desktop")
-            b.click(".service-top-panel button.pf-v5-c-menu-toggle")
-            b.wait_in_text(".service-top-panel .pf-v5-c-menu__list", "Disallow running")
+            b.click(".service-top-panel button.pf-v6-c-menu-toggle")
+            b.wait_in_text("#services-page .pf-v6-c-menu__list", "Disallow running")
             # check if our custom kebab menu renders properly
             b.assert_pixels("#service-details-unit", "services-kebabdropdown", skip_layouts=['rtl'])
-            b.wait_not_in_text(".service-top-panel .pf-v5-c-menu__list", "Delete")
-            b.click(".pf-v5-c-breadcrumb a:contains('Services')")
+            b.wait_not_in_text("#services-page .pf-v6-c-menu__list", "Delete")
+            b.click(".pf-v6-c-breadcrumb a:contains('Services')")
 
+    @testlib.nondestructive
+    @testlib.skipImage("TODO: fix for OpenSUSE", "opensuse-tumbleweed")
     def testServiceMetrics(self):
         self._testServiceMetrics(user=False)
 
+    @testlib.nondestructive
+    @testlib.skipImage("TODO: fix for OpenSUSE", "opensuse-tumbleweed")
     def testServiceMetricsSession(self):
         self._testServiceMetrics(user=True)
 
-    def _testServiceMetrics(self, user):
+    def _testServiceMetrics(self, user: bool):
         m = self.machine
         b = self.browser
 
@@ -657,16 +685,16 @@ Description=Mem Hog Service
 ExecStart=/bin/awk -f /tmp/mem-hog{params}.awk
 """)
 
-        self.run_systemctl(user, "daemon-reload")
+        self.run_systemctl("daemon-reload", user=user)
 
         # Check that MemoryCurrent is shown
         self.goto_service("mem-hog.service")
         b.wait_not_present("#memory")
         # In some distros systemctl is showing memory current as [Not Set] for user units
-        if not user or (m.image != "centos-8-stream" and not m.image.startswith("rhel-8-")):
-            self.run_systemctl(user, "start mem-hog.service")
+        if not user or not m.image.startswith("rhel-8-"):
+            self.run_systemctl("start mem-hog.service", user=user)
             # If the test fails before we stop mem-hog, the next test run will not get the correct memory usage here
-            self.addCleanup(self.run_systemctl, user, "stop mem-hog.service || true")
+            self.addCleanup(self.run_systemctl, "stop mem-hog.service || true", user=user)
             # initial memory detection takes very long especially on RHEL 8
             with b.wait_timeout(60):
                 b.wait_visible("#memory")
@@ -677,14 +705,16 @@ ExecStart=/bin/awk -f /tmp/mem-hog{params}.awk
             # MemoryCurrent auto-updates every 30s - when it updates the memory used should be ~50MiB
             with b.wait_timeout(60):
                 b.wait(lambda: float(b.text("#memory").split(" ")[0]) > 40)
-            self.run_systemctl(user, "stop mem-hog.service")
+            self.run_systemctl("stop mem-hog.service", user=user)
             b.wait_not_present("#memory")
         # Check that listen is not shown for .service units
         b.wait_not_present("#listen")
 
+    @testlib.nondestructive
     def testOtherTypes(self):
         self._testOtherTypes(user=False)
 
+    @testlib.nondestructive
     def testOtherTypesSession(self):
         self._testOtherTypes(user=True)
 
@@ -707,7 +737,7 @@ ExecStart=/bin/awk -f /tmp/mem-hog{params}.awk
             self.wait_service_present("ctrl-alt-del.target")
             self.goto_service("ctrl-alt-del.target")
             b.wait_in_text(".service-name", "Reboot")
-            b.click("#services-page .pf-v5-c-breadcrumb__link")
+            b.click("#services-page .pf-v6-c-breadcrumb__link")
 
         # Sockets tab
         self.pick_tab(3)
@@ -722,7 +752,7 @@ ExecStart=/bin/awk -f /tmp/mem-hog{params}.awk
         else:
             self.assertIn("/run/user/", b.text("#listen"))
         self.assertIn(b.text("#Triggers"), ["dbus.service", "dbus-broker.service"])
-        b.click(".pf-v5-c-breadcrumb a:contains('Services')")
+        b.click(".pf-v6-c-breadcrumb a:contains('Services')")
 
         # Paths tab - the test VM does not have any user path units
         if not user:
@@ -739,11 +769,11 @@ ExecStart=/bin/awk -f /tmp/mem-hog{params}.awk
     def testLogsUser(self):
         self._testLogs(user=True)
 
-    def _testLogs(self, user=False):
+    def _testLogs(self, user: bool = False):
         b = self.browser
         service_type = "user-service" if user else "service"
 
-        def append_user(url):
+        def append_user(url: str) -> str:
             if user:
                 return url + ("" if "#/" in url else "#/") + "?owner=user"
             return url
@@ -756,12 +786,12 @@ ExecStart=/bin/awk -f /tmp/mem-hog{params}.awk
         # Check test.service and then start it
         self.goto_service("test.service")
         self.check_service_off()
-        b.wait_text('.cockpit-log-panel .pf-v5-c-card__body', "No log entries")
+        b.wait_text('.cockpit-log-panel .pf-v6-c-card__body', "No log entries")
         self.toggle_onoff()
         self.check_service_on()
-        b.wait_in_text('.cockpit-log-panel .pf-v5-c-card__body', "START")
-        b.wait_in_text('.cockpit-log-panel .pf-v5-c-card__body', "WORKING")
-        b.click(".cockpit-log-panel .pf-v5-c-card__header button")
+        b.wait_in_text('.cockpit-log-panel .pf-v6-c-card__body', "START")
+        b.wait_in_text('.cockpit-log-panel .pf-v6-c-card__body', "WORKING")
+        b.click(".cockpit-log-panel .pf-v6-c-card__header button")
 
         b.enter_page("/system/logs")
         b.wait_in_text("#journal-box .cockpit-log-panel > div:nth-child(2)", "WORKING")
@@ -774,8 +804,8 @@ ExecStart=/bin/awk -f /tmp/mem-hog{params}.awk
         b.wait_in_text(".cockpit-logline:nth-child(2)", "WORKING")
         b.click(".cockpit-logline:nth-child(2)")
         b.enter_page("/system/logs")
-        b.wait_text(".pf-v5-c-card__title", "WORKING")
-        b.click(".pf-v5-c-breadcrumb li:contains('Logs')")
+        b.wait_text(".pf-v6-c-card__title", "WORKING")
+        b.click(".pf-v6-c-breadcrumb li:contains('Logs')")
         b.wait_val("#journal-grep input", f"priority:debug {service_type}:test.service ")
         b.go(append_user("/system/services#/test.service"))
         b.enter_page("/system/services")
@@ -787,6 +817,7 @@ ExecStart=/bin/awk -f /tmp/mem-hog{params}.awk
         b.enter_page("/system/services")
         b.wait_js_cond('window.location.hash === "' + append_user("#/test.service") + '"')
 
+    @testlib.nondestructive
     def testApi(self):
         b = self.browser
 
@@ -811,6 +842,7 @@ ExecStart=/bin/awk -f /tmp/mem-hog{params}.awk
         b.go('#/foo')
         b.wait_text('#exists', 'false')
 
+    @testlib.nondestructive
     def testConditions(self):
         m = self.machine
         b = self.browser
@@ -859,13 +891,15 @@ WantedBy=multi-user.target
         self.check_service_on(expect_reload=False)
         b.wait_not_present("#condition")
 
+    @testlib.nondestructive
     def testRelationships(self):
         self._testRelationships()
 
+    @testlib.nondestructive
     def testRelationshipsUser(self):
         self._testRelationships(user=True)
 
-    def _testRelationships(self, user=False):
+    def _testRelationships(self, user: bool = False):
         b = self.browser
 
         systemd_path = "/etc/systemd/user" if user else "/etc/systemd/system"
@@ -903,9 +937,9 @@ ExecStart=/bin/sh -c "while true; do sleep 5; done"
 """)
 
         # After writing files out tell systemd about them
-        self.run_systemctl(user, "daemon-reload || true")
+        self.run_systemctl("daemon-reload || true", user=user)
 
-        def rel_sel(reltype, service):
+        def rel_sel(reltype: str, service: str) -> str:
             return f"#{''.join(reltype.split(' '))} a:contains('{service}')"
 
         # services page
@@ -919,6 +953,7 @@ ExecStart=/bin/sh -c "while true; do sleep 5; done"
         usr_query_str = "?owner=user" if user else ""
 
         # service a
+        self.wait_page_load()
         b.wait_js_cond(f'window.location.hash === "#/test-a.service{usr_query_str}"')
         b.click("#service-details-show-relationships button")
         b.wait_visible(rel_sel("Before", "test-b.service"))
@@ -926,29 +961,38 @@ ExecStart=/bin/sh -c "while true; do sleep 5; done"
         b.click(rel_sel("Before", "test-b.service"))
 
         # service b
+        self.wait_page_load()
         b.wait_js_cond(f'window.location.hash === "#/test-b.service{usr_query_str}"')
+        b.wait_in_text(".pf-v6-c-breadcrumb__item:last-child", "test-b.service")
         b.click("#service-details-show-relationships button")
         b.wait_visible(rel_sel("After", "test-a.service"))
         b.click(rel_sel("After", "test-a.service"))
 
         # service a
+        self.wait_page_load()
         b.wait_js_cond(f'window.location.hash === "#/test-a.service{usr_query_str}"')
+        b.wait_in_text(".pf-v6-c-breadcrumb__item:last-child", "test-a.service")
         b.click("#service-details-show-relationships button")
         b.wait_visible(rel_sel("Conflicts", "test-c.service"))
         b.click(rel_sel("Conflicts", "test-c.service"))
 
         # service c
+        self.wait_page_load()
         b.wait_js_cond(f'window.location.hash === "#/test-c.service{usr_query_str}"')
+        b.wait_in_text(".pf-v6-c-breadcrumb__item:last-child", "test-c.service")
         b.click("#service-details-show-relationships button")
         b.wait_visible(rel_sel("Conflicts", "test-a.service"))
         b.wait_visible(rel_sel("Part of", "test-b.service"))
         b.click(rel_sel("Part of", "test-b.service"))
 
         # service b
+        self.wait_page_load()
         b.wait_js_cond(f'window.location.hash === "#/test-b.service{usr_query_str}"')
+        b.wait_in_text(".pf-v6-c-breadcrumb__item:last-child", "test-b.service")
         b.click("#service-details-show-relationships button")
         b.wait_visible(rel_sel("After", "test-a.service"))
 
+    @testlib.nondestructive
     def testNotFound(self):
         m = self.machine
         b = self.browser
@@ -977,6 +1021,7 @@ ExecStart=/bin/true
         b.click("#service-details-show-relationships button")
         b.wait_visible("#Requires a.pf-m-disabled:contains('not-found.service')")
 
+    @testlib.nondestructive
     def testResetFailed(self):
         m = self.machine
         b = self.browser
@@ -1010,7 +1055,8 @@ WantedBy=default.target
         self.toggle_onoff()
 
         self.check_service_details(["Failed to start", "Automatically starts"],
-                                   ["Start", "Clear 'Failed to start'", "Disallow running (mask)", "Pin unit"], enabled=True)
+                                   ["Start", "Clear 'Failed to start'", "Disallow running (mask)", "Pin unit"],
+                                   enabled=True)
 
         # Disabling should reset the "Failed to start" status
         self.wait_onoff(val=True)
@@ -1021,7 +1067,8 @@ WantedBy=default.target
         self.toggle_onoff()
 
         self.check_service_details(["Failed to start", "Automatically starts"],
-                                   ["Start", "Clear 'Failed to start'", "Disallow running (mask)", "Pin unit"], enabled=True)
+                                   ["Start", "Clear 'Failed to start'", "Disallow running (mask)", "Pin unit"],
+                                   enabled=True)
 
         # Just reset the failed status, but leave it enabled
         self.do_action("Clear")
@@ -1031,7 +1078,8 @@ WantedBy=default.target
 
         self.do_action("Start")
         self.check_service_details(["Failed to start", "Automatically starts"],
-                                   ["Start", "Clear 'Failed to start'", "Disallow running (mask)", "Pin unit"], enabled=True)
+                                   ["Start", "Clear 'Failed to start'", "Disallow running (mask)", "Pin unit"],
+                                   enabled=True)
 
         # Masking should also clear the failed status
         self.do_action("Disallow running (mask)")
@@ -1041,7 +1089,7 @@ WantedBy=default.target
     def count_failures(self):
         return int(self.machine.execute("systemctl --failed --plain --no-legend | wc -l"))
 
-    def check_system_menu_services_error(self, expected, pixel_label=None):
+    def check_system_menu_services_error(self, expected: bool, pixel_label: str | None = None):
         b = self.browser
         b.switch_to_top()
         if expected:
@@ -1057,6 +1105,7 @@ WantedBy=default.target
             b.click("#nav-system-item")
             b.set_layout("desktop")
 
+    @testlib.nondestructive
     def testNotifyFailed(self):
         m = self.machine
         b = self.browser
@@ -1094,7 +1143,8 @@ ExecStart=/usr/bin/false
 
         # Services tab should have icon
         # Aab-fail should be at the top, and have failed
-        b.wait_visible('a:contains("Services") .ct-exclamation-circle')
+        b.wait_text("a.pf-m-current", "Services")
+        b.wait_visible("a.pf-m-current .ct-exclamation-circle")
         b.wait_visible('tr[data-goto-unit="aab-fail.service"]')
         b.wait_visible('tr[data-goto-unit="aab-fail.service"] .service-unit-status:contains("Failed")')
 
@@ -1118,7 +1168,8 @@ ExecStart=/usr/bin/false
 
         if self.count_failures() == 0:
             # Services tab should not have icon
-            b.wait_not_present('a:contains("Services") .ct-exclamation-circle')
+            b.wait_text("a.pf-m-current", "Services")
+            b.wait_not_present("a.pf-m-current .ct-exclamation-circle")
 
             # Nav link should not have icon
             self.check_system_menu_services_error(expected=False)
@@ -1128,6 +1179,7 @@ ExecStart=/usr/bin/false
             b.wait_not_in_text(".system-health-events", "service has failed")
             b.wait_not_in_text(".system-health-events", "services have failed")
 
+    @testlib.nondestructive
     def testHiddenFailure(self):
         m = self.machine
         b = self.browser
@@ -1161,6 +1213,7 @@ Where=/fail
 
         self.allow_journal_messages(".*type=1400 audit(.*): avc:  denied  { create } .* comm=\"systemd\" name=\"fail\".*")
 
+    @testlib.nondestructive
     def testTransientUnits(self):
         m = self.machine
         b = self.browser
@@ -1187,29 +1240,34 @@ Where=/fail
         self.addCleanup(m.execute, "systemctl stop test-transient.service || true")
         self.wait_service_present("test-transient.service")
         self.goto_service("test-transient.service")
-        self.check_service_details(["Static", "Running"], ["Restart", "Stop", "Disallow running (mask)", "Pin unit"], enabled=False, onoff=False)
+        self.check_service_details(["Static", "Running"], ["Restart", "Stop", "Disallow running (mask)", "Pin unit"],
+                                   enabled=False, onoff=False)
 
         self.do_action("Stop")
 
-        b.wait_in_text(".pf-v5-c-empty-state", "Unit test-transient.service not found")
-        b.click("a:contains('View all services')")
+        b.wait_in_text(".pf-v6-c-empty-state", "Unit test-transient.service not found")
+        b.click("button:contains('View all services')")
         b.switch_to_top()
         b.wait_js_cond('window.location.pathname == "/system/services"')
 
+    @testlib.nondestructive
     def testServicesThemeConsistency(self):
         b = self.browser
 
         self.login_and_go("/system/services")
         self.wait_page_load()
 
-        b.wait_not_present("html.pf-v5-theme-dark")
+        b.wait_not_present("html.pf-v6-theme-dark")
         b.switch_to_top()
         b.open_superuser_dialog()
-        b.click(".pf-v5-c-modal-box:contains('Switch to limited access') button:contains('Limit access')")
+        b.wait_text(".pf-v6-c-modal-box__title-text", "Switch to limited access")
+        b.click(".pf-v6-c-modal-box button:contains('Limit access')")
+        b.wait_not_present(".pf-v6-c-modal-box")
         b.check_superuser_indicator("Limited access")
         b.enter_page("/system/services")
-        b.wait_not_present("html.pf-v5-theme-dark")
+        b.wait_not_present("html.pf-v6-theme-dark")
 
+    @testlib.nondestructive
     def testServicesFiltersURLConsistency(self):
         b = self.browser
 
@@ -1217,40 +1275,45 @@ Where=/fail
         self.login_and_go("/system/services#/?activestate=[\"Running\"]&filestate=[\"Disabled\"%2C\"Enabled\"]&name=test&type=service&owner=user")
         self.wait_page_load()
 
-        b.wait_visible(".pf-v5-c-chip-group:contains(Active state) li:contains(Running)")
-        b.wait_visible(".pf-v5-c-chip-group:contains(File state) li:contains(Disabled)")
-        b.wait_visible(".pf-v5-c-chip-group:contains(File state) li:contains(Enabled)")
+        b.wait_in_text(".pf-v6-c-label-group:contains('Active state')", "Running")
+        b.wait_in_text(".pf-v6-c-label-group:contains('File state')", "Disabled")
+        b.wait_in_text(".pf-v6-c-label-group:contains('File state')", "Enabled")
         b.wait_visible(".services-text-filter input[value=test]")
-        b.wait_visible(".pf-v5-c-nav__list a.pf-m-current:contains(Services)")
+        b.wait_visible(".pf-v6-c-nav__list a.pf-m-current:contains('Services')")
         b.wait_visible("#user.pf-m-selected")
         # there is no running "test" service
-        self.browser.wait_in_text(".pf-v5-c-empty-state", "No matching results")
+        self.browser.wait_in_text(".pf-v6-c-empty-state", "No matching results")
         # filter survives a reload, same URL
         b.reload()
         b.enter_page("/system/services")
-        self.browser.wait_in_text(".pf-v5-c-empty-state", "No matching results")
+        self.browser.wait_in_text(".pf-v6-c-empty-state", "No matching results")
 
         # Changing the UI filters should also affect the URL
         b.click("#system")
+        # key={owner} causes ServicesPageBody to fully unmount/remount;
+        # wait for the old toolbar to disappear (loading state), then reappear
+        b.wait_not_present("#user[aria-pressed='true']")
+        self.wait_page_load()
+        b.wait_visible("#services-text-filter input[value='test']")
         url = b.eval_js("window.location.hash")
         self.assertIn("owner=system", url)
 
         # Mass remove active state filters and check the URL
-        b.click(".pf-v5-c-chip-group:contains(Active state) .pf-v5-c-chip-group__close button")
-        b.wait_js_cond('window.location.hash == "#/?filestate=%5B%22Disabled%22%2C%22Enabled%22%5D&name=test&type=service&owner=system"')
+        b.click(".pf-v6-c-label-group button[aria-label='Close Running']")
+        b.wait_js_cond('window.location.hash == "#/?filestate=%5B%22Disabled%22%2C%22Enabled%22%5D&name=test&owner=system&type=service"')
 
-        b.click(".pf-v5-c-toolbar__content > .pf-v5-c-toolbar__item > button:contains('Clear all filters')")
-        b.wait_js_cond('window.location.hash == "#/?type=service&owner=system"')
+        b.click(".pf-v6-c-toolbar__content .pf-v6-c-toolbar__item > button:contains('Clear all filters')")
+        b.wait_js_cond('window.location.hash == "#/?owner=system&type=service"')
 
         # Test text input clear button
-        b.go('/system/services#/?name=test')
+        b.go('#/?name=test')
         b.wait_visible(".services-text-filter input[value=test]")
         b.click(".services-text-filter button")
         b.wait_js_cond('window.location.hash == "#/"')
 
         # ensure that there is at least one running service
         self.make_test_service("/etc/systemd/user")
-        self.run_systemctl(user=True, cmd="enable --now test.service")
+        self.run_systemctl("enable --now test.service", user=True)
         b.click("#user")
         self.wait_service_state("test.service", "active")
         self.wait_service_state("test.service", "Enabled")
@@ -1269,6 +1332,7 @@ Where=/fail
         self.assertNotIn("Not running", b.text(".services-list"))
         self.assertNotIn("Static", b.text(".services-list"))
 
+    @testlib.nondestructive
     def testAlias(self):
         m = self.machine
         b = self.browser
@@ -1297,7 +1361,7 @@ WantedBy=multi-user.target
 
         # overview: alias
         self.wait_service_present("flower-byanyothername.service")
-        if m.image.startswith("rhel-8") or m.image.startswith("centos-8"):
+        if m.image.startswith("rhel-8"):
             # old systemd does not have unit file state "alias" yet
             self.wait_service_in_panel("flower-byanyothername.service", "Enabled")
         else:
@@ -1315,16 +1379,17 @@ WantedBy=multi-user.target
         b.wait_in_text("#statuses", "Running")
         b.wait_in_text("#statuses", "Automatically starts")
         b.wait_in_text("#service-details-unit", "/etc/systemd/system/flower-rose.service")
-        b.wait_in_text('.cockpit-log-panel .pf-v5-c-card__body', "Perfume")
+        b.wait_in_text('.cockpit-log-panel .pf-v6-c-card__body', "Perfume")
 
         # details: alias
-        b.click(".pf-v5-c-breadcrumb a:contains('Services')")
+        b.click(".pf-v6-c-breadcrumb a:contains('Services')")
         self.goto_service("flower-byanyothername.service")
         b.wait_in_text("#statuses", "Running")
         b.wait_in_text("#statuses", "Automatically starts")
         b.wait_in_text("#service-details-unit", "/etc/systemd/system/flower-rose.service")
-        b.wait_in_text('.cockpit-log-panel .pf-v5-c-card__body', "Perfume")
+        b.wait_in_text('.cockpit-log-panel .pf-v6-c-card__body', "Perfume")
 
+    @testlib.nondestructive
     def testUnprivileged(self):
         b = self.browser
         m = self.machine
@@ -1349,27 +1414,216 @@ WantedBy=multi-user.target
         b.wait_in_text("#service-details-unit", "/etc/systemd/system/test.service")
         # unprivileged users cannot read the system journal on all OSes; only check it on Fedora, where we know it's allowed
         if m.image.startswith("fedora"):
-            b.wait_in_text('.cockpit-log-panel .pf-v5-c-card__body', "WORKING")
+            b.wait_in_text('.cockpit-log-panel .pf-v6-c-card__body', "WORKING")
         # reacts to changes
         m.execute("systemctl stop test.service")
         self.check_service_details(["Read-only", "Disabled"], [], enabled=False, onoff=False, kebab=False)
 
-
-@testlib.skipDistroPackage()
-class TestTimers(testlib.MachineCase):
-    def svc_sel(self, service):
-        return f'tr[data-goto-unit="{service}"]'
-
-    def wait_page_load(self):
-        self.browser.wait_not_present(".pf-v5-c-empty-state .pf-v5-c-spinner[aria-valuetext='Loading...']")
-
-    def testCreate(self):
+    @testlib.skipImage("no quadlet (pod) support", "rhel-8-10")
+    @testlib.nondestructive
+    def testQuadlets(self):
         m = self.machine
         b = self.browser
 
-        def wait_systemctl_timer(time):
-            with testvm.Timeout(seconds=20, machine=m, error_message="Timeout while waiting for systemctl list-timers"):
-                m.execute(f"cmd='systemctl list-timers'; until $cmd | grep -m 1 '{time}'; do sleep 1; done")
+        busybox_image = m.execute("podman images --format '{{.Repository}}' | grep busybox").strip()
+        container_service = f"""
+[Unit]
+Description=Podman container message-broker part of pod "has"
+After=local-fs.target
+
+[Container]
+Image={busybox_image}
+Exec=sleep infinity
+ContainerName=message-broker
+Pod=has.pod
+
+[Install]
+WantedBy=multi-user.target default.target
+"""
+
+        pod_service = """
+[Pod]
+PodName=has
+"""
+
+        self.addCleanup(m.execute, "systemctl daemon-reload")
+        self.write_file("/etc/containers/systemd/zigbee2mqtt.container", container_service)
+        self.write_file("/etc/containers/systemd/has.pod", pod_service)
+        self.addCleanup(m.execute, "systemctl stop has-pod")
+        m.execute("systemctl daemon-reload; systemctl start has-pod.service")
+        self.write_file("/usr/local/share/cockpit/podman/manifest.json", '{ "capabilities": ["service-filtering"] }')
+
+        self.login_and_go("/system/services")
+        self.wait_page_load()
+
+        self.wait_service_present("has-pod.service")
+        self.wait_service_state("has-pod.service", "active")
+        self.goto_service("has-pod.service")
+        b.wait_in_text(".pf-v6-c-breadcrumb", "has-pod.service")
+        b.wait_text("#container", "View Podman container")
+
+        self.login_and_go("/system/services")
+        self.wait_page_load()
+        self.wait_service_state("zigbee2mqtt.service", "active")
+        self.goto_service("zigbee2mqtt.service")
+        b.wait_in_text(".pf-v6-c-breadcrumb", "zigbee2mqtt.service")
+        b.wait_text("#container", "View Podman container")
+
+        m.write("/usr/local/share/cockpit/podman/manifest.json", '{}')
+        b.reload()
+        self.login_and_go("/system/services")
+        self.wait_page_load()
+        self.wait_service_state("zigbee2mqtt.service", "active")
+        self.goto_service("zigbee2mqtt.service")
+        b.wait_in_text(".pf-v6-c-breadcrumb", "zigbee2mqtt.service")
+        b.wait_not_in_text("#service-details-unit", "View Podman container")
+
+
+class TestTimers(testlib.MachineCase):
+    def svc_sel(self, service: str) -> str:
+        return f'tr[data-goto-unit="{service}"]'
+
+    def goto_service(self, service):
+        return self.browser.click(self.svc_sel(service) + ' a')
+
+    def wait_page_load(self):
+        self.browser.wait_not_present(".pf-v6-c-empty-state .pf-v6-c-spinner[aria-valuetext='Loading...']")
+
+    def _createTimers(self):
+        m = self.machine
+        b = self.browser
+
+        # creates a new yearly timer at 2036-01-01 16:00 and at 2037-01-01 01:22
+        b.click('#create-timer')
+        b.wait_visible("#timer-dialog")
+        b.set_input_text("#servicename", "yearly_timer")
+        b.set_input_text("#description", "Yearly timer")
+        b.set_input_text("#command", "/bin/date >> /tmp/date")
+        b.select_from_dropdown("#drop-repeat", "yearly")
+        b.click("[data-index='0'] [aria-label='Add']")
+        b.set_input_text("[data-index='0'] .pf-v6-c-date-picker:nth-child(1) input", "2036-01-01")
+        b.set_input_text("[data-index='0'] .pf-v6-c-date-picker:nth-child(2) input", "16:00")
+        b.set_input_text("[data-index='1'] .pf-v6-c-date-picker:nth-child(1) input", "2037-01-01")
+        b.set_input_text("[data-index='1'] .pf-v6-c-date-picker:nth-child(2) input", "01:22")
+        b.click("#timer-save-button")
+        b.wait_not_present("#timer-dialog")
+        b.wait_visible(self.svc_sel('yearly_timer.timer'))
+        b.wait_in_text(self.svc_sel('yearly_timer.timer'), "Yearly timer")
+
+        # creates a new monthly timer that runs on 6th at 14:12 and 8th at 21:12 of every month
+        b.click('#create-timer')
+        b.wait_visible("#timer-dialog")
+        b.set_input_text("#servicename", "monthly_timer")
+        b.set_input_text("#description", "Monthly timer")
+        b.set_input_text("#command", "/bin/date >> /tmp/date")
+        b.click("input[value=specific-time]")
+        b.select_from_dropdown("#drop-repeat", "monthly")
+        b.select_from_dropdown("[data-index='0'] .month-days select", "6")
+        b.set_input_text("[data-index='0'] .create-timer-time-picker input", "14:12")
+        b.click("[data-index='0'] [aria-label='Add']")
+        b.select_from_dropdown("[data-index='1'] .month-days select", "8")
+        b.set_input_text("[data-index='1'] .create-timer-time-picker input", "21:12")
+        b.click("#timer-save-button")
+        b.wait_not_present("#timer-dialog")
+        b.wait_visible(self.svc_sel('monthly_timer.timer'))
+        b.wait_in_text(self.svc_sel('monthly_timer.timer'), "Monthly timer")
+
+        # creates a new weekly timer that runs on Fri at 12:30 and Sun at 20:12 every week
+        b.click('#create-timer')
+        b.wait_visible("#timer-dialog")
+        b.set_input_text("#servicename", "weekly_timer")
+        b.set_input_text("#description", "Weekly timer")
+        b.set_input_text("#command", "/bin/date >> /tmp/date")
+        b.click("input[value=specific-time]")
+        b.select_from_dropdown("#drop-repeat", "weekly")
+        b.wait_visible("[data-index='0'] .week-days")
+        b.click("[data-index='0'] [aria-label='Add']")
+        b.select_from_dropdown("[data-index='0'] .week-days select", "fri")
+        # select time in TimePicker with mouse
+        b.select_PF("#timer-dialog [data-index='0'] .create-timer-time-picker input", "12:30")
+        # type time with keyboard
+        b.select_from_dropdown("[data-index='1'] .week-days select", "sun")
+        b.set_input_text("[data-index='1'] .create-timer-time-picker input", "20:12")
+        b.click("#timer-save-button")
+        b.wait_not_present("#timer-dialog")
+        b.wait_visible(self.svc_sel('weekly_timer.timer'))
+        b.wait_in_text(self.svc_sel('weekly_timer.timer'), "Weekly timer")
+
+        # creates a new daily timer that runs at 2:40 and at 21:15 every day
+        b.click('#create-timer')
+        b.wait_visible("#timer-dialog")
+        b.set_input_text("#servicename", "daily_timer")
+        b.set_input_text("#description", "Daily timer")
+        b.set_input_text("#command", "/bin/date >> /tmp/date")
+        b.click("input[value=specific-time]")
+        b.select_from_dropdown("#drop-repeat", "daily")
+        b.click("[data-index='0'] [aria-label='Add']")
+        b.set_input_text("[data-index='0'] .create-timer-time-picker input", "2:40")
+        b.set_input_text("[data-index='1'] .create-timer-time-picker input", "21:15")
+        b.click("#timer-save-button")
+        b.wait_not_present("#timer-dialog")
+        b.wait_visible(self.svc_sel('daily_timer.timer'))
+        b.wait_in_text(self.svc_sel('daily_timer.timer'), "Daily timer")
+
+        # creates a new houry timer that runs at *:05 and at *:26
+        b.click('#create-timer')
+        b.wait_visible("#timer-dialog")
+        b.set_input_text("#servicename", "hourly_timer")
+        b.set_input_text("#description", "Hourly timer")
+        b.set_input_text("#command", "/bin/date >> /tmp/date")
+        b.click("input[value=specific-time]")
+        b.select_from_dropdown("#drop-repeat", "hourly")
+        b.click("[data-index='0'] [aria-label='Add']")
+        b.set_input_text("[data-index='0'] input", "05")
+        b.set_input_text("[data-index='1'] input", "26")
+        b.click("#timer-save-button")
+        b.wait_not_present("#timer-dialog")
+        b.wait_visible(self.svc_sel('hourly_timer.timer'))
+        b.wait_in_text(self.svc_sel('hourly_timer.timer'), "Hourly timer")
+
+        # creates a new minutely timer that runs at *:*:05 and at *:*:20
+        b.click('#create-timer')
+        b.wait_visible("#timer-dialog")
+        b.set_input_text("#servicename", "minutely_timer")
+        b.set_input_text("#description", "Minutely timer")
+        b.set_input_text("#command", "/bin/date >> /tmp/date")
+        b.select_from_dropdown("#drop-repeat", "minutely")
+        b.click("[data-index='0'] [aria-label='Add']")
+        b.set_input_text("[data-index='0'] input", "05")
+        b.set_input_text("[data-index='1'] input", "20")
+        b.click("#timer-save-button")
+        b.wait_not_present("#timer-dialog")
+        b.wait_visible(self.svc_sel('minutely_timer.timer'))
+        b.wait_in_text(self.svc_sel('minutely_timer.timer'), "Minutely timer")
+
+        # creates a new timer that runs on 2036-04-10 at 23:59
+        m.execute("timedatectl set-time '2036-04-10 04:10:00'")
+        b.click('#create-timer')
+        b.wait_visible("#timer-dialog")
+        b.set_input_text("#servicename", "no_repeat_timer")
+        b.set_input_text("#description", "No repeat timer")
+        b.set_input_text("#command", "/bin/date >> /tmp/date")
+        b.click("input[value=specific-time]")
+        b.set_input_text(".create-timer-time-picker input", "23:59")
+        b.click("#timer-save-button")
+        b.wait_not_present("#timer-dialog")
+        b.wait_visible(self.svc_sel('no_repeat_timer.timer'))
+        b.wait_in_text(self.svc_sel('no_repeat_timer.timer'), "No repeat timer")
+
+        # creates a boot timer that runs after 10 sec from boot
+        b.click('#create-timer')
+        b.wait_visible("#timer-dialog")
+        b.set_input_text("#servicename", "boot_timer")
+        b.set_input_text("#description", "Boot timer")
+        b.set_input_text("#command", "echo hello >> /tmp/hello")
+        b.click("input[value=system-boot]")
+        b.set_input_text(".delay-group input", "2")
+        b.click("#timer-save-button")
+        b.wait_not_present("#timer-dialog")
+        b.wait_visible(self.svc_sel('boot_timer.timer'))
+
+    def _prepareTimerTest(self):
+        m = self.machine
 
         # HACK: pmie and pmlogger take a looooong time to shutdown (https://bugzilla.redhat.com/show_bug.cgi?id=1703348)
         # so disable them for this test, we don't test PCP here
@@ -1384,9 +1638,23 @@ class TestTimers(testlib.MachineCase):
         testlib.wait(lambda: "false" in m.execute(
             "busctl get-property org.freedesktop.timedate1 /org/freedesktop/timedate1 org.freedesktop.timedate1 NTP"))
         m.execute("timedatectl set-time '2036-01-01 12:00:00'")
-        m.reboot()
+        # this sometimes confuses PAM session tracking
+        self.allow_journal_messages("cockpit-session: admin: couldn't close session: System error: Unknown error -7")
+        self.reboot()
 
         m.execute("timedatectl set-time '2036-01-01 15:30:00'")
+
+    def testCreate(self):
+        m = self.machine
+        b = self.browser
+
+        def wait_systemctl_timer(time: str):
+            with testvm.Timeout(seconds=20, machine=m,
+                                error_message="Timeout while waiting for systemctl list-timers"):
+                m.execute(f"cmd='systemctl list-timers'; until $cmd | grep -m 1 '{time}'; do sleep 1; done")
+
+        self._prepareTimerTest()
+
         self.login_and_go("/system/services")
         self.wait_page_load()
         # Select "Timers" tab
@@ -1395,7 +1663,7 @@ class TestTimers(testlib.MachineCase):
         b.wait_visible("#timer-dialog")
         b.set_input_text("#servicename", "testing timer")
         m.execute("rm -f /tmp/date")
-        b.set_input_text("#command", "/bin/sh -c '/bin/date >> /tmp/date'")
+        b.set_input_text("#command", "/bin/date >> /tmp/date")
         b.click("input[value=specific-time]")
         b.set_input_text(".create-timer-time-picker input", "24:6s")
         b.click("#timer-save-button")
@@ -1403,70 +1671,41 @@ class TestTimers(testlib.MachineCase):
         # checks for invalid input messages
         b.wait_text("#servicename-helper", "Only alphabets, numbers, : , _ , . , @ , - are allowed")
         b.wait_text("#description-helper", "This field cannot be empty")
-        b.wait_text(".pf-v5-c-date-picker__helper-text", "Invalid time format")
+        b.wait_text(".pf-v6-c-date-picker__helper-text", "Invalid time format")
 
-        # checks for command not found
+        # correct input
         b.set_input_text("#servicename", "testing")
         b.set_input_text("#description", "desc")
-        b.set_input_text("#command", "this is not found")
         b.set_input_text(".create-timer-time-picker input", "14:12")
-        b.click("#timer-save-button")
-
-        b.wait_text("#command-helper", "Command not found")
-
-        # creates a new yearly timer at 2036-01-01 16:00 and at 2037-01-01 01:22
-        b.set_input_text("#servicename", "yearly_timer")
-        b.set_input_text("#description", "Yearly timer")
-        b.set_input_text("#command", "/bin/sh -c '/bin/date >> /tmp/date'")
-        b.select_from_dropdown("#drop-repeat", "yearly")
-        b.click("[data-index='0'] [aria-label='Add']")
-        b.set_input_text("[data-index='0'] .pf-v5-c-date-picker:nth-child(1) input", "2036-01-01")
-        b.set_input_text("[data-index='0'] .pf-v5-c-date-picker:nth-child(2) input", "16:00")
-        b.set_input_text("[data-index='1'] .pf-v5-c-date-picker:nth-child(1) input", "2037-01-01")
-        b.set_input_text("[data-index='1'] .pf-v5-c-date-picker:nth-child(2) input", "01:22")
 
         # shows creation errors
+        b.set_input_text("#command", "/bin/date >> /tmp/date")
+        b.click("input[value=specific-time]")
+        b.set_input_text(".create-timer-time-picker input", "23:59")
         m.execute("chattr +i /etc/systemd/system")
         try:
             b.click("#timer-save-button")
-            b.wait_in_text("#timer-dialog .pf-v5-c-alert", "Timer creation failed")
-            b.wait_in_text("#timer-dialog .pf-v5-c-alert", "Not permitted")
+            b.wait_in_text("#timer-dialog .pf-v6-c-alert", "Timer creation failed")
+            b.wait_in_text("#timer-dialog .pf-v6-c-alert", "Not permitted")
         finally:
             m.execute("chattr -i /etc/systemd/system")
 
-        b.click("#timer-save-button")
+        b.click("#timer-dialog-close-button")
         b.wait_not_present("#timer-dialog")
-        b.wait_visible(self.svc_sel('yearly_timer.timer'))
 
+        self._createTimers()
+
+        # check yearly timer
         m.execute("timedatectl set-time '2036-01-01 15:30:00'")
-        b.wait_visible(self.svc_sel('yearly_timer.timer'))
-        b.wait_in_text(self.svc_sel('yearly_timer.timer'), "Yearly timer")
         wait_systemctl_timer("2036-01-01 16:00")
         self.assertIn("2036-01-01 16:00", m.execute("systemctl list-timers"))
         m.execute("timedatectl set-time '2036-01-01 16:10:00'")
         # checks if yearly timer repeats yearly on 2037-01-01 01:22
         wait_systemctl_timer("2037-01-01 01:22")
         self.assertIn("2037-01-01 01:22", m.execute("systemctl list-timers"))
-        # creates a new monthly timer that runs on 6th at 14:12 and 8th at 21:12 of every month
-        b.click('#create-timer')
-        b.wait_visible("#timer-dialog")
-        b.set_input_text("#servicename", "monthly_timer")
-        b.set_input_text("#description", "Monthly timer")
-        b.set_input_text("#command", "/bin/sh -c '/bin/date >> /tmp/date'")
-        b.click("input[value=specific-time]")
-        b.select_from_dropdown("#drop-repeat", "monthly")
-        b.select_from_dropdown("[data-index='0'] .month-days select", "6")
-        b.set_input_text("[data-index='0'] .create-timer-time-picker input", "14:12")
-        b.click("[data-index='0'] [aria-label='Add']")
-        b.select_from_dropdown("[data-index='1'] .month-days select", "8")
-        b.set_input_text("[data-index='1'] .create-timer-time-picker input", "21:12")
-        b.click("#timer-save-button")
-        b.wait_not_present("#timer-dialog")
-        b.wait_visible(self.svc_sel('monthly_timer.timer'))
 
+        # check monthly timer
         m.execute("timedatectl set-time '2036-01-01 16:15:00'")
-        b.wait_visible(self.svc_sel('monthly_timer.timer'))
-        b.wait_in_text(self.svc_sel('monthly_timer.timer'), "Monthly timer")
         wait_systemctl_timer("2036-01-06 14:12")
         self.assertIn("2036-01-06 14:12", m.execute("systemctl list-timers"))
         m.execute("timedatectl set-time '2036-01-07 00:00:00'")
@@ -1480,57 +1719,24 @@ class TestTimers(testlib.MachineCase):
         m.execute("timedatectl set-time '2036-03-07 00:00:00'")
         wait_systemctl_timer("2036-03-08 21:12")
         self.assertIn("2036-03-08 21:12", m.execute("systemctl list-timers"))
-        # creates a new weekly timer that runs on Fri at 12:45 and Sun at 20:12 every week
-        b.click('#create-timer')
-        b.wait_visible("#timer-dialog")
-        b.set_input_text("#servicename", "weekly_timer")
-        b.set_input_text("#description", "Weekly timer")
-        b.set_input_text("#command", "/bin/sh -c '/bin/date >> /tmp/date'")
-        b.click("input[value=specific-time]")
-        b.select_from_dropdown("#drop-repeat", "weekly")
-        b.wait_visible("[data-index='0'] .week-days")
-        b.click("[data-index='0'] [aria-label='Add']")
-        b.select_from_dropdown("[data-index='0'] .week-days select", "fri")
-        b.set_input_text("[data-index='0'] .create-timer-time-picker input", "12:45")
-        b.select_from_dropdown("[data-index='1'] .week-days select", "sun")
-        b.set_input_text("[data-index='1'] .create-timer-time-picker input", "20:12")
-        b.click("#timer-save-button")
-        b.wait_not_present("#timer-dialog")
-        b.wait_visible(self.svc_sel('weekly_timer.timer'))
 
+        # check weekly timer
         m.execute("timedatectl set-time '2036-03-08 00:00:00'")
-        b.wait_visible(self.svc_sel('weekly_timer.timer'))
-        b.wait_in_text(self.svc_sel('weekly_timer.timer'), "Weekly timer")
         wait_systemctl_timer("Sun 2036-03-09 20:12")
         self.assertIn("Sun 2036-03-09 20:12", m.execute("systemctl list-timers"))
         m.execute("timedatectl set-time '2036-03-10 00:00:00'")
-        wait_systemctl_timer("Fri 2036-03-14 12:45")
-        self.assertIn("Fri 2036-03-14 12:45", m.execute("systemctl list-timers"))
+        wait_systemctl_timer("Fri 2036-03-14 12:30")
+        self.assertIn("Fri 2036-03-14 12:30", m.execute("systemctl list-timers"))
         # checks if timer runs on next week's Friday and Sunday
         m.execute("timedatectl set-time '2036-03-15 00:00:00'")
         wait_systemctl_timer("Sun 2036-03-16 20:12")
         self.assertIn("Sun 2036-03-16 20:12", m.execute("systemctl list-timers"))
         m.execute("timedatectl set-time '2036-03-17 00:00:00'")
-        wait_systemctl_timer("Fri 2036-03-21 12:45")
-        self.assertIn("Fri 2036-03-21 12:45", m.execute("systemctl list-timers"))
-        # creates a new daily timer that runs at 2:40 and at 21:15 every day
-        b.click('#create-timer')
-        b.wait_visible("#timer-dialog")
-        b.set_input_text("#servicename", "daily_timer")
-        b.set_input_text("#description", "Daily timer")
-        b.set_input_text("#command", "/bin/sh -c '/bin/date >> /tmp/date'")
-        b.click("input[value=specific-time]")
-        b.select_from_dropdown("#drop-repeat", "daily")
-        b.click("[data-index='0'] [aria-label='Add']")
-        b.set_input_text("[data-index='0'] .create-timer-time-picker input", "2:40")
-        b.set_input_text("[data-index='1'] .create-timer-time-picker input", "21:15")
-        b.click("#timer-save-button")
-        b.wait_not_present("#timer-dialog")
-        b.wait_visible(self.svc_sel('daily_timer.timer'))
+        wait_systemctl_timer("Fri 2036-03-21 12:30")
+        self.assertIn("Fri 2036-03-21 12:30", m.execute("systemctl list-timers"))
 
+        # check daily timer
         m.execute("timedatectl set-time '2036-03-17 00:00:00'")
-        b.wait_visible(self.svc_sel('daily_timer.timer'))
-        b.wait_in_text(self.svc_sel('daily_timer.timer'), "Daily timer")
         wait_systemctl_timer("2036-03-17 02:40")
         self.assertIn("2036-03-17 02:40", m.execute("systemctl list-timers"))
         m.execute("timedatectl set-time '2036-03-17 03:00:00'")
@@ -1543,24 +1749,9 @@ class TestTimers(testlib.MachineCase):
         m.execute("timedatectl set-time '2036-04-10 03:00:00'")
         wait_systemctl_timer("2036-04-10 21:15")
         self.assertIn("2036-04-10 21:15", m.execute("systemctl list-timers"))
-        # creates a new houry timer that runs at *:05 and at *:26
-        b.click('#create-timer')
-        b.wait_visible("#timer-dialog")
-        b.set_input_text("#servicename", "hourly_timer")
-        b.set_input_text("#description", "Hourly timer")
-        b.set_input_text("#command", "/bin/sh -c '/bin/date >> /tmp/date'")
-        b.click("input[value=specific-time]")
-        b.select_from_dropdown("#drop-repeat", "hourly")
-        b.click("[data-index='0'] [aria-label='Add']")
-        b.set_input_text("[data-index='0'] input", "05")
-        b.set_input_text("[data-index='1'] input", "26")
-        b.click("#timer-save-button")
-        b.wait_not_present("#timer-dialog")
-        b.wait_visible(self.svc_sel('hourly_timer.timer'))
 
+        # check hourly timer
         m.execute("timedatectl set-time '2036-04-10 03:00:00'")
-        b.wait_visible(self.svc_sel('hourly_timer.timer'))
-        b.wait_in_text(self.svc_sel('hourly_timer.timer'), "Hourly timer")
         wait_systemctl_timer("2036-04-10 03:05")
         self.assertIn("2036-04-10 03:05", m.execute("systemctl list-timers"))
         m.execute("timedatectl set-time '2036-04-10 03:07:00'")
@@ -1574,65 +1765,164 @@ class TestTimers(testlib.MachineCase):
         wait_systemctl_timer("2036-04-10 04:26")
         self.assertIn("2036-04-10 04:26", m.execute("systemctl list-timers"))
 
-        # creates a new minutely timer that runs at *:*:05 and at *:*:20
-        b.click('#create-timer')
-        b.wait_visible("#timer-dialog")
-        b.set_input_text("#servicename", "minutely_timer")
-        b.set_input_text("#description", "Minutely timer")
-        b.set_input_text("#command", "/bin/sh -c '/bin/date >> /tmp/date'")
-        b.select_from_dropdown("#drop-repeat", "minutely")
-        b.click("[data-index='0'] [aria-label='Add']")
-        b.set_input_text("[data-index='0'] input", "05")
-        b.set_input_text("[data-index='1'] input", "20")
-        b.click("#timer-save-button")
-        b.wait_not_present("#timer-dialog")
-        b.wait_visible(self.svc_sel('minutely_timer.timer'))
-
+        # check minutely timer
         m.execute("timedatectl set-time '2036-04-10 04:15:07'")
-        b.wait_visible(self.svc_sel('minutely_timer.timer'))
-        b.wait_in_text(self.svc_sel('minutely_timer.timer'), "Minutely timer")
         wait_systemctl_timer("2036-04-10 04:15:20")
         self.assertIn("2036-04-10 04:15:20", m.execute("systemctl list-timers | grep minutely_timer.timer"))
         m.execute("timedatectl set-time '2036-04-10 04:15:55'")
         wait_systemctl_timer("2036-04-10 04:16:05")
         self.assertIn("2036-04-10 04:16:05", m.execute("systemctl list-timers | grep minutely_timer.timer"))
 
-        # creates a new timer that runs at today at 23:59
-        b.click('#create-timer')
-        b.wait_visible("#timer-dialog")
-        b.set_input_text("#servicename", "no_repeat_timer")
-        b.set_input_text("#description", "No repeat timer")
-        b.set_input_text("#command", "/bin/sh -c '/bin/date >> /tmp/date'")
-        b.click("input[value=specific-time]")
-        b.set_input_text(".create-timer-time-picker input", "23:59")
-        b.click("#timer-save-button")
-        b.wait_not_present("#timer-dialog")
-        b.wait_visible(self.svc_sel('no_repeat_timer.timer'))
-        b.wait_in_text(self.svc_sel('no_repeat_timer.timer'), "No repeat timer")
-
+        # check one-off timer
         m.execute("timedatectl set-time '2036-04-10 04:10:00'")
-        b.wait_visible(self.svc_sel('no_repeat_timer.timer'))
         wait_systemctl_timer("2036-04-10 23:59")
         self.assertIn("2036-04-10 23:59", m.execute("systemctl list-timers"))
 
-        # creates a boot timer that runs after 10 sec from boot
-        b.click('#create-timer')
-        b.wait_visible("#timer-dialog")
-        b.set_input_text("#servicename", "boot_timer")
-        b.set_input_text("#description", "Boot timer")
-        b.set_input_text("#command", "/bin/sh -c 'echo hello >> /tmp/hello'")
-        b.click("input[value=system-boot]")
-        b.set_input_text(".delay-group input", "2")
-        b.click("#timer-save-button")
-        b.wait_not_present("#timer-dialog")
-        b.wait_visible(self.svc_sel('boot_timer.timer'))
-        m.reboot()
+        # check boot timer
+        self.reboot()
         m.start_cockpit()
         with testvm.Timeout(seconds=15, machine=m, error_message="Timeout while waiting for boot timer to run"):
             m.execute("while [ ! -f /tmp/hello ] ; do sleep 0.5; done")
         self.assertIn("hello", m.execute("cat /tmp/hello"))
 
-        self.allow_restart_journal_messages()
+    def testEdit(self):
+        b = self.browser
+        m = self.machine
+
+        self._prepareTimerTest()
+
+        self.login_and_go("/system/services")
+        self.wait_page_load()
+        # Select "Timers" tab
+        self.browser.click('#services-filter li:nth-child(4) a')
+
+        self._createTimers()
+
+        # Create a non-Cockpit-managed timer
+        self.write_file("/etc/systemd/system/non-cockpit.timer",
+                        """
+[Unit]
+Description=Test Timer
+
+[Timer]
+OnCalendar=weekly
+""")
+        m.execute("systemctl daemon-reload")
+
+        # There should be a "Delete" action for it, but not "Edit".
+        self.goto_service("non-cockpit.timer")
+        b.click(".service-top-panel button.pf-v6-c-menu-toggle")
+        b.wait_visible("#services-page .pf-v6-c-menu__list-item:contains('Delete') button")
+        b.wait_not_present("#services-page .pf-v6-c-menu__list-item:contains('Edit') button")
+
+        b.go("/system/services#/?type=timer&owner=system")
+        self.wait_page_load()
+
+        # edit yearly timer
+        self.goto_service("yearly_timer.timer")
+        b.click(".service-top-panel button.pf-v6-c-menu-toggle")
+        b.click("#services-page .pf-v6-c-menu__list-item:contains('Edit') button")
+        self.assertEqual(b.val("#servicename"), "yearly_timer")
+        self.assertEqual(b.val("#description"), "Yearly timer")
+        self.assertEqual(b.val("#command"), "/bin/date >> /tmp/date")
+        for index in range(2):
+            date = b.val(f"[data-index='{index}'] .pf-v6-c-date-picker:nth-child(1) input")
+            time_ = b.val(f"[data-index='{index}'] .pf-v6-c-date-picker:nth-child(2) input")
+            self.assertEqual(date, "2036-01-01")  # the specific year is irrelevant
+            self.assertIn(time_, ("01:22", "16:00"))
+
+        # edit values, then save and check again
+        b.set_input_text("[data-index='0'] .pf-v6-c-date-picker:nth-child(1) input", "2036-08-01")
+        b.set_input_text("[data-index='0'] .pf-v6-c-date-picker:nth-child(2) input", "18:00")
+        b.set_input_text("[data-index='1'] .pf-v6-c-date-picker:nth-child(1) input", "2037-10-01")
+        b.set_input_text("[data-index='1'] .pf-v6-c-date-picker:nth-child(2) input", "01:22")
+        b.click("#timer-save-button")
+        b.wait_not_present("#timer-dialog")
+
+        b.click(".service-top-panel button.pf-v6-c-menu-toggle")
+        b.click("#services-page .pf-v6-c-menu__list-item:contains('Edit') button")
+        for index in range(2):
+            date = b.val(f"[data-index='{index}'] .pf-v6-c-date-picker:nth-child(1) input")
+            time_ = b.val(f"[data-index='{index}'] .pf-v6-c-date-picker:nth-child(2) input")
+            self.assertIn((date, time_), (("2036-10-01", "01:22"), ("2036-08-01", "18:00")))
+
+        b.go("/system/services#/?type=timer&owner=system")
+        self.wait_page_load()
+
+        # edit monthly timer
+        self.goto_service("monthly_timer.timer")
+        b.click(".service-top-panel button.pf-v6-c-menu-toggle")
+        b.click("#services-page .pf-v6-c-menu__list-item:contains('Edit') button")
+        for index in range(2):
+            day = b.val(f"[data-index='{index}'] .month-days select")
+            time_ = b.val(f"[data-index='{index}'] .create-timer-time-picker input")
+            self.assertIn((day, time_), (("6", "14:12"), ("8", "21:12")))
+
+        b.go("/system/services#/?type=timer&owner=system")
+        self.wait_page_load()
+
+        # edit weekly timer
+        self.goto_service("weekly_timer.timer")
+        b.click(".service-top-panel button.pf-v6-c-menu-toggle")
+        b.click("#services-page .pf-v6-c-menu__list-item:contains('Edit') button")
+        for index in range(2):
+            day = b.val(f"[data-index='{index}'] .week-days select")
+            time_ = b.val(f"[data-index='{index}'] .create-timer-time-picker input")
+            self.assertIn((day, time_), (("fri", "12:30"), ("sun", "20:12")))
+
+        b.go("/system/services#/?type=timer&owner=system")
+        self.wait_page_load()
+
+        # edit daily timer
+        self.goto_service("daily_timer.timer")
+        b.click(".service-top-panel button.pf-v6-c-menu-toggle")
+        b.click("#services-page .pf-v6-c-menu__list-item:contains('Edit') button")
+        for index in range(2):
+            time_ = b.val(f"[data-index='{index}'] .create-timer-time-picker input")
+            self.assertIn(time_, ("02:40", "21:15"))
+
+        b.go("/system/services#/?type=timer&owner=system")
+        self.wait_page_load()
+
+        # edit hourly timer
+        self.goto_service("hourly_timer.timer")
+        b.click(".service-top-panel button.pf-v6-c-menu-toggle")
+        b.click("#services-page .pf-v6-c-menu__list-item:contains('Edit') button")
+        for index in range(2):
+            time_ = b.val(f"[data-index='{index}'] input")
+            self.assertIn(time_, ("05", "26"))
+
+        b.go("/system/services#/?type=timer&owner=system")
+        self.wait_page_load()
+
+        # edit minutely timer
+        self.goto_service("minutely_timer.timer")
+        b.click(".service-top-panel button.pf-v6-c-menu-toggle")
+        b.click("#services-page .pf-v6-c-menu__list-item:contains('Edit') button")
+        for index in range(2):
+            time_ = b.val(f"[data-index='{index}'] input")
+            self.assertIn(time_, ("05", "20"))
+
+        b.go("/system/services#/?type=timer&owner=system")
+        self.wait_page_load()
+
+        # edit one-off timer
+        self.goto_service("no_repeat_timer.timer")
+        b.click(".service-top-panel button.pf-v6-c-menu-toggle")
+        b.click("#services-page .pf-v6-c-menu__list-item:contains('Edit') button")
+        self.assertEqual(b.val(".create-timer-time-picker input"), "23:59")
+
+        b.go("/system/services#/?type=timer&owner=system")
+        self.wait_page_load()
+
+        # edit on-boot timer
+        self.goto_service("boot_timer.timer")
+        b.click(".service-top-panel button.pf-v6-c-menu-toggle")
+        b.click("#services-page .pf-v6-c-menu__list-item:contains('Edit') button")
+        self.assertEqual(b.val(".delay-group input"), "2")
+
+        b.go("/system/services#/?type=timer&owner=system")
+        self.wait_page_load()
 
 
 if __name__ == '__main__':

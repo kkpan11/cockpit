@@ -1,4 +1,5 @@
-import path from 'path';
+import fs from 'node:fs';
+import path from 'node:path';
 
 const info = {
     entries: [
@@ -16,7 +17,7 @@ const info = {
         "playground/metrics.js",
         "playground/pkgs.js",
         "playground/plot.js",
-        "playground/react-patterns.js",
+        "playground/react-patterns.tsx",
         "playground/service.js",
         "playground/speed.js",
         "playground/test.js",
@@ -24,9 +25,13 @@ const info = {
         "playground/preloaded.js",
         "playground/notifications-receiver.js",
         "playground/journal.jsx",
+        "playground/remote.tsx",
+        "playground/terminal.tsx",
+        "playground/packagemanager.tsx",
+        "playground/dialog.tsx",
 
         "selinux/selinux.js",
-        "shell/shell.js",
+        "shell/shell.jsx",
         "sosreport/sosreport.jsx",
         "static/login.js",
         "storaged/storaged.jsx",
@@ -42,46 +47,53 @@ const info = {
     ],
 
     tests: [
-        "base1/test-base64",
-        "base1/test-browser-storage",
-        "base1/test-cache",
-        "base1/test-chan",
-        "base1/test-dbus-address",
-        "base1/test-dbus-framed",
-        "base1/test-dbus",
-        "base1/test-echo",
-        "base1/test-events",
-        "base1/test-external",
-        "base1/test-file",
-        "base1/test-format",
-        "base1/test-framed-cache",
-        "base1/test-framed",
-        "base1/test-http",
-        "base1/test-journal-renderer",
-        "base1/test-locale",
-        "base1/test-location",
-        "base1/test-metrics",
-        "base1/test-no-jquery",
-        "base1/test-permissions",
-        "base1/test-promise",
-        "base1/test-protocol",
-        "base1/test-series",
-        "base1/test-spawn-proc",
-        "base1/test-spawn",
-        "base1/test-stream",
-        "base1/test-user",
-        "base1/test-utf8",
-        "base1/test-websocket",
+        "base1/test-base64.js",
+        "base1/test-browser-storage.js",
+        "base1/test-cache.js",
+        "base1/test-chan.js",
+        "base1/test-channel.ts",
+        "base1/test-dbus-address.js",
+        "base1/test-dbus-framed.js",
+        "base1/test-dbus.js",
+        "base1/test-echo.js",
+        "base1/test-events.js",
+        "base1/test-external.ts",
+        "base1/test-file.ts",
+        "base1/test-format.ts",
+        "base1/test-framed-cache.js",
+        "base1/test-framed.js",
+        "base1/test-fsinfo.ts",
+        "base1/test-http.js",
+        "base1/test-info.ts",
+        "base1/test-journal-renderer.js",
+        "base1/test-locale.js",
+        "base1/test-location.js",
+        "base1/test-metrics.js",
+        "base1/test-path.ts",
+        "base1/test-permissions.js",
+        "base1/test-promise.ts",
+        "base1/test-protocol.ts",
+        "base1/test-series.js",
+        "base1/test-spawn-proc.ts",
+        "base1/test-spawn.js",
+        "base1/test-stream.ts",
+        "base1/test-timeformat.ts",
+        "base1/test-types.ts",
+        "base1/test-user.js",
+        "base1/test-websocket.js",
+        "base1/test-import-json.ts",
 
-        "kdump/test-config-client",
+        "kdump/test-config-client.js",
 
-        "networkmanager/test-utils",
+        "networkmanager/test-utils.js",
 
-        "shell/machines/test-machines",
+        "shell/machines/test-machines.js",
 
-        "storaged/test-util",
+        "storaged/test-util.js",
     ],
 
+    // esbuild will already copy assets that are explicitly imported from JavaScript.
+    // The others (top-level files, images, etc.) need to be listed explicitly
     files: [
         "apps/index.html",
         "apps/default.png",
@@ -109,6 +121,10 @@ const info = {
         "playground/preloaded.html",
         "playground/notifications-receiver.html",
         "playground/journal.html",
+        "playground/remote.html",
+        "playground/terminal.html",
+        "playground/packagemanager.html",
+        "playground/dialog.html",
 
         "selinux/index.html",
 
@@ -116,7 +132,7 @@ const info = {
         "shell/images/server-large.png",
         "shell/images/server-small.png",
         "shell/images/cockpit-icon.svg",
-        "shell/images/bg-plain.jpg",
+        "shell/images/cockpit-icon-gray.svg",
         "shell/index.html",
         "shell/shell.html",
 
@@ -126,8 +142,6 @@ const info = {
         "static/login.html",
 
         "storaged/index.html",
-        "storaged/images/storage-array.png",
-        "storaged/images/storage-disk.png",
 
         "systemd/index.html",
         "systemd/logs.html",
@@ -139,28 +153,67 @@ const info = {
     ]
 };
 
-const srcdir = process.env.SRCDIR || '.';
-const nodedir = path.relative(process.cwd(), path.resolve(srcdir, "node_modules"));
-
 export const all_subdirs = Array.from(new Set(info.entries.map(key => key.split('/')[0])));
 
-const redhat_fonts = [
-    "Text-Bold", "Text-BoldItalic", "Text-Italic", "Text-Medium", "Text-MediumItalic", "Text-Regular",
-    "Display-Black", "Display-BlackItalic", "Display-Bold", "Display-BoldItalic",
-    "Display-Italic", "Display-Medium", "Display-MediumItalic", "Display-Regular",
-    "Mono-Bold", "Mono-BoldItalic", "Mono-Italic", "Mono-Medium", "Mono-MediumItalic", "Mono-Regular",
-].map(name => {
-    const subdir = 'RedHat' + name.split('-')[0];
-    const fontsdir = '@patternfly/patternfly/assets/fonts';
-
-    return {
-        from: path.resolve(nodedir, fontsdir, subdir, 'RedHat' + name + '.woff2'),
-        to: 'static/fonts/'
-    };
-});
-
-const pkgfile = suffix => `${srcdir}/pkg/${suffix}`;
 export const getFiles = subdir => {
+    const srcdir = import.meta.dirname;
+    const nodedir = path.join(srcdir, "node_modules");
+    const pkgfile = suffix => `${srcdir}/pkg/${suffix}`;
+
+    // These are the fonts we used up until migrating to Patternfly v6
+    // It is kept here to make sure all dependencies of the fonts works like in
+    // third-party plugins etc.
+
+    // With the PF6 migration we now want to use Variable Fonts (VF) to ensure better
+    // Patternfly visuals, and we will use a new directory structure to avoid hardcoding
+    // @font-face.
+    //
+    // This copies all non-VF Red Hat fonts to our `static/fonts/` directory.
+    const redhat_fonts = [
+        "Text-Bold", "Text-BoldItalic", "Text-Italic", "Text-Medium", "Text-MediumItalic", "Text-Regular",
+        "Display-Black", "Display-BlackItalic", "Display-Bold", "Display-BoldItalic",
+        "Display-Italic", "Display-Medium", "Display-MediumItalic", "Display-Regular",
+        "Mono-Bold", "Mono-BoldItalic", "Mono-Italic", "Mono-Medium", "Mono-MediumItalic", "Mono-Regular",
+    ].map(name => {
+        const fontfamily = 'RedHat' + name.split('-')[0];
+        const fontsdir = '@patternfly/patternfly/assets/fonts';
+
+        return {
+            from: path.resolve(nodedir, fontsdir, fontfamily, 'RedHat' + name + '.woff2'),
+            to: 'static/fonts/'
+        };
+    });
+
+    // Different directory structure than our redhat_fonts, which makes it easier
+    // to use the Patternfly default src and avoid hardcoding our own @font-face.
+    //
+    // This copies all variable fonts (VF in the name) to subdirectories:
+    // static/fonts/
+    // ├── RedHatDisplay
+    // │   └── RedHatDisplayVF.woff2
+    // ├── RedHatMono
+    // │   ├── RedHatMonoVF-Italic.woff2
+    // │   └── RedHatMonoVF.woff2
+    // ├── RedHatText
+    // │   ├── RedHatTextVF-Italic.woff2
+    // │   └── RedHatTextVF.woff2
+    const redhat_fonts_variable_font = [
+        "Text",
+        "Display",
+        "Mono",
+    ].flatMap(name => {
+        const fontfamily = 'RedHat' + name;
+        const fontsdir = '@patternfly/patternfly/assets/fonts';
+        const fontsDirPath = path.resolve(nodedir, fontsdir, fontfamily);
+
+        return fs.readdirSync(fontsDirPath)
+                .filter(file => file.includes('VF') && file.endsWith('.woff2'))
+                .map(file => ({
+                    from: path.resolve(fontsDirPath, file),
+                    to: `static/fonts/${fontfamily}`
+                }));
+    });
+
     /* Qualify all the paths in entries */
     const entryPoints = [];
     info.entries.forEach(key => {
@@ -186,7 +239,7 @@ export const getFiles = subdir => {
         });
     }
 
-    return ({ entryPoints, assetFiles: files, redhat_fonts });
+    return ({ entryPoints, assetFiles: files, redhat_fonts: redhat_fonts.concat(redhat_fonts_variable_font) });
 };
 
 export const getTestFiles = () => info.tests;

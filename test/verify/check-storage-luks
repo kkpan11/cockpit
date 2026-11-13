@@ -1,23 +1,14 @@
 #!/usr/bin/python3 -cimport os, sys; os.execv(os.path.dirname(sys.argv[1]) + "/../common/pywrap", sys.argv)
 
-# This file is part of Cockpit.
 #
 # Copyright (C) 2015 Red Hat, Inc.
-#
-# Cockpit is free software; you can redistribute it and/or modify it
-# under the terms of the GNU Lesser General Public License as published by
-# the Free Software Foundation; either version 2.1 of the License, or
-# (at your option) any later version.
-#
-# Cockpit is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-# Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: LGPL-2.1-or-later
 
+
+import json
+import os
 import subprocess
+import time
 
 import packagelib
 import storagelib
@@ -25,15 +16,17 @@ import testlib
 
 
 def console_screenshot(machine, name):
-    subprocess.run("virsh -c qemu:///session screenshot %s '%s'" % (str(machine._domain.ID()), name),
+    subprocess.run(f"virsh -c qemu:///session screenshot {machine._domain.ID()!s} '{name}'",
                    shell=True)
     testlib.attach(name, move=True)
     print("Wrote screenshot to " + name)
 
 
 @testlib.nondestructive
+@testlib.skipImage("cryptsetup uses too much memory, OOM on our test VMs", "rhel-8-*")
 class TestStorageLuks(storagelib.StorageCase):
 
+    @testlib.skipImage("cryptsetup uses too much memory, OOM on our test VMs", "fedora-45")
     def testLuks(self):
         self.allow_journal_messages("Device is not initialized.*", ".*could not be opened.")
         m = self.machine
@@ -96,8 +89,8 @@ class TestStorageLuks(storagelib.StorageCase):
                        f"Last modified: {date_no_mins}:")
 
         b.assert_pixels(self.card("Encryption"), "card",
-                        ignore=["dt:contains(Stored passphrase) + dd",
-                                "dt:contains(Cleartext device) + dd"])
+                        ignore=["[data-test-desc-title='Stored passphrase']",
+                                "[data-test-desc-title='Cleartext device']"])
 
         # Unmount. This locks it
         b.click(self.card_button("ext4 filesystem", "Unmount"))
@@ -166,6 +159,20 @@ class TestStorageLuks(storagelib.StorageCase):
         self.assert_in_configuration(dev, "crypttab", "options", "readonly")
         self.assert_in_configuration(cleartext_dev, "fstab", "opts", "ro")
 
+        # Check that the clear text device is actually readonly
+        self.assertEqual(m.execute(f"lsblk -no RO {cleartext_dev}").strip(), "1")
+
+        # Change "read only" mount option. This should reopen LUKS as
+        # necessary and ask for a passphrase.
+        b.click(self.card_desc("ext4 filesystem", "Mount point") + " button")
+        self.dialog_wait_open()
+        self.dialog_set_val("mount_options.ro", val=False)
+        self.dialog_set_val("passphrase", "vainu-reku-toma-rolle-kaja")
+        self.dialog_apply()
+        self.dialog_wait_close()
+
+        self.assertEqual(m.execute(f"lsblk -no RO {cleartext_dev}").strip(), "0")
+
         # Delete the partition.
         self.click_card_dropdown("Partition", "Delete")
         self.confirm()
@@ -186,6 +193,54 @@ class TestStorageLuks(storagelib.StorageCase):
         # FIXME: race condition after unmounting; hard to investigate, re-check after storage redesign
         self.allow_browser_errors("validateDOMNesting.*cannot appear as a child.*<tr> ul")
 
+    def testFormatReadOnly(self):
+        m = self.machine
+        b = self.browser
+
+        self.login_and_go("/storage")
+
+        disk = self.add_loopback_disk(320)  # xfs minimum size is ~300MB
+        self.click_card_row("Storage", name=disk)
+
+        # Create a encrypted filesystem and mount it readonly. This
+        # needs to reopen the LUKS layer after formatting.
+
+        self.click_card_dropdown("Unformatted data", "Format")
+        self.dialog({"type": "ext4",
+                     "mount_point": f"{self.mnt_dir}/foo",
+                     "mount_options.ro": True,
+                     "crypto": "luks1",
+                     "passphrase": "vainu-reku-toma-rolle-kaja",
+                     "passphrase2": "vainu-reku-toma-rolle-kaja"})
+        b.wait_visible(self.card("ext4 filesystem"))
+
+        uuid = m.execute(f"cryptsetup luksUUID {disk}").strip()
+        cleartext_dev = "/dev/mapper/luks-" + uuid
+
+        self.assert_in_configuration(disk, "crypttab", "options", "readonly")
+        self.assert_in_configuration(cleartext_dev, "fstab", "opts", "ro")
+        self.assertEqual(m.execute(f"lsblk -no RO {cleartext_dev}").strip(), "1")
+
+        # Reformat it, while keeping the encryption layer and keeping
+        # it read-only.  This needs to reopen LUKS twice, once to make
+        # the cleartext device writable for formatting, and once to
+        # make it read-only again, as requested.
+
+        self.click_card_dropdown("ext4 filesystem", "Format")
+        self.dialog_wait_open()
+        self.dialog_wait_val("mount_point", f"{self.mnt_dir}/foo")
+        self.dialog_wait_val("type", "ext4")
+        self.dialog_wait_val("crypto", " keep")
+        self.dialog_wait_val("crypto_options", "")
+        b.wait_visible(self.dialog_field("mount_options.ro") + ":checked")
+        self.dialog_set_val("type", "xfs")
+        self.dialog_set_val("old_passphrase", "vainu-reku-toma-rolle-kaja")
+        self.dialog_apply()
+        self.dialog_wait_close()
+        b.wait_visible(self.card("xfs filesystem"))
+
+        self.assertEqual(m.execute(f"lsblk -no RO {cleartext_dev}").strip(), "1")
+
     def testNoFsys(self):
         m = self.machine
         b = self.browser
@@ -205,6 +260,7 @@ class TestStorageLuks(storagelib.StorageCase):
 
         # Lock it
         b.click(self.card_button("Unformatted data", "Lock"))
+        self.confirm()
         b.wait_visible(self.card("Locked data"))
 
         # Make it readonly
@@ -223,12 +279,10 @@ class TestStorageLuks(storagelib.StorageCase):
         b.click(self.card_button("Locked data", "Unlock"))
         self.dialog({"passphrase": "vainu-reku-toma-rolle-kaja"})
 
-        # Try to format it, just for kicks
-        self.click_card_dropdown("Unformatted data", "Format")
-        self.dialog({"type": "ext4",
-                     "mount_point": "/run/foo"})
-        b.wait_visible(self.card("ext4 filesystem"))
-        self.wait_mounted("ext4 filesystem")
+        # Should be unlocked readonly
+        uuid = m.execute(f"cryptsetup luksUUID {disk}").strip()
+        cleartext_dev = "/dev/mapper/luks-" + uuid
+        self.assertEqual(m.execute(f"lsblk -no RO {cleartext_dev}").strip(), "1")
 
         # Now create a empty, encrypted partition
         self.click_card_dropdown("Solid State Drive", "Create partition table")
@@ -256,7 +310,7 @@ class TestStorageLuks(storagelib.StorageCase):
                      "crypto": self.default_crypto_type,
                      "passphrase": "vainu-reku-toma-rolle-kaja",
                      "passphrase2": "vainu-reku-toma-rolle-kaja",
-                     "mount_point": "/run/foo"})
+                     "mount_point": f"{self.mnt_dir}/foo"})
         b.wait_visible(self.card("ext4 filesystem"))
 
         # Format it again but keep the keys
@@ -264,7 +318,7 @@ class TestStorageLuks(storagelib.StorageCase):
         self.click_card_dropdown("ext4 filesystem", "Format")
         self.dialog({"type": "ext4",
                      "crypto": " keep",
-                     "mount_point": "/run/foo"})
+                     "mount_point": f"{self.mnt_dir}/foo"})
         b.wait_visible(self.card("ext4 filesystem"))
 
         # Unmount (and lock) it
@@ -280,16 +334,47 @@ class TestStorageLuks(storagelib.StorageCase):
         self.dialog({"type": "ext4",
                      "crypto": " keep",
                      "old_passphrase": "vainu-reku-toma-rolle-kaja",
-                     "mount_point": "/run/foo"})
+                     "mount_point": f"{self.mnt_dir}/foo"})
         self.wait_mounted("ext4 filesystem")
 
+    @testlib.skipImage("no Clevis TPM2 support", "debian-*", "ubuntu-2604")
+    @testlib.nondestructive
+    def testClevisTPM(self):
+        m = self.machine
+        b = self.browser
 
+        disk = self.add_ram_disk()
+        m.execute(f"echo einszweidrei | cryptsetup luksFormat --pbkdf-memory 32768 {disk}")
+        # Two TPM2 variants..
+        m.execute(f"""echo einszweidrei | clevis luks bind -d {disk} tpm2 '{{"hash":"sha256","key":"ecc"}}'""")
+        m.execute(f"""echo einszweidrei | clevis luks bind -d {disk} tpm2 '{{"hash":"sha256","key":"ecc","pcr_ids":"7,11"}}'""")
+
+        self.login_and_go("/storage")
+
+        self.click_card_row("Storage", name=disk)
+        panel = "#encryption-keys "
+        b.wait_in_text(f"{panel} tr[data-row-slot='0']", "Passphrase")
+        b.wait_in_text(f"{panel} tr[data-row-slot='1']", "TPM2")
+        b.wait_in_text(f"{panel} tr[data-row-slot='2']", "TPM2")
+
+
+@testlib.skipImage('/usr is immutable', 'centos-9-bootc')
 class TestStorageLuksDestructive(storagelib.StorageCase):
 
-    # LUKS uses memory hard PBKDF, 1 GiB is not enough; see https://bugzilla.redhat.com/show_bug.cgi?id=1881829
+    # on RHEL 8, provide enough RAM for cryptsetup's PBKDF (https://issues.redhat.com/browse/RHEL-8258)
+    # On any newer OS, cryptsetup gets along with less RAM
     provision = {
-        "0": {"memory_mb": 1536}
+        "0": {"memory_mb": 1400 if os.environ.get("TEST_OS", "").startswith("rhel-8-") else None}
     }
+
+    def rhel_8_courtesy_wait(self):
+        if self.machine.image == "rhel-8-10":
+            # Udisks2 2.9.0 in rhel-8-10 is missing commit
+            # 13d3f34fbe21bba95e0eb1e9f3c2e5122ec694d3 and thus method
+            # calls like UpdateConfigurationItem return too early,
+            # before the changes that they have made are reflected in
+            # the D-Bus properties.  Let's be polite and wait a bit.
+            time.sleep(5)
 
     def testLuks1Slots(self):
         self.allow_journal_messages("Device is not initialized.*", ".*could not be opened.")
@@ -341,25 +426,28 @@ class TestStorageLuksDestructive(storagelib.StorageCase):
         b.click(self.card_button("Filesystem", "Mount"))
         self.dialog({"passphrase": "vainu-reku-toma-rolle-kaja"})
         self.wait_mounted("ext4 filesystem")
+        self.rhel_8_courtesy_wait()
         self.assert_not_in_configuration(dev, "crypttab", "options", "noauto")
         self.assert_not_in_configuration(cleartext_dev, "fstab", "opts", "noauto")
         # unlock with second passphrase
         b.click(self.card_button("ext4 filesystem", "Unmount"))
         self.confirm()
+        self.rhel_8_courtesy_wait()
         self.assert_in_configuration(dev, "crypttab", "options", "noauto")
         self.assert_in_child_configuration(dev, "fstab", "opts", "noauto")
         self.wait_not_mounted("Filesystem")
         b.click(self.card_button("Filesystem", "Mount"))
         self.dialog({"passphrase": "vainu-reku-toma-rolle-kaja-1"})
+        self.rhel_8_courtesy_wait()
         self.assert_not_in_configuration(dev, "crypttab", "options", "noauto")
         self.assert_not_in_configuration(cleartext_dev, "fstab", "opts", "noauto")
         self.wait_mounted("ext4 filesystem")
         # delete second key slot
-        b.click(panel + "li:nth-child(2) button[aria-label='Remove']")
+        b.click(panel + "tr:nth-child(2) button[aria-label='Remove']")
         # do not accept the same passphrase
         b.set_input_text("#remove-passphrase", "vainu-reku-toma-rolle-kaja-1")
         b.click("button:contains('Remove')")
-        b.wait_in_text(".pf-v5-c-alert__title", "No key available with this passphrase.")
+        b.wait_in_text(".pf-v6-c-alert__title", "No key available with this passphrase.")
         # delete with passphrase from slot 0
         b.set_input_text("#remove-passphrase", "vainu-reku-toma-rolle-kaja")
         b.click("button:contains('Remove')")
@@ -368,6 +456,7 @@ class TestStorageLuksDestructive(storagelib.StorageCase):
         # check that it is not possible to unlock with deleted passphrase
         b.click(self.card_button("ext4 filesystem", "Unmount"))
         self.confirm()
+        self.rhel_8_courtesy_wait()
         self.assert_in_configuration(dev, "crypttab", "options", "noauto")
         self.assert_in_child_configuration(dev, "fstab", "opts", "noauto")
         self.wait_not_mounted("Filesystem")
@@ -375,8 +464,8 @@ class TestStorageLuksDestructive(storagelib.StorageCase):
         self.dialog_wait_open()
         self.dialog_set_val("passphrase", "vainu-reku-toma-rolle-kaja-1")
         self.dialog_apply()
-        b.wait_visible(".pf-v5-c-alert")
-        self.assertIn(b.text("h4.pf-v5-c-alert__title:not(span)").split("Danger alert:", 1).pop(), error_messages)
+        b.wait_visible(".pf-v6-c-alert")
+        self.assertIn(b.text("h4.pf-v6-c-alert__title:not(span)").split("Danger alert:", 1).pop(), error_messages)
         self.dialog_cancel()
 
         # add more passphrases, seven exactly, to reach the limit of eight for LUKSv1
@@ -393,13 +482,13 @@ class TestStorageLuksDestructive(storagelib.StorageCase):
         # check if add button is inactive
         b.wait_visible(self.card("Encryption") + " [aria-label='Add']:disabled")
         # check if edit button is inactive
-        slots_row = panel + " ul li:first-child"
+        slots_row = panel + " tr:first-child"
         b.wait_visible(slots_row + " button:disabled")
 
         # remove one slot
-        slots_list = panel + " ul "
-        b.wait_visible(".pf-v5-c-data-list__cell:contains('Slot 7')")
-        b.click(slots_list + "li:last-child button[aria-label='Remove']")
+        slots_list = panel
+        b.wait_visible(slots_list + " td:contains('Slot 7')")
+        b.click(slots_list + "tr:last-child button[aria-label='Remove']")
         b.set_input_text("#remove-passphrase", "vainu-reku-toma-rolle-kaja-6")
         b.click("button:contains('Remove')")
         with b.wait_timeout(30):
@@ -408,7 +497,7 @@ class TestStorageLuksDestructive(storagelib.StorageCase):
         b.wait_not_present(slots_list + ":disabled")
         b.wait_not_present(panel + ":disabled")
         # remove slot 0, with the original passphrase
-        b.click(slots_list + "li:nth-child(1) button[aria-label='Remove']")
+        b.click(slots_list + "tr:nth-child(1) button[aria-label='Remove']")
         b.click("#force-remove-passphrase")
         b.click("button:contains('Remove')")
         with b.wait_timeout(30):
@@ -418,11 +507,11 @@ class TestStorageLuksDestructive(storagelib.StorageCase):
             self.dialog_wait_open()
             self.dialog_set_val("passphrase", "vainu-reku-toma-rolle-kaja")
             self.dialog_apply()
-            b.wait_visible(".pf-v5-c-alert")
-            self.assertIn(b.text("h4.pf-v5-c-alert__title:not(span)").split("Danger alert:", 1).pop(), error_messages)
+            b.wait_visible(".pf-v6-c-alert")
+            self.assertIn(b.text("h4.pf-v6-c-alert__title:not(span)").split("Danger alert:", 1).pop(), error_messages)
             self.dialog_cancel()
             # change one of the passphrases
-            b.click(slots_list + "li:last-child [aria-label='Edit']")
+            b.click(slots_list + "tr:last-child [aria-label='Edit']")
             self.dialog_wait_open()
             self.dialog_wait_apply_enabled()
             self.dialog_set_val("old_passphrase", "vainu-reku-toma-rolle-kaja-6")
@@ -434,6 +523,7 @@ class TestStorageLuksDestructive(storagelib.StorageCase):
             b.click(self.card_button("Filesystem", "Mount"))
             self.dialog({"passphrase": "vainu-reku-toma-rolle-kaja-8"})
             self.wait_mounted("ext4 filesystem")
+            self.rhel_8_courtesy_wait()
             self.assert_not_in_configuration(dev, "crypttab", "options", "noauto")
             self.assert_not_in_configuration(cleartext_dev, "fstab", "opts", "noauto")
 
@@ -455,11 +545,11 @@ class TestStorageLuksDestructive(storagelib.StorageCase):
                      "crypto": self.default_crypto_type,
                      "passphrase": "vainu-reku-toma-rolle-kaja",
                      "passphrase2": "vainu-reku-toma-rolle-kaja",
-                     "mount_point": "/run/foo"})
+                     "mount_point": f"{self.mnt_dir}/foo"})
         self.wait_mounted("ext4 filesystem")
 
         self.setup_systemd_password_agent("vainu-reku-toma-rolle-kaja")
-        m.reboot()
+        self.reboot()
         m.start_cockpit()
         b.relogin()
         b.enter_page("/storage")
@@ -467,6 +557,7 @@ class TestStorageLuksDestructive(storagelib.StorageCase):
         self.wait_mounted("ext4 filesystem")
 
 
+@testlib.skipImage("clevis/tang not installed", "*-bootc")
 class TestStorageNBDE(storagelib.StorageCase, packagelib.PackageCase):
     provision = {
         "0": {"address": "10.111.112.1/20", "memory_mb": 2048},
@@ -509,7 +600,7 @@ class TestStorageNBDE(storagelib.StorageCase, packagelib.PackageCase):
 
         b.wait_in_text(self.card_desc("Encryption", "Options"), "nofail")
         panel = "#encryption-keys "
-        b.wait_in_text(panel + "ul li:nth-child(1)", "Passphrase")
+        b.wait_in_text(panel + "tr:nth-child(1)", "Passphrase")
 
         # Add a key
         #
@@ -532,12 +623,25 @@ class TestStorageNBDE(storagelib.StorageCase, packagelib.PackageCase):
             self.dialog_set_val("passphrase", "vainu-reku-toma-rolle-kaja")
             self.dialog_apply()
             self.dialog_wait_close()
-        b.wait_in_text(panel + "ul li:nth-child(2)", "10.111.112.5")
+        b.wait_in_text(panel + "tr:nth-child(2)", "10.111.112.5")
 
         # Adding the key should add "_netdev" options
         #
         b.wait_in_text(self.card_desc("Filesystem", "Mount point"), "after network")
         b.wait_in_text(self.card_desc("Encryption", "Options"), "_netdev")
+
+        # Add a clevis config that Cockpit doesn't understand, make
+        # sure it can't be edited but can be removed.
+        #
+        thp = tang_m.execute("tang-show-keys").strip()
+        m.execute(f"""echo vainu-reku-toma-rolle-kaja | clevis luks bind -d /dev/sda sss '{{"t":1,"pins":{{"tang":[{{"url":"10.111.112.5","thp":"{thp}"}}]}}}}'""")
+        b.wait_in_text(panel + "tr:nth-child(3)", "Unknown type")
+        b.wait_in_text(panel + "tr:nth-child(3)", "sss")
+        b.wait_visible(panel + "tr:nth-child(3) [aria-label='Edit']:disabled")
+        b.click(panel + 'tr:nth-child(3) button[aria-label="Remove"]')
+        b.wait_in_text("#dialog", "Remove key in slot 2?")
+        self.confirm()
+        b.wait_not_present(panel + "tr:nth-child(3)")
 
         # Mount it.  This should succeed without passphrase.
         #
@@ -548,9 +652,27 @@ class TestStorageNBDE(storagelib.StorageCase, packagelib.PackageCase):
         self.dialog_wait_close()
         self.wait_mounted("ext4 filesystem")
 
+        # LUKS should be read/write
+        uuid = m.execute(f"cryptsetup luksUUID {dev}").strip()
+        cleartext_dev = "/dev/mapper/luks-" + uuid
+        self.assertEqual(m.execute(f"lsblk -no RO {cleartext_dev}").strip(), "0")
+
+        # Remount "readonly", LUKS should be readonly
+        b.click(self.card_button("ext4 filesystem", "Unmount"))
+        self.confirm()
+        b.click(self.card_button("Filesystem", "Mount"))
+        self.dialog_wait_open()
+        self.dialog_set_val("mount_options.ro", val=True)
+        self.dialog_apply()
+        self.dialog_wait_close()
+        self.wait_mounted("ext4 filesystem")
+
+        # Now LUKS should be readonly
+        self.assertEqual(m.execute(f"lsblk -no RO {cleartext_dev}").strip(), "1")
+
         # Edit the key, without providing an existing passphrase
         #
-        b.click(panel + "ul li:nth-child(2) [aria-label='Edit']")
+        b.click(panel + "tr:nth-child(2) [aria-label='Edit']")
         self.dialog_wait_open()
         self.dialog_wait_apply_enabled()
         self.dialog_wait_val("tang_url", "10.111.112.5")
@@ -560,7 +682,7 @@ class TestStorageNBDE(storagelib.StorageCase, packagelib.PackageCase):
         b.wait_in_text("#dialog", tang_m.execute("tang-show-keys").strip())
         self.dialog_apply()
         self.dialog_wait_close()
-        b.wait_in_text(panel + "ul li:nth-child(2)", "http://10.111.112.5/")
+        b.wait_in_text(panel + "tr:nth-child(2)", "http://10.111.112.5/")
 
         # Reset the options so that we can check that they get added
         # also when a second key is added.
@@ -573,6 +695,8 @@ class TestStorageNBDE(storagelib.StorageCase, packagelib.PackageCase):
             # Break things again, including PackageKit
             m.execute("if type dnf; then dnf remove -y clevis-systemd; else apt-get purge -y clevis-systemd; fi")
             m.execute("systemctl mask --now packagekit")
+            if m.image.startswith("fedora-"):
+                m.execute("systemctl mask --now dnf5daemon-server")
 
         # Add a second key, this should try to fix things again, but
         # we have to help with the package install
@@ -591,7 +715,7 @@ class TestStorageNBDE(storagelib.StorageCase, packagelib.PackageCase):
                 b.wait_in_text("#dialog", "Add Network Bound Disk Encryption")
                 b.wait_in_text("#dialog", "The clevis-systemd package must be installed")
                 self.dialog_apply()
-                b.wait_in_text("#dialog", "PackageKit is not installed")
+                b.wait_in_text("#dialog", "PackageKit or dnf5daemon-server is not installed")
                 self.dialog_cancel()
                 self.dialog_wait_close()
 
@@ -616,7 +740,7 @@ class TestStorageNBDE(storagelib.StorageCase, packagelib.PackageCase):
 
             self.dialog_wait_close()
 
-        b.wait_in_text(panel + "ul li:nth-child(3)", "http://10.111.112.5")
+        b.wait_in_text(panel + "tr:nth-child(3)", "http://10.111.112.5")
 
         # This should bring the options back.
         #
@@ -625,7 +749,7 @@ class TestStorageNBDE(storagelib.StorageCase, packagelib.PackageCase):
 
         # Reboot
         #
-        m.reboot()
+        self.reboot()
         m.start_cockpit()
         b.relogin()
         b.enter_page("/storage")
@@ -634,11 +758,13 @@ class TestStorageNBDE(storagelib.StorageCase, packagelib.PackageCase):
 
         # Remove one key on client
         #
-        b.click(panel + 'ul li:contains("Slot 1") button[aria-label="Remove"]')
+        b.click(panel + 'tr[data-row-slot="1"] button[aria-label="Remove"]')
         self.confirm()
-        b.wait_not_present(panel + 'ul li:contains("Slot 1")')
+        b.wait_not_present(panel + 'tr[data-row-slot="1"]')
 
     @testlib.skipImage("TODO: don't know how to encrypt the rootfs", "debian-*", "ubuntu-*", "arch")
+    # this doesn't work in ostree either, but we don't run storage tests there
+    @testlib.skipWsContainer("newly built root doesn't contain ws container")
     @testlib.timeout(1200)
     def testRootReboot(self):
         m = self.machine
@@ -649,7 +775,7 @@ class TestStorageNBDE(storagelib.StorageCase, packagelib.PackageCase):
         tang_m.execute("firewall-cmd --add-port 80/tcp")
 
         try:
-            self.encrypt_root("einszweidrei")
+            self.modify_rootfs(passphrase="einszweidrei")
         except Exception:
             console_screenshot(m, "failed-encrypt.ppm")
             raise
@@ -661,16 +787,29 @@ class TestStorageNBDE(storagelib.StorageCase, packagelib.PackageCase):
 
         self.login_and_go("/storage")
 
+        # While we are here, let's quickly test that Cockpit warns
+        # about renaming the volume group that contains the root
+        # filesystem.
+
+        b.go("#/vg/root")
+        b.click(self.card_desc_action("LVM2 volume group", "Name"))
+        self.dialog_wait_open()
+        b.wait_in_text("#dialog", "This volume group contains the root filesystem.")
+        b.wait_visible("#dialog button.apply.pf-m-danger")
+        self.dialog_cancel()
+        self.dialog_wait_close()
+        b.go("#/")
+
         # Add a clevis key and then reboot.
         #
         # We also remove the original passphrase in order to be sure
         # that it was in fact clevis that has unlocked the rootfs, and
-        # not the magic provided by "encrypt_root"
+        # not the magic provided by "modify_rootfs"
 
         self.click_card_row("Storage", location="root")
 
         panel = "#encryption-keys "
-        b.wait_in_text(panel + "ul li:nth-child(1)", "Passphrase")
+        b.wait_in_text(panel + "tr:nth-child(1)", "Passphrase")
 
         with b.wait_timeout(360):
             b.click(self.card("Encryption") + " [aria-label='Add']")
@@ -689,18 +828,19 @@ class TestStorageNBDE(storagelib.StorageCase, packagelib.PackageCase):
             self.dialog_apply()
             self.dialog_wait_close()
 
-        b.click(panel + "ul li:nth-child(1) button[aria-label='Remove']")
+        b.click(panel + "tr:nth-child(1) button[aria-label='Remove']")
         b.click("#force-remove-passphrase")
         b.click("button:contains('Remove')")
-        b.wait_in_text(panel + "ul li:nth-child(1)", "Keyserver")
+        b.wait_in_text(panel + "tr:nth-child(1)", "Keyserver")
 
         # Tell the initrd to configure our special inter-machine
         # network that has the "tang" machine.
-        #
-        m.execute("grubby --update-kernel=ALL --args='ip=10.111.112.1::10.111.112.1:255.255.255.0::eth1:off'")
+        routes = json.loads(m.execute("ip --json route show 10.111.112.0/20"))
+        iface = routes[0]["dev"]
+        m.execute(f"grubby --update-kernel=ALL --args='ip=10.111.112.1::10.111.112.1:255.255.255.0::{iface}:off'")
 
         try:
-            m.reboot(timeout_sec=300)
+            self.reboot(timeout_sec=300)
         except Exception:
             console_screenshot(m, "failed-reboot.ppm")
             raise

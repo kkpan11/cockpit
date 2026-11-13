@@ -1,13 +1,14 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 /* There is https://www.npmjs.com/package/esbuild-plugin-compress but it does
  * not work together with our PO plugin, they are incompatible due to requiring
  * different values for `write:`. We may be able to change our plugins to work
  * with `write: false`, but this is easy enough to implement ourselves.
 */
 
-import path from 'path';
-import fs from "fs";
-import util from 'node:util';
 import child_process from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+import util from 'node:util';
 
 const NAME = 'cockpitCompressPlugin';
 
@@ -34,9 +35,9 @@ export const cockpitCompressPlugin = ({ subdir = '', exclude = null } = {}) => (
     setup(build) {
         build.onEnd(async () => {
             const gzipPromises = [];
-            const path = "./dist/" + subdir;
+            const outpath = `${build.initialOptions.outdir}/${subdir}`;
 
-            for await (const dirent of getAllFiles(path)) {
+            for await (const dirent of getAllFiles(outpath)) {
                 if (exclude && exclude.test(dirent))
                     continue;
                 if (dirent.endsWith('.js') || dirent.endsWith('.css')) {

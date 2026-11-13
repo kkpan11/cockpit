@@ -1,19 +1,7 @@
-# This file is part of Cockpit.
 #
 # Copyright (C) 2022 Red Hat, Inc.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 
 import logging
 from typing import Optional
@@ -36,7 +24,7 @@ class PackagesChannel(AsyncChannel):
     def http_error(self, status: int, message: str) -> None:
         template = read_cockpit_data_file('fail.html')
         self.send_json(status=status, reason='ERROR', headers={'Content-Type': 'text/html; charset=utf-8'})
-        self.send_data(template.replace(b'@@message@@', message.encode('utf-8')))
+        self.send_data(template.replace(b'@@message@@', message.encode()))
         self.done()
         self.close()
 
@@ -48,7 +36,7 @@ class PackagesChannel(AsyncChannel):
                 raise ValueError(f'Unsupported HTTP method {options["method"]}')
 
             self.ready()
-            if await self.read() != b'':
+            if await self.read() is not None:
                 raise ValueError('Received unexpected data')
 
             path = get_str(options, 'path')

@@ -1,6 +1,12 @@
-import "./login.scss";
+// SPDX-License-Identifier: LGPL-2.1-or-later
+import "./login.css";
 
-(function(console) {
+function debug(...args) {
+    if (window.debugging === 'all' || window.debugging?.includes('login'))
+        console.debug('login:', ...args);
+}
+
+(function() {
     let localStorage;
 
     /* Some browsers fail localStorage access due to corruption, preventing Cockpit login */
@@ -16,16 +22,16 @@ import "./login.scss";
     /* Dark mode */
     const theme = localStorage.getItem('shell:style') || 'auto';
     if ((window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches && theme === "auto") || theme === "dark") {
-        document.documentElement.classList.add('pf-v5-theme-dark');
+        document.documentElement.classList.add('pf-v6-theme-dark');
     } else {
-        document.documentElement.classList.remove('pf-v5-theme-dark');
+        document.documentElement.classList.remove('pf-v6-theme-dark');
     }
 
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', event => {
         if ((event.matches && theme === "auto") || theme === "dark") {
-            document.documentElement.classList.add('pf-v5-theme-dark');
+            document.documentElement.classList.add('pf-v6-theme-dark');
         } else {
-            document.documentElement.classList.remove('pf-v5-theme-dark');
+            document.documentElement.classList.remove('pf-v6-theme-dark');
         }
     });
 
@@ -55,8 +61,6 @@ import "./login.scss";
     }
 
     function translate() {
-        if (!document.querySelectorAll)
-            return;
         const list = document.querySelectorAll("[translate]");
         for (let i = 0; i < list.length; i++)
             list[i].textContent = gettext(list[i].textContent);
@@ -64,7 +68,10 @@ import "./login.scss";
 
     const _ = gettext;
 
-    let login_path, application, org_login_path, org_application;
+    let login_path;
+    let application;
+    let org_login_path;
+    let org_application;
     const qs_re = /[?&]?([^=]+)=([^&]*)/g;
     let oauth_redirect_to = null;
 
@@ -82,11 +89,17 @@ import "./login.scss";
         return params;
     }
 
-    if (!console)
-        console = function() { };
-
     function id(name) {
         return document.getElementById(name);
+    }
+
+    // strip off "user@", "*:port", and IPv6 brackets from login target (but keep two :: intact for IPv6)
+    function parseHostname(ssh_target) {
+        return ssh_target
+                .replace(/^.*@/, '')
+                .replace(/(?<!:):[0-9]+$/, '')
+                .replace(/^\[/, '')
+                .replace(/\]$/, '');
     }
 
     // Hide an element (or set of elements) based on a boolean
@@ -127,8 +140,7 @@ import "./login.scss";
     }
 
     function show_captured_stderr(msg) {
-        if (window.console)
-            console.warn("stderr:", msg);
+        console.warn("stderr:", msg);
 
         hide("#login-wait-validating");
 
@@ -144,8 +156,7 @@ import "./login.scss";
     }
 
     function fatal(msg) {
-        if (window.console)
-            console.warn("fatal:", msg);
+        console.warn("fatal:", msg);
 
         hide("#login-again", "#login-wait-validating");
 
@@ -170,11 +181,11 @@ import "./login.scss";
             return;
 
         let content = style.content;
-        if (content && content != "none" && content != "normal") {
+        if (content && content !== "none" && content !== "normal") {
             const len = content.length;
             if ((content[0] === '"' || content[0] === '\'') &&
                 len > 2 && content[len - 1] === content[0])
-                content = content.substr(1, len - 2);
+                content = content.substring(1, len - 1);
             elt.innerHTML = content || def;
         } else {
             elt.removeAttribute("class");
@@ -197,7 +208,7 @@ import "./login.scss";
                 // Render a "helper text" warning above the log in button
                 document.querySelector("#login .login-actions").insertAdjacentHTML(
                     "beforebegin",
-                    "<div class='pf-v5-c-helper-text pf-m-warning' id='bypass-warning'>" +
+                    "<div class='pf-v6-c-helper-text pf-m-warning' id='bypass-warning'>" +
                     _("Cockpit might not render correctly in your browser") +
                     "</div>"
                 );
@@ -211,8 +222,7 @@ import "./login.scss";
                 name = "@supports API";
             const errorString = format(_("This web browser is too old to run the Web Console (missing $0)"), name);
 
-            if (window.console)
-                console.warn(errorString);
+            console.warn(errorString);
             id("login-error-message").textContent = errorString;
             show("#unsupported-browser", "#error-group");
             document.body.classList.add("unsupported-browser");
@@ -259,7 +269,6 @@ import "./login.scss";
                req("sessionStorage", window) &&
                req("JSON", window) &&
                req("defineProperty", Object) &&
-               req("console", window) &&
                req("pushState", window.history) &&
                req("textContent", document) &&
                req("replaceAll", String.prototype) &&
@@ -277,10 +286,6 @@ import "./login.scss";
         }
     }
 
-    function trim(s) {
-        return s.replace(/^\s+|\s+$/g, '');
-    }
-
     /* Sets values for application, url_root and login_path */
     function setup_path_globals (path) {
         const parser = document.createElement('a');
@@ -289,7 +294,7 @@ import "./login.scss";
 
         path = path || "/";
         parser.href = base;
-        if (parser.pathname != "/") {
+        if (parser.pathname !== "/") {
             url_root = parser.pathname.replace(/^\/+|\/+$/g, '');
             // deprecated: for connecting to cockpit.js < 272
             localStorage.setItem('url-root', url_root);
@@ -338,6 +343,27 @@ import "./login.scss";
         event.stopPropagation();
     }
 
+    function deal_with_multihost() {
+        // If we are currently logged in to some machine, but still
+        // end up on the login page, we are about to load resources
+        // from two machines into the same browser origin. This needs
+        // to be allowed explicitly via a configuration setting.
+
+        const logged_into = environment.logged_into || [];
+        const cur_machine = logged_into.length > 0 ? logged_into[0] : null;
+
+        function redirect_to_current_machine() {
+            if (cur_machine === ".") {
+                login_reload("/");
+            } else {
+                login_reload("/=" + cur_machine);
+            }
+        }
+
+        if (cur_machine && !environment.page.allow_multihost)
+            redirect_to_current_machine();
+    }
+
     function boot() {
         window.onload = null;
 
@@ -347,6 +373,8 @@ import "./login.scss";
             if (window.cockpit_po[""]["language-direction"])
                 document.documentElement.dir = window.cockpit_po[""]["language-direction"];
         }
+
+        deal_with_multihost();
 
         setup_path_globals(window.location.pathname);
 
@@ -388,7 +416,7 @@ import "./login.scss";
             el.focus();
         });
 
-        const logout_intent = window.sessionStorage.getItem("logout-intent") == "explicit";
+        const logout_intent = window.sessionStorage.getItem("logout-intent") === "explicit";
         if (logout_intent)
             window.sessionStorage.removeItem("logout-intent");
 
@@ -419,10 +447,10 @@ import "./login.scss";
         const xhr = new XMLHttpRequest();
         xhr.open("GET", login_path, true);
         xhr.onreadystatechange = function () {
-            if (xhr.readyState == 4) {
-                if (xhr.status == 200) {
+            if (xhr.readyState === 4) {
+                if (xhr.status === 200) {
                     run(JSON.parse(xhr.responseText));
-                } else if (xhr.status == 401) {
+                } else if (xhr.status === 401) {
                     show_login();
                 } else if (xhr.statusText) {
                     fatal(decodeURIComponent(xhr.statusText));
@@ -471,8 +499,8 @@ import "./login.scss";
             xhr.open("GET", login_path, true);
             xhr.setRequestHeader("Authorization", "Bearer " + token_val);
             xhr.onreadystatechange = function () {
-                if (xhr.readyState == 4) {
-                    if (xhr.status == 200) {
+                if (xhr.readyState === 4) {
+                    if (xhr.status === 200) {
                         run(JSON.parse(xhr.responseText));
                     } else {
                         const prompt_data = get_prompt_from_challenge(xhr.getResponseHeader("WWW-Authenticate"), xhr.responseText);
@@ -506,15 +534,17 @@ import "./login.scss";
         id("login-info-message").textContent = "";
     }
 
-    function login_failure(msg, form) {
+    function login_failure(title, msg, form) {
         clear_errors();
-        if (msg) {
+        if (title) {
             /* OAuth failures are always fatal */
             if (oauth) {
-                fatal(msg);
+                fatal(title);
             } else {
                 show_form(form || "login");
+                id("login-error-title").textContent = title;
                 id("login-error-message").textContent = msg;
+                hideToggle("#error-group .pf-v6-c-alert__description", !msg);
                 show("#error-group");
             }
         }
@@ -528,13 +558,14 @@ import "./login.scss";
         }
     }
 
-    function host_failure(msg) {
-        const host = id("server-field").value;
-        if (!host) {
+    function host_failure(title, msg) {
+        if (!login_machine) {
             login_failure(msg);
         } else {
             clear_errors();
+            id("login-error-title").textContent = title;
             id("login-error-message").textContent = msg;
+            hideToggle("#error-group .pf-v6-c-alert__description", !msg);
             show("#error-group");
             toggle_options(null, true);
             show_form("login");
@@ -567,17 +598,28 @@ import "./login.scss";
         return hosts;
     }
 
+    // value of #server-field at the time of clicking "Login"
+    let login_machine = null;
+    /* set by do_hostkey_verification() for a confirmed unknown host fingerprint;
+     * setup_localstorage() will then write the received full known_hosts entry to the known_hosts
+     * database for this host */
+    let login_data_host = null;
+    /* set if our known_host database has a non-matching host key, and we re-attempt the login
+     * with asking the user for confirmation */
+    let ssh_host_key_change_host = null;
+
     function call_login() {
         login_failure(null);
-        const user = trim(id("login-user-input").value);
+        login_machine = id("server-field").value;
+        login_data_host = null;
+        const user = id("login-user-input").value.trim();
         if (user === "" && !environment.is_cockpit_client) {
             login_failure(_("User name cannot be empty"));
-        } else if (need_host() && id("server-field").value === "") {
+        } else if (need_host() && login_machine === "") {
             login_failure(_("Please specify the host to connect to"));
         } else {
-            const machine = id("server-field").value;
-            if (machine) {
-                application = "cockpit+=" + machine;
+            if (login_machine) {
+                application = "cockpit+=" + login_machine;
                 login_path = org_login_path.replace("/" + org_application + "/", "/" + application + "/");
                 id("brand").style.display = "none";
                 id("badge").style.visibility = "hidden";
@@ -588,12 +630,12 @@ import "./login.scss";
                 brand("brand", "Cockpit");
             }
 
-            id("server-name").textContent = machine || environment.hostname;
+            id("server-name").textContent = login_machine || environment.hostname;
             id("login-button").removeEventListener("click", call_login);
 
             const password = id("login-password-input").value;
 
-            const superuser_key = "superuser:" + user + (machine ? ":" + machine : "");
+            const superuser_key = "superuser:" + user + (login_machine ? ":" + login_machine : "");
             const superuser = localStorage.getItem(superuser_key) || "none";
             localStorage.setItem("superuser-key", superuser_key);
             localStorage.setItem(superuser_key, superuser);
@@ -601,12 +643,31 @@ import "./login.scss";
             /* Keep information if login page was used */
             localStorage.setItem('standard-login', true);
 
+            let known_hosts = '';
+            if (login_machine) {
+                if (ssh_host_key_change_host === login_machine) {
+                    /* We came here because logging in ran into invalid-hostkey; so try the next
+                     * round without sending the key. do_hostkey_verification() will notice the
+                       change and show the correct dialog. */
+                    debug("call_login(): previous login attempt into", login_machine, "failed due to changed key");
+                } else {
+                    // If we have a known host key, send it to ssh
+                    const keys = get_hostkeys(login_machine);
+                    if (keys) {
+                        debug("call_login(): sending known_host key", keys, "for logging into", login_machine);
+                        known_hosts = keys;
+                    } else {
+                        debug("call_login(): no known_hosts entry for logging into", login_machine);
+                    }
+                }
+            }
+
             const headers = {
-                Authorization: "Basic " + window.btoa(utf8(user + ":" + password)),
+                Authorization: "Basic " + window.btoa(utf8(user + ":" + password + '\0' + known_hosts)),
                 "X-Superuser": superuser,
             };
             // allow unknown remote hosts with interactive logins with "Connect to:"
-            if (machine)
+            if (login_machine)
                 headers["X-SSH-Connect-Unknown-Hosts"] = "yes";
 
             send_login_request("GET", headers, false);
@@ -621,10 +682,11 @@ import "./login.scss";
         hosts.forEach(host => {
             const wrapper = document.createElement("div");
             wrapper.classList.add("host-line");
+            wrapper.setAttribute("data-host-id", host);
 
             const b1 = document.createElement("button");
             b1.textContent = host;
-            b1.classList.add("pf-v5-c-button", "pf-m-tertiary", "host-name");
+            b1.classList.add("pf-v6-c-button", "pf-m-tertiary", "host-name");
             b1.addEventListener("click", () => {
                 id("server-field").value = host;
                 call_login();
@@ -644,7 +706,7 @@ import "./login.scss";
             wrapper.append(b1, b2);
             list.append(wrapper);
         });
-        hideToggle("#recent-hosts", hosts.length == 0);
+        hideToggle("#recent-hosts", hosts.length === 0);
     }
 
     function show_form(form) {
@@ -661,22 +723,22 @@ import "./login.scss";
             brand.classList.add("text-brand");
         }
 
-        hideToggle(["#user-group", "#password-group"], form != "login" || environment.is_cockpit_client);
-        hideToggle("#conversation-group", form != "conversation");
-        hideToggle("#hostkey-group", form != "hostkey");
+        hideToggle(["#user-group", "#password-group"], form !== "login" || environment.is_cockpit_client);
+        hideToggle("#conversation-group", form !== "conversation");
+        hideToggle("#hostkey-group", form !== "hostkey");
 
-        id("login-button-text").textContent = (form == "hostkey") ? _("Accept key and log in") : _("Log in");
-        if (form != "login")
+        id("login-button-text").textContent = (form === "hostkey") ? _("Accept key and log in") : _("Log in");
+        if (form !== "login")
             id("login-password-input").value = '';
 
         if (environment.page.require_host) {
             hide("#option-group");
             expanded = true;
         } else {
-            hideToggle("#option-group", !connectable || form != "login");
+            hideToggle("#option-group", !connectable || form !== "login");
         }
 
-        if (!connectable || form != "login") {
+        if (!connectable || form !== "login") {
             hide("#server-group");
         } else {
             hideToggle("#server-group", !expanded);
@@ -688,7 +750,7 @@ import "./login.scss";
         id("login-button").classList.add("pf-m-primary");
         hide("#get-out-link");
 
-        if (form == "login")
+        if (form === "login")
             id("login-button").addEventListener("click", call_login);
 
         if (environment.is_cockpit_client) {
@@ -705,13 +767,13 @@ import "./login.scss";
         id("login-user-input").addEventListener("keydown", function(e) {
             login_failure(null);
             clear_info();
-            if (e.which == 13)
+            if (e.which === 13)
                 id("login-password-input").focus();
         }, false);
 
         const do_login = function(e) {
             login_failure(null);
-            if (e.which == 13)
+            if (e.which === 13)
                 call_login();
         };
 
@@ -736,8 +798,14 @@ import "./login.scss";
         }
     }
 
-    function set_known_hosts_db(db) {
+    function get_hostkeys(host) {
+        return get_known_hosts_db()[parseHostname(host)];
+    }
+
+    function set_hostkeys(host, keys) {
         try {
+            const db = get_known_hosts_db();
+            db[parseHostname(host)] = keys;
             localStorage.setItem("known_hosts", JSON.stringify(db));
         } catch (ex) {
             console.warn("Can't write known_hosts database to localStorage", ex);
@@ -745,27 +813,26 @@ import "./login.scss";
     }
 
     function do_hostkey_verification(data) {
-        const key_db = get_known_hosts_db();
         const key = data["host-key"];
-        const key_key = key.split(" ")[0];
+        const key_host = key.split(" ")[0];
         const key_type = key.split(" ")[1];
+        const db_keys = get_hostkeys(key_host);
 
-        if (key_db[key_key] == key) {
-            converse(data.id, data.default);
-            return;
-        }
-
-        if (key_db[key_key]) {
-            id("hostkey-title").textContent = format(_("$0 key changed"), id("server-field").value);
+        if (db_keys) {
+            debug("do_hostkey_verification: received key fingerprint", data.default, "for host", key_host,
+                  "does not match key in known_hosts database:", db_keys, "; treating as changed");
+            id("hostkey-title").textContent = format(_("$0 key changed"), login_machine);
             show("#hostkey-warning-group");
             id("hostkey-message-1").textContent = "";
         } else {
+            debug("do_hostkey_verification: received key fingerprint", data.default, "for host", key_host,
+                  "not in known_hosts database; treating as new host");
             id("hostkey-title").textContent = _("New host");
             hide("#hostkey-warning-group");
-            id("hostkey-message-1").textContent = format(_("You are connecting to $0 for the first time."), id("server-field").value);
+            id("hostkey-message-1").textContent = format(_("You are connecting to $0 for the first time."), login_machine);
         }
 
-        id("hostkey-verify-help-1").textContent = format(_("To verify a fingerprint, run the following on $0 while physically sitting at the machine or through a trusted network:"), id("server-field").value);
+        id("hostkey-verify-help-1").textContent = format(_("To verify a fingerprint, run the following on $0 while physically sitting at the machine or through a trusted network:"), login_machine);
         id("hostkey-verify-help-cmds").textContent = format("ssh-keyscan$0 localhost | ssh-keygen -lf -",
                                                             key_type ? " -t " + key_type : "");
 
@@ -782,10 +849,16 @@ import "./login.scss";
 
         function call_converse() {
             id("login-button").removeEventListener("click", call_converse);
-            login_failure(null, "hostkey");
-            key_db[key_key] = key;
-            set_known_hosts_db(key_db);
-            converse(data.id, data.default);
+            login_failure(null, null, "hostkey");
+            // cockpit-beiboot sends only a placeholder, defer to login-data in setup_localstorage()
+            if (key.endsWith(" login-data")) {
+                login_data_host = key_host;
+                debug("call_converse(): got placeholder host keyfor", login_data_host, ", deferring db update");
+                converse(data.id, data.default);
+            } else {
+                console.error("login: got unexpected host key prompt, expecting login-data placeholder:", key);
+                fatal(_("Internal protocol error"));
+            }
         }
 
         id("login-button").addEventListener("click", call_converse);
@@ -793,7 +866,7 @@ import "./login.scss";
         show_form("hostkey");
         show("#get-out-link");
 
-        if (key_db[key_key]) {
+        if (db_keys) {
             id("login-button").classList.add("pf-m-danger");
             id("login-button").classList.remove("pf-m-primary");
         }
@@ -828,13 +901,13 @@ import "./login.scss";
         function call_converse() {
             id("conversation-input").removeEventListener("keydown", key_down);
             id("login-button").removeEventListener("click", call_converse);
-            login_failure(null, "conversation");
+            login_failure(null, null, "conversation");
             converse(prompt_data.id, id("conversation-input").value);
         }
 
         function key_down(e) {
-            login_failure(null, "conversation");
-            if (e.which == 13) {
+            login_failure(null, null, "conversation");
+            if (e.which === 13) {
                 call_converse();
             }
         }
@@ -854,7 +927,7 @@ import "./login.scss";
             return null;
 
         const parts = header.split(' ');
-        if (parts[0].toLowerCase() !== 'x-conversation' && parts.length != 3)
+        if (parts[0].toLowerCase() !== 'x-conversation' || parts.length !== 3)
             return null;
 
         const id = parts[1];
@@ -862,8 +935,7 @@ import "./login.scss";
         try {
             prompt = window.atob(parts[2]);
         } catch (err) {
-            if (window.console)
-                console.error("Invalid prompt data", err);
+            console.error("Invalid prompt data", err);
             return null;
         }
 
@@ -871,8 +943,7 @@ import "./login.scss";
         try {
             resp = JSON.parse(body);
         } catch (err) {
-            if (window.console)
-                console.log("Got invalid JSON response for prompt data", err);
+            console.log("Got invalid JSON response for prompt data", err);
             resp = {};
         }
 
@@ -882,6 +953,7 @@ import "./login.scss";
     }
 
     function send_login_request(method, headers, is_conversation) {
+        debug("send_login_request():", method, "headers:", JSON.stringify(headers));
         id("login-button").setAttribute('disabled', "true");
         id("login-button").setAttribute('spinning', "true");
         const xhr = new XMLHttpRequest();
@@ -891,13 +963,14 @@ import "./login.scss";
             xhr.setRequestHeader(k, headers[k]);
 
         xhr.onreadystatechange = function () {
-            if (xhr.readyState != 4) {
+            if (xhr.readyState !== 4) {
                 return;
             }
-            if (xhr.status == 200) {
+            if (xhr.status === 200) {
                 const resp = JSON.parse(xhr.responseText);
                 run(resp);
-            } else if (xhr.status == 401) {
+            } else if (xhr.status === 401) {
+                debug("send_login_request():", method, "got 401, status:", xhr.statusText, "; response:", xhr.responseText);
                 const challenge = xhr.getResponseHeader("WWW-Authenticate");
                 if (challenge && challenge.toLowerCase().indexOf("x-conversation") === 0) {
                     const prompt_data = get_prompt_from_challenge(challenge, xhr.responseText);
@@ -906,31 +979,66 @@ import "./login.scss";
                     else
                         fatal(_("Internal error: Invalid challenge header"));
                 } else {
-                    if (window.console)
-                        console.log(xhr.statusText);
+                    console.log(xhr.statusText);
+                    /* did the user confirm a changed SSH host key? If so, update database */
+                    if (ssh_host_key_change_host) {
+                        try {
+                            const keys = JSON.parse(xhr.responseText)["known-hosts"];
+                            if (keys) {
+                                debug("send_login_request(): got updated known-hosts for changed host keys of", ssh_host_key_change_host, ":", keys);
+                                set_hostkeys(ssh_host_key_change_host, keys);
+                                ssh_host_key_change_host = null;
+                            } else {
+                                debug("send_login_request():", ssh_host_key_change_host, "changed key, but did not get an updated key from response");
+                            }
+                        } catch (ex) {
+                            console.error("Failed to parse response text as JSON:", xhr.responseText, ":", JSON.stringify(ex));
+                        }
+                    }
+
                     if (xhr.statusText.startsWith("captured-stderr:")) {
                         show_captured_stderr(decodeURIComponent(xhr.statusText.replace(/^captured-stderr:/, '')));
                     } else if (xhr.statusText.indexOf("authentication-not-supported") > -1) {
-                        const user = trim(id("login-user-input").value);
+                        const user = id("login-user-input").value.trim();
                         fatal(format(_("The server refused to authenticate '$0' using password authentication, and no other supported authentication methods are available."), user));
                     } else if (xhr.statusText.indexOf("terminated") > -1) {
-                        login_failure(_("Authentication failed: Server closed connection"));
+                        login_failure(_("Authentication failed"), _("Server closed connection"));
                     } else if (xhr.statusText.indexOf("no-host") > -1) {
                         host_failure(_("Unable to connect to that address"));
                     } else if (xhr.statusText.indexOf("unknown-hostkey") > -1) {
-                        host_failure(_("Refusing to connect. Hostkey is unknown"));
+                        host_failure(_("Refusing to connect"), _("Hostkey is unknown"));
                     } else if (xhr.statusText.indexOf("unknown-host") > -1) {
-                        host_failure(_("Refusing to connect. Host is unknown"));
+                        host_failure(_("Refusing to connect"), _("Host is unknown"));
                     } else if (xhr.statusText.indexOf("invalid-hostkey") > -1) {
-                        host_failure(_("Refusing to connect. Hostkey does not match"));
+                        /* ssh/ferny/beiboot immediately fail in this case, it's not a conversation;
+                         * ask the user for confirmation and try again */
+                        if (ssh_host_key_change_host === null) {
+                            debug("send_login_request(): invalid-hostkey, trying again to let the user confirm");
+                            ssh_host_key_change_host = login_machine;
+                            call_login();
+                        } else {
+                            // but only once, to avoid loops
+                            debug("send_login_request(): invalid-hostkey, and already retried, giving up");
+                            host_failure(_("Refusing to connect"), _("Hostkey does not match"));
+                        }
                     } else if (is_conversation) {
                         login_failure(_("Authentication failed"));
                     } else {
-                        login_failure(_("Wrong user name or password"));
+                        login_failure(_("Authentication failed"), _("Wrong user name or password"));
                     }
                 }
-            } else if (xhr.status == 403) {
-                login_failure(_(decodeURIComponent(xhr.statusText)) || _("Permission denied"));
+            } else if (xhr.status === 403) {
+                const status = decodeURIComponent(xhr.statusText).trim();
+                login_failure(_("Permission denied"), status === "Permission denied" ? "" : status);
+            } else if (xhr.status === 500 && xhr.statusText.indexOf("no-cockpit") > -1) {
+                const message = format(
+                    _("Install the cockpit-system package (and optionally other cockpit packages) on $0 to enable web console access."),
+                    login_machine || "localhost");
+
+                login_failure(_("Packageless session unavailable"), message);
+            } else if (xhr.status === 500 && xhr.statusText.indexOf("unsupported-shell") > -1) {
+                login_failure(_("Authentication failed"),
+                              _("Unsupported shell. Check the journal for details."));
             } else if (xhr.statusText) {
                 fatal(decodeURIComponent(xhr.statusText));
             } else {
@@ -956,7 +1064,7 @@ import "./login.scss";
             window.location.reload(true);
         }, 100);
 
-        if (wanted && wanted != window.location.href)
+        if (wanted && wanted !== window.location.href)
             window.location = wanted;
 
         // cancel forced reload if we are reloading
@@ -1001,6 +1109,18 @@ import "./login.scss";
             localStorage.setItem(application + 'login-data', str);
             /* Backwards compatibility for packages that aren't application prefixed */
             localStorage.setItem('login-data', str);
+
+            /* When confirming a host key with cockpit-beiboot, login-data contains the known_hosts pubkey;
+             * update our database */
+            if (login_data_host) {
+                const hostkey = response["login-data"]["known-hosts"];
+                if (hostkey) {
+                    debug("setup_localstorage(): updating known_hosts database for deferred host key for", login_data_host, ":", hostkey);
+                    set_hostkeys(login_data_host, hostkey);
+                } else {
+                    console.error("login.js internal error: setup_localstorage() received a pending login-data host, but login-data does not contain known-hosts");
+                }
+            }
         }
 
         /* URL Root is set by cockpit ws and shouldn't be prefixed
@@ -1028,7 +1148,7 @@ import "./login.scss";
             }
         }
 
-        if (machine && application != org_application) {
+        if (machine && application !== org_application) {
             wanted = "/=" + machine;
             if (url_root)
                 wanted = "/" + url_root + wanted;
@@ -1044,4 +1164,4 @@ import "./login.scss";
     }
 
     window.onload = boot;
-})(window.console);
+})();

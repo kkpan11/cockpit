@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2023 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import React, { useContext, useEffect, useState } from 'react';
@@ -29,35 +15,49 @@ import { HelperText, HelperTextItem } from '@patternfly/react-core/dist/esm/comp
 import { InputGroup } from '@patternfly/react-core/dist/esm/components/InputGroup/index.js';
 import { Popover } from '@patternfly/react-core/dist/esm/components/Popover/index.js';
 import { Radio } from '@patternfly/react-core/dist/esm/components/Radio/index.js';
-import { Text } from "@patternfly/react-core/dist/esm/components/Text/index.js";
+import { Content } from "@patternfly/react-core/dist/esm/components/Content/index.js";
 import { TextInput } from '@patternfly/react-core/dist/esm/components/TextInput/index.js';
 import { HelpIcon, TrashIcon } from '@patternfly/react-icons';
 
 import { Name, NetworkModal, dialogSave } from "./dialogs-common";
 import { ModelContext } from './model-context';
 import { useDialogs } from 'dialogs.jsx';
+import { validate_ip, validate_ipv4, validate_ipv6 } from './utils';
 
 import './wireguard.scss';
+import { useInit } from 'hooks';
 
 const _ = cockpit.gettext;
 
-function addressesToString(addresses) {
-    return addresses.map(address => address[0] + "/" + address[1]).join(", ");
+function addressesToString(settings) {
+    const addresses = settings.ipv4.address_data.concat(settings.ipv6.address_data);
+    return addresses.map(addr => addr.address + "/" + addr.prefix).join(", ");
 }
 
 function stringToAddresses(str) {
-    return str.split(/[\s,]+/).map(strAddress => {
+    const ipv4 = [];
+    const ipv6 = [];
+
+    str.split(/[\s,]+/).forEach(strAddress => {
         const parts = strAddress.split("/");
         if (parts.length > 2) {
             throw new Error(_("Addresses are not formatted correctly"));
         }
-        const [ip, prefix] = parts;
-        const defaultPrefix = "32";
-        // Gateway usually conflicts with routing that NetworkManager configures for WireGuard interfaces
-        // So it should not be set in that case or more accurately set to 0 i.e. "0.0.0.0" in string format
-        const gateway = "0.0.0.0";
-        return [ip, prefix ?? defaultPrefix, gateway];
+
+        const [address, prefix] = parts;
+
+        if (validate_ipv6(address)) {
+            const defaultPrefix = "128";
+            ipv6.push({ address, prefix: prefix ?? defaultPrefix });
+        } else if (validate_ipv4(address)) {
+            const defaultPrefix = "32";
+            ipv4.push({ address, prefix: prefix ?? defaultPrefix });
+        } else {
+            throw cockpit.format(_("Invalid IP address '$0'"), address);
+        }
     });
+
+    return [ipv4, ipv6];
 }
 
 export function WireGuardDialog({ settings, connection, dev }) {
@@ -71,39 +71,27 @@ export function WireGuardDialog({ settings, connection, dev }) {
     const [pastedPrivateKey, setPastedPrivatedKey] = useState("");
     const [publicKey, setPublicKey] = useState("");
     const [listenPort, setListenPort] = useState(settings.wireguard.listen_port);
-    const [addresses, setAddresses] = useState(addressesToString(settings.ipv4.addresses));
+    const [addresses, setAddresses] = useState(addressesToString(settings));
     const [dialogError, setDialogError] = useState("");
     const [peers, setPeers] = useState(settings.wireguard.peers.map(peer => ({ ...peer, allowedIps: peer.allowedIps?.join(",") ?? '' })));
 
     // Additional check for `wg` after install_dialog for non-packagekit and el8 environments
-    useEffect(() => {
-        async function checkWireguardPackage() {
-            try {
-                await cockpit.script("command -v wg");
-            } catch (e) {
-                setDialogError(_("wireguard-tools package is not installed"));
-            }
-        }
-
-        checkWireguardPackage();
-    }, []);
-
-    useEffect(() => {
-        if (!connection)
-            generatePrivateKey();
-    }, [connection]);
-
-    useEffect(() => {
-        async function getPrivateKey() {
-            const objpath = connection[" priv"].path;
-            const [result] = await model.client.call(objpath, "org.freedesktop.NetworkManager.Settings.Connection", "GetSecrets", ["wireguard"]);
-            setGeneratedPrivateKey(result.wireguard["private-key"].v);
+    useInit(async () => {
+        try {
+            await cockpit.script("command -v wg");
+        } catch (e) {
+            setDialogError(_("wireguard-tools package is not installed"));
+            return;
         }
 
         if (connection?.[" priv"].path) {
-            getPrivateKey();
+            const objpath = connection[" priv"].path;
+            const [result] = await model.client.call(objpath, "org.freedesktop.NetworkManager.Settings.Connection", "GetSecrets", ["wireguard"]);
+            setGeneratedPrivateKey(result.wireguard["private-key"].v);
+        } else {
+            generatePrivateKey();
         }
-    }, [model, connection]);
+    });
 
     useEffect(() => {
         const privateKey = isPrivKeyGenerated ? generatedPrivateKey : pastedPrivateKey;
@@ -134,37 +122,79 @@ export function WireGuardDialog({ settings, connection, dev }) {
         }
     }
 
+    function validatePeer(peer, index) {
+        const endpoint = peer.endpoint?.trim();
+        if (endpoint) {
+            const split = endpoint.split(":");
+            // port should be after last ':'
+            const port = Number(split.at(-1));
+            const address = split.slice(0, -1).join(":").replace(/^\[|]$/g, '');
+
+            if (!validate_ip(address)) {
+                throw cockpit.format(_("Peer #$0 has invalid endpoint. It must be specified as host:port, e.g. 1.2.3.4:51820, [2001:db8::1]:51820 or example.com:51820"), index + 1);
+            }
+
+            if (!Number.isInteger(port) || port < 0 || port > 65535) {
+                throw cockpit.format(_("Peer #$0 has invalid endpoint port. Port must be a number."), index + 1);
+            }
+        }
+
+        return ({ ...peer, allowedIps: peer.allowedIps.trim().split(',') });
+    }
+
     function onSubmit() {
         const private_key = isPrivKeyGenerated ? generatedPrivateKey : pastedPrivateKey;
 
         // Validate Addresses before submit
         // Also validate listenPort as PF TextInput[type=number] accepts normal text as well on firefox
         // See - https://github.com/patternfly/patternfly-react/issues/9391
-        let addr, peersArr;
+        let ipv4_addr;
+        let ipv6_addr;
+        let peersArr;
         const listen_port = Number(listenPort);
         try {
-            addr = stringToAddresses(addresses);
+            [ipv4_addr, ipv6_addr] = stringToAddresses(addresses);
 
             if (isNaN(listen_port)) {
                 throw new Error(_("Listen port must be a number"));
             }
 
             peersArr = peers.map((peer, index) => {
-                if (peer.endpoint?.trim()) {
-                    const parts = peer.endpoint.split(":");
-                    if (parts.length !== 2) {
-                        throw cockpit.format(_("Peer #$0 has invalid endpoint. It must be specified as host:port, e.g. 1.2.3.4:51820 or example.com:51820"), index + 1);
-                    }
-                    const [, port] = parts;
-                    if (port == '' || isNaN(Number(port))) {
-                        throw cockpit.format(_("Peer #$0 has invalid endpoint port. Port must be a number."), index + 1);
-                    }
-                }
-                return ({ ...peer, allowedIps: peer.allowedIps.trim().split(',') });
+                return validatePeer(peer, index);
             });
         } catch (e) {
             setDialogError(typeof e === 'string' ? e : e.message);
             return;
+        }
+
+        function createAddressesObj(ipv4, ipv6) {
+            const addresses = {};
+
+            if (ipv4.length > 0) {
+                addresses.ipv4 = {
+                    address_data: ipv4,
+                    method: "manual",
+                    dns: [],
+                    dns_search: [],
+                };
+            } else {
+                addresses.ipv4 = { method: "disabled" };
+            }
+
+            if (ipv6.length > 0) {
+                addresses.ipv6 = {
+                    address_data: ipv6,
+                    // "stable-privacy" use hashing method for IPv6 autoconfiguration
+                    addr_gen_mode: 1,
+                    method: "manual",
+                    dns: [],
+                    dns_search: [],
+                };
+            } else {
+                addresses.ipv6 = { method: "disabled" };
+            }
+
+            return addresses;
         }
 
         function createSettingsObj() {
@@ -181,12 +211,7 @@ export function WireGuardDialog({ settings, connection, dev }) {
                     listen_port,
                     peers: peersArr,
                 },
-                ipv4: {
-                    addresses: addr,
-                    method: 'manual',
-                    dns: [],
-                    dns_search: []
-                }
+                ...createAddressesObj(ipv4_addr, ipv6_addr),
             };
         }
 
@@ -215,19 +240,19 @@ export function WireGuardDialog({ settings, connection, dev }) {
                 <Radio label={_("Paste existing key")} name="private-key" id={idPrefix + '-paste-key'} onChange={() => { setIsPrivKeyGenerated(false) }} />
 
                 {isPrivKeyGenerated
-                    ? <InputGroup className='pf-v5-u-pt-sm'>
-                        <Flex className='pf-v5-u-w-100' spaceItems={{ default: 'spaceItemsSm' }}>
+                    ? <InputGroup className='pf-v6-u-pt-sm'>
+                        <Flex className='pf-v6-u-w-100' spaceItems={{ default: 'spaceItemsSm' }}>
                             <FlexItem grow={{ default: 'grow' }}>
-                                <ClipboardCopy isReadOnly id={idPrefix + '-private-key-input'} className='pf-v5-u-font-family-monospace pf-v5-u-w-100'>{generatedPrivateKey}</ClipboardCopy>
+                                <ClipboardCopy isReadOnly id={idPrefix + '-private-key-input'} className='pf-v6-u-font-family-monospace pf-v6-u-w-100'>{generatedPrivateKey}</ClipboardCopy>
                             </FlexItem>
                             {connection && <FlexItem>
                                 <Button variant='secondary' onClick={generatePrivateKey}>{_("Regenerate")}</Button>
                             </FlexItem>}
                         </Flex>
                     </InputGroup>
-                    : <InputGroup className='pf-v5-u-pt-sm'>
+                    : <InputGroup className='pf-v6-u-pt-sm'>
                         <TextInput id={idPrefix + '-private-key-input'}
-                            className='pf-v5-u-font-family-monospace'
+                            className='pf-v6-u-font-family-monospace'
                             value={pastedPrivateKey}
                             onChange={(_, val) => setPastedPrivatedKey(val)}
                             isDisabled={isPrivKeyGenerated}
@@ -236,12 +261,12 @@ export function WireGuardDialog({ settings, connection, dev }) {
             </FormGroup>
             <FormGroup label={_("Public key")}>
                 {(isPrivKeyGenerated || publicKey)
-                    ? <ClipboardCopy isReadOnly className='pf-v5-u-font-family-monospace' id={idPrefix + '-public-key'}>{publicKey}</ClipboardCopy>
-                    : <Flex className='placeholder-text' alignItems={{ default: 'alignItemsCenter' }}><Text>{_("Public key will be generated when a valid private key is entered")}</Text></Flex>}
+                    ? <ClipboardCopy isReadOnly className='pf-v6-u-font-family-monospace' id={idPrefix + '-public-key'}>{publicKey}</ClipboardCopy>
+                    : <Flex className='placeholder-text' alignItems={{ default: 'alignItemsCenter' }}><Content component="p">{_("Public key will be generated when a valid private key is entered")}</Content></Flex>}
             </FormGroup>
             <FormGroup label={_("Listen port")} fieldId={idPrefix + '-listen-port-input'}>
                 <Flex>
-                    <TextInput id={idPrefix + '-listen-port-input'} className='network-number-field' value={listenPort} onChange={(_, val) => { setListenPort(val) }} />
+                    <TextInput id={idPrefix + '-listen-port-input'} className='wg-listen-port' value={listenPort} onChange={(_, val) => { setListenPort(val) }} />
                     {!parseInt(listenPort) && <FormHelperText>
                         <HelperText>
                             <HelperTextItem>{_("Will be set to \"Automatic\"")}</HelperTextItem>
@@ -249,8 +274,8 @@ export function WireGuardDialog({ settings, connection, dev }) {
                     </FormHelperText>}
                 </Flex>
             </FormGroup>
-            <FormGroup label={_("IPv4 addresses")} fieldId={idPrefix + '-addresses-input'}>
-                <TextInput id={idPrefix + '-addresses-input'} value={addresses} onChange={(_, val) => { setAddresses(val) }} placeholder="Example, 10.0.0.1/24, 1.2.3.4/24" />
+            <FormGroup label={_("IP addresses")} fieldId={idPrefix + '-addresses-input'}>
+                <TextInput id={idPrefix + '-addresses-input'} value={addresses} onChange={(_, val) => { setAddresses(val) }} placeholder="Example, 10.0.0.1/24, 2001:db8:cafe::1/64" />
                 <FormHelperText>
                     <HelperText>
                         <HelperTextItem>{_("Multiple addresses can be specified using commas or spaces as delimiters.")}</HelperTextItem>
@@ -260,12 +285,12 @@ export function WireGuardDialog({ settings, connection, dev }) {
             <FormFieldGroup
                 header={
                     <FormFieldGroupHeader
-                        className='pf-v5-u-align-items-center'
+                        className='pf-v6-u-align-items-center'
                         titleText={{
                             text: (
                                 <Flex className='pf-m-space-items-none'>
                                     <FlexItem>
-                                        <Text>{_("Peers")}</Text>
+                                        <Content component="p">{_("Peers")}</Content>
                                     </FlexItem>
                                     <FlexItem>
                                         <Popover
@@ -276,7 +301,7 @@ export function WireGuardDialog({ settings, connection, dev }) {
                                                 <p>{_("Endpoint acting as a \"server\" need to be specified as host:port, otherwise it can be left empty.")}</p>
                                             }
                                         >
-                                            <Button variant='plain'><HelpIcon /></Button>
+                                            <Button icon={<HelpIcon />} variant='plain' />
                                         </Popover>
                                     </FlexItem>
                                 </Flex>
@@ -325,15 +350,14 @@ export function WireGuardDialog({ settings, connection, dev }) {
                                 />
                             </FormGroup>
                             <FormGroup className='pf-m-1-col-on-md remove-button-group'>
-                                <Button
+                                <Button icon={<TrashIcon />}
                                     variant='plain'
                                     id={idPrefix + '-btn-close-peer-' + i}
+                                    size='sm'
                                     onClick={() => {
                                         setPeers(peers => peers.filter((_, index) => i !== index));
                                     }}
-                                >
-                                    <TrashIcon />
-                                </Button>
+                                />
                             </FormGroup>
                         </Grid>
                     ))
@@ -358,7 +382,10 @@ export function getWireGuardGhostSettings({ newIfaceName }) {
             peers: []
         },
         ipv4: {
-            addresses: []
-        }
+            address_data: []
+        },
+        ipv6: {
+            address_data: []
+        },
     };
 }

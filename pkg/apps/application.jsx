@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2017 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -27,21 +13,36 @@ import { Page, PageBreadcrumb, PageSection } from "@patternfly/react-core/dist/e
 import { Stack } from "@patternfly/react-core/dist/esm/layouts/Stack/index.js";
 import { ExternalLinkAltIcon } from '@patternfly/react-icons';
 
-import * as PackageKit from "./packagekit.js";
-
-import { icon_url, launch, ProgressBar, CancelButton } from "./utils.jsx";
+import { icon_url, launch, ProgressBar, CancelButton, reload_bridge_packages, ProgressReporter } from "./utils";
 
 import "./application.scss";
+import { getPackageManager } from "packagemanager.js";
 
 const _ = cockpit.gettext;
 
+async function install_package(pkgname, progress_cb) {
+    const packagemanager = await getPackageManager();
+    await packagemanager.install_packages([pkgname], progress_cb);
+    await reload_bridge_packages();
+}
+
+async function remove_package(filename, progress_cb) {
+    const progress = new ProgressReporter(0, 1, progress_cb);
+    const packagemanager = await getPackageManager();
+    const pkgnames = await packagemanager.find_file_packages([filename], progress.progress_reporter);
+    progress.base = 1;
+    progress.range = 99;
+    await packagemanager.remove_packages(pkgnames, progress.progress_reporter);
+    await reload_bridge_packages();
+}
+
 export const ActionButton = ({ comp, progress, action }) => {
     function install(comp) {
-        action(PackageKit.install, comp.pkgname, _("Installing"), comp.id);
+        action(install_package, comp.pkgname, _("Installing"), comp.id);
     }
 
     function remove(comp) {
-        action(PackageKit.remove, comp.file, _("Removing"), comp.id);
+        action(remove_package, comp.file, _("Removing"), comp.id);
     }
 
     if (progress) {
@@ -53,7 +54,7 @@ export const ActionButton = ({ comp, progress, action }) => {
     }
 };
 
-export const Application = ({ metainfo_db, id, progress, progress_title, action }) => {
+export const Application = ({ metainfo_db, id, progress, action }) => {
     if (!id)
         return null;
 
@@ -61,7 +62,7 @@ export const Application = ({ metainfo_db, id, progress, progress_title, action 
 
     function render_homepage_link(urls) {
         return urls.map((url, index) => {
-            if (url.type == 'homepage') {
+            if (url.type === 'homepage') {
                 return (
                     <Button isInline variant="link" component='a' href={url.link}
                             key={"project-url-" + index}
@@ -77,7 +78,7 @@ export const Application = ({ metainfo_db, id, progress, progress_title, action 
         });
     }
 
-    // Render a description in the form returned by the AppsSream
+    // Render a description in the form returned by the AppStream
     // parser, which is a list of paragraphs and lists.
 
     function render_description(description) {
@@ -85,9 +86,9 @@ export const Application = ({ metainfo_db, id, progress, progress_title, action 
             return <p>{_("No description provided.")}</p>;
 
         return description.map((paragraph, index) => {
-            if (paragraph.tag == 'ul') {
+            if (paragraph.tag === 'ul') {
                 return <ul key={`paragraph-${index}`}>{paragraph.items.map(item => <li key={item}>{item}</li>)}</ul>;
-            } else if (paragraph.tag == 'ol') {
+            } else if (paragraph.tag === 'ol') {
                 return <ol key={`paragraph-${index}`}>{paragraph.items.map(item => <li key={item}>{item}</li>)}</ol>;
             } else {
                 return <p key={`paragraph-${index}`}>{paragraph}</p>;
@@ -104,7 +105,7 @@ export const Application = ({ metainfo_db, id, progress, progress_title, action 
 
         let progress_or_launch;
         if (progress) {
-            progress_or_launch = <ProgressBar title={progress_title} data={progress} />;
+            progress_or_launch = <ProgressBar data={progress} />;
         } else if (comp.installed) {
             progress_or_launch = <Button variant="link" onClick={() => launch(comp)}>{_("Go to application")}</Button>;
         } else {
@@ -112,13 +113,13 @@ export const Application = ({ metainfo_db, id, progress, progress_title, action 
         }
 
         return (
-            <Card>
+            <Card isPlain>
                 <CardHeader actions={{
                     actions: <>{progress_or_launch}<ActionButton comp={comp} progress={progress} action={action} /></>,
                 }}>
                     <CardTitle>
                         <Flex alignItems={{ default: 'alignItemsCenter' }}>
-                            <img src={icon_url(comp.icon)} role="presentation" alt="" />
+                            <img src={icon_url(comp.icon)} alt="" />
                             <span>{comp.summary}</span>
                         </Flex>
                     </CardTitle>
@@ -129,7 +130,7 @@ export const Application = ({ metainfo_db, id, progress, progress_title, action 
                         <div className="app-description">{render_description(comp.description)}</div>
                         {comp.screenshots.length
                             ? <div className="text-center">
-                                { comp.screenshots.map((s, index) => <img key={`comp-${index}`} className="app-screenshot" role="presentation" alt="" src={s.full} />) }
+                                { comp.screenshots.map((s, index) => <img key={`comp-${index}`} className="app-screenshot" alt="" src={s.full} />) }
                             </div>
                             : null}
                     </Stack>
@@ -140,14 +141,14 @@ export const Application = ({ metainfo_db, id, progress, progress_title, action 
 
     return (
         <Page id="app-page"
-              className="application-details">
-            <PageBreadcrumb stickyOnBreakpoint={{ default: "top" }}>
+              className="application-details pf-m-no-sidebar">
+            <PageBreadcrumb hasBodyWrapper={false} stickyOnBreakpoint={{ default: "top" }}>
                 <Breadcrumb>
                     <BreadcrumbItem to="#/">{_("Applications")}</BreadcrumbItem>
                     <BreadcrumbItem isActive>{comp ? comp.name : id}</BreadcrumbItem>
                 </Breadcrumb>
             </PageBreadcrumb>
-            <PageSection>
+            <PageSection hasBodyWrapper={false}>
                 {render_comp()}
             </PageSection>
         </Page>

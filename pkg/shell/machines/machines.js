@@ -1,6 +1,10 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 import cockpit from "cockpit";
+import { import_Manifests } from "../manifests";
+import { validate } from "import-json";
+import { host_superuser_storage_key } from "superuser-dialogs";
 
-import ssh_add_key_sh from "./ssh-add-key.sh";
+import ssh_add_key_sh from "../../lib/ssh-add-key.sh";
 
 const mod = { };
 
@@ -26,21 +30,6 @@ function generate_session_key(host) {
     return session_prefix + "/" + host;
 }
 
-export function host_superuser_storage_key(host) {
-    if (!host)
-        host = cockpit.transport.host;
-
-    const local_key = window.localStorage.getItem("superuser-key");
-    if (host == "localhost")
-        return local_key;
-    else if (host.indexOf("@") >= 0)
-        return "superuser:" + host;
-    else if (local_key)
-        return local_key + "@" + host;
-    else
-        return null;
-}
-
 export function get_init_superuser_for_options(options) {
     let value = null;
     const key = host_superuser_storage_key(options.host);
@@ -62,10 +51,55 @@ export function get_init_superuser_for_options(options) {
      * hopefully.
      */
 
-    if (value == "sudo" && !options.password)
+    if (value === "sudo" && !options.password)
         value = "none";
 
     return value;
+}
+
+export function generate_connection_string(user, port, addr) {
+    let address = addr;
+    if (user)
+        address = user + "@" + address;
+
+    if (port)
+        address = address + ":" + port;
+
+    return address;
+}
+
+export function split_connection_string (conn_to) {
+    const parts = { address: "" };
+    let user_spot = -1;
+    let port_spot = -1;
+
+    if (conn_to) {
+        if (conn_to.substring(0, 6) === "ssh://")
+            conn_to = conn_to.substring(6);
+        user_spot = conn_to.lastIndexOf('@');
+        port_spot = conn_to.lastIndexOf(':');
+    }
+
+    if (user_spot > 0) {
+        parts.user = conn_to.substring(0, user_spot);
+        conn_to = conn_to.substring(user_spot + 1);
+        port_spot = conn_to.lastIndexOf(':');
+    }
+
+    if (port_spot > -1) {
+        const port = parseInt(conn_to.substring(port_spot + 1), 10);
+        if (!isNaN(port)) {
+            parts.port = port;
+            conn_to = conn_to.substring(0, port_spot);
+        }
+    }
+
+    parts.address = conn_to;
+    return parts;
+}
+
+function import_manifests(val) {
+    return validate("manifests", val, import_Manifests, {});
 }
 
 function Machines() {
@@ -85,7 +119,7 @@ function Machines() {
         overlay: {
             localhost: {
                 visible: true,
-                manifests: cockpit.manifests
+                manifests: import_manifests(cockpit.manifests)
             }
         }
     };
@@ -157,12 +191,12 @@ function Machines() {
             if (!machine.address)
                 machine.address = host;
 
-            machine.connection_string = self.generate_connection_string(machine.user,
-                                                                        machine.port,
-                                                                        machine.address);
+            machine.connection_string = generate_connection_string(machine.user,
+                                                                   machine.port,
+                                                                   machine.address);
 
             if (!machine.label) {
-                if (host == "localhost" || host == "localhost.localdomain") {
+                if (host === "localhost" || host === "localhost.localdomain") {
                     const application = cockpit.transport.application();
                     if (application.indexOf('cockpit+=') === 0)
                         machine.label = application.replace('cockpit+=', '');
@@ -203,7 +237,7 @@ function Machines() {
         const data = { ...machine, ...values };
         window.sessionStorage.setItem(skey, JSON.stringify(data));
         self.overlay(host, values);
-        return cockpit.when([]);
+        return Promise.resolve([]);
     }
 
     function update_saved_machine(host, values) {
@@ -212,14 +246,14 @@ function Machines() {
         const values_variant = {};
         for (const prop in values) {
             if (values[prop] !== null) {
-                if (prop == "visible")
+                if (prop === "visible")
                     values_variant[prop] = cockpit.variant('b', values[prop]);
                 else
                     values_variant[prop] = cockpit.variant('s', values[prop].toString());
             }
         }
 
-        // FIXME: investigate re-using the proxy from Loader (runs in different frame/scope)
+        // FIXME: investigate reusing the proxy from Loader (runs in different frame/scope)
         const bridge = cockpit.dbus(null, { bus: "internal", superuser: "require" });
         const mod =
             bridge.call("/machines", "cockpit.Machines", "Update", ["99-webui.json", host, values_variant])
@@ -245,7 +279,7 @@ function Machines() {
     };
 
     self.add = function add(connection_string, color) {
-        let values = self.split_connection_string(connection_string);
+        let values = split_connection_string(connection_string);
         const host = values.address;
 
         values = {
@@ -274,7 +308,7 @@ function Machines() {
         const norm = mod.colors.parse(color);
         for (const key in machines) {
             const machine = machines[key];
-            if (machine.color && mod.colors.parse(machine.color) == norm)
+            if (machine.color && mod.colors.parse(machine.color) === norm)
                 return true;
         }
         return false;
@@ -323,7 +357,7 @@ function Machines() {
     };
 
     self.overlay = function overlay(host, values) {
-        const address = self.split_connection_string(host).address;
+        const address = split_connection_string(host).address;
         const changes = { };
         changes[address] = { ...last.overlay[address] };
         merge(changes[address], values);
@@ -358,49 +392,8 @@ function Machines() {
     });
 
     self.lookup = function lookup(address) {
-        const parts = self.split_connection_string(address);
+        const parts = split_connection_string(address);
         return machines[parts.address || "localhost"] || null;
-    };
-
-    self.generate_connection_string = function (user, port, addr) {
-        let address = addr;
-        if (user)
-            address = user + "@" + address;
-
-        if (port)
-            address = address + ":" + port;
-
-        return address;
-    };
-
-    self.split_connection_string = function(conn_to) {
-        const parts = {};
-        let user_spot = -1;
-        let port_spot = -1;
-
-        if (conn_to) {
-            if (conn_to.substring(0, 6) === "ssh://")
-                conn_to = conn_to.substring(6);
-            user_spot = conn_to.lastIndexOf('@');
-            port_spot = conn_to.lastIndexOf(':');
-        }
-
-        if (user_spot > 0) {
-            parts.user = conn_to.substring(0, user_spot);
-            conn_to = conn_to.substring(user_spot + 1);
-            port_spot = conn_to.lastIndexOf(':');
-        }
-
-        if (port_spot > -1) {
-            const port = parseInt(conn_to.substring(port_spot + 1), 10);
-            if (!isNaN(port)) {
-                parts.port = port;
-                conn_to = conn_to.substring(0, port_spot);
-            }
-        }
-
-        parts.address = conn_to;
-        return parts;
     };
 
     self.close = function close() {
@@ -428,7 +421,7 @@ function Loader(machines, session_only) {
 
     function process_session_key(key, value) {
         const parts = key.split("/");
-        if (parts[0] == session_prefix &&
+        if (parts[0] === session_prefix &&
             parts.length === 2) {
             const host = parts[1];
             if (value) {
@@ -459,12 +452,12 @@ function Loader(machines, session_only) {
 
     function state(host, value, problem) {
         const values = { state: value, problem };
-        if (value == "connected") {
+        if (value === "connected") {
             values.restarting = false;
         } else if (problem) {
             values.manifests = null;
             values.checksum = null;
-            if (problem == "authentication-failed" || problem == "authentication-not-supported")
+            if (problem === "authentication-failed" || problem === "authentication-not-supported")
                 values.restarting = false;
         }
         machines.overlay(host, values);
@@ -495,7 +488,7 @@ function Loader(machines, session_only) {
             overlay.label = label;
 
         const os = props.OperatingSystemPrettyName;
-        if (os && os != machine.os)
+        if (os && os !== machine.os)
             overlay.os = props.OperatingSystemPrettyName;
 
         if (Object.keys(overlay).length > 0)
@@ -506,7 +499,7 @@ function Loader(machines, session_only) {
          * explicitly connect as necessary.
          */
         if (machine.visible) {
-            if (old_conns && machine.connection_string != old_conns) {
+            if (old_conns && machine.connection_string !== old_conns) {
                 cockpit.kill(old_conns);
                 self.disconnect(host);
                 self.connect(host);
@@ -572,7 +565,7 @@ function Loader(machines, session_only) {
             request.responseType = "json";
             request.open("GET", url, true);
             request.addEventListener("load", () => {
-                const overlay = { manifests: request.response };
+                const overlay = { manifests: import_manifests(request.response) };
                 const etag = request.getResponseHeader("ETag");
                 if (etag) /* and remove quotes */
                     overlay.checksum = etag.replace(/^"(.+)"$/, '$1');
@@ -606,11 +599,11 @@ function Loader(machines, session_only) {
                 interface: "org.freedesktop.DBus.Properties",
                 member: "PropertiesChanged"
             },
-                           function (path, iface, mamber, args) {
-                               if (args[0] == "cockpit.Packages") {
+                           function (path, iface, member, args) {
+                               if (args[0] === "cockpit.Packages") {
                                    if (args[1].Manifests) {
                                        const manifests = JSON.parse(args[1].Manifests.v);
-                                       machines.overlay(host, { manifests });
+                                       machines.overlay(host, { manifests: import_manifests(manifests) });
                                    }
                                }
                            });
@@ -704,7 +697,7 @@ function Loader(machines, session_only) {
     };
 
     self.expect_restart = function expect_restart(host) {
-        const parts = machines.split_connection_string(host);
+        const parts = split_connection_string(host);
         machines.overlay(parts.address, {
             restarting: true,
             problem: null
@@ -727,6 +720,7 @@ function Loader(machines, session_only) {
         proxy.addEventListener("changed", data => {
             // unwrap variants from D-Bus call
             const wrapped = proxy.Machines;
+            cockpit.assert(typeof wrapped === "object" && wrapped !== null, "unexpected type of Machines property");
             const data_unwrap = {};
             for (const host in wrapped) {
                 const host_props = {};

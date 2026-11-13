@@ -1,24 +1,10 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2020 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from 'cockpit';
-import React, { useState, useEffect, useRef } from 'react';
+import React from 'react';
 import { superuser } from "superuser";
 
 import { admins } from './users.js';
@@ -33,9 +19,9 @@ import { Label } from "@patternfly/react-core/dist/esm/components/Label/index.js
 import { Page, PageSection } from "@patternfly/react-core/dist/esm/components/Page/index.js";
 import { SearchInput } from "@patternfly/react-core/dist/esm/components/SearchInput/index.js";
 import { Stack } from "@patternfly/react-core/dist/esm/layouts/Stack/index.js";
-import { Text, TextContent, TextVariants } from "@patternfly/react-core/dist/esm/components/Text/index.js";
+import { Content, ContentVariants } from "@patternfly/react-core/dist/esm/components/Content/index.js";
 import { Toolbar, ToolbarContent, ToolbarItem } from "@patternfly/react-core/dist/esm/components/Toolbar/index.js";
-import * as timeformat from "timeformat.js";
+import * as timeformat from "timeformat";
 import { EmptyStatePanel } from 'cockpit-components-empty-state.jsx';
 import { ListingTable } from 'cockpit-components-table.jsx';
 import { SearchIcon } from '@patternfly/react-icons';
@@ -52,7 +38,7 @@ import { KebabDropdown } from "cockpit-components-dropdown";
 
 const _ = cockpit.gettext;
 
-const UserActions = ({ account }) => {
+const UserActions = ({ account, current }) => {
     const actions = [
         <DropdownItem key="edit-user"
                       onClick={ev => { ev.preventDefault(); cockpit.location.go(account.name) }}>
@@ -63,7 +49,7 @@ const UserActions = ({ account }) => {
     superuser.allowed && actions.push(
         <Divider key="separator-0" />,
         <DropdownItem key="log-user-out"
-                      isDisabled={account.uid === 0 || !account.loggedIn}
+                      isDisabled={account.uid === 0 || !account.loggedIn || current }
                       onClick={() => logoutAccountDialog(account) }>
             {_("Log user out")}
         </DropdownItem>,
@@ -74,22 +60,22 @@ const UserActions = ({ account }) => {
             {_("Lock account")}
         </DropdownItem>,
         <DropdownItem key="delete-account"
-                      isDisabled={account.uid === 0}
-                      className={account.uid === 0 ? "" : "delete-resource-red"}
+                      isDisabled={account.uid === 0 || current}
+                      className={account.uid === 0 || current ? "" : "delete-resource-red"}
                       onClick={() => delete_account_dialog(account) }>
             {_("Delete account")}
         </DropdownItem>,
     );
 
-    return <KebabDropdown id="accounts-actions" dropdownItems={actions} />;
+    return <KebabDropdown toggleButtonId="accounts-actions" dropdownItems={actions} />;
 };
 
 const getGroupRow = (group, accounts) => {
     let groupColorClass;
     if (group.isAdmin)
-        groupColorClass = "group-gold";
+        groupColorClass = "group-yellow";
     else if (group.members > 0)
-        groupColorClass = "group-cyan";
+        groupColorClass = "group-blue";
     else
         groupColorClass = "group-grey";
 
@@ -114,19 +100,19 @@ const getGroupRow = (group, accounts) => {
         },
         {
             title: (
-                <TextContent>
-                    <Text component={TextVariants.p}>
+                <Content>
+                    <Content component={ContentVariants.p}>
                         {(group.userlistPrimary.concat(group.userlist))
                                 .map(account => {
                                     if (accounts.map(account => account.name).includes(account))
-                                        return <Text key={account} component={TextVariants.a} href={"#" + account}>{account}</Text>;
+                                        return <Content key={account} component={ContentVariants.a} href={"#" + account}>{account}</Content>;
                                     else
                                         return account;
                                 })
                                 .reduce((acc, curr) => [...acc, ", ", curr], [])
                                 .slice(1)}
-                    </Text>
-                </TextContent>
+                    </Content>
+                </Content>
             ),
             props: { width: 50, },
         },
@@ -136,18 +122,18 @@ const getGroupRow = (group, accounts) => {
         columns.push(
             {
                 title: <GroupActions group={group} />,
-                props: { className: "pf-v5-c-table__action" }
+                props: { className: "pf-v6-c-table__action" }
             }
         );
     }
 
-    return { columns, props: { key: group.name } };
+    return { columns, props: { "data-row-id": group.name, key: group.name } };
 };
 
 const getAccountRow = (account, current, groups) => {
     const userGroups = groups.filter(group => group.gid === account.gid || group.userlist.find(accountName => accountName === account.name));
     const userGroupLabels = userGroups.map(group => {
-        const color = group.isAdmin ? "gold" : "cyan";
+        const color = group.isAdmin ? "yellow" : "blue";
         return (
             <Label key={group.name} variant="filled" color={color}>
                 {!group.isAdmin ? group.name : ("admin" + " (" + group.name + ")") }
@@ -201,12 +187,12 @@ const getAccountRow = (account, current, groups) => {
             props: { width: 20 },
         },
         {
-            title: <UserActions account={account} />,
-            props: { className: "pf-v5-c-table__action" }
+            title: <UserActions account={account} current={current} />,
+            props: { className: "pf-v6-c-table__action" }
         },
     ];
 
-    return { columns, props: { key: account.name } };
+    return { columns, props: { "data-row-id": account.name, key: account.name } };
 };
 
 const mapGroupsToAccount = (accounts, groups) => {
@@ -224,13 +210,17 @@ const mapGroupsToAccount = (accounts, groups) => {
 
 const GroupsList = ({ groups, accounts, isExpanded, setIsExpanded, min_gid, max_gid }) => {
     const { options } = usePageLocation();
-    const [currentTextFilter, setCurrentTextFilter] = useState(options.group || '');
-    const columns = [
-        { title: _("Group name"), sortable: true },
-        { title: _("ID"), sortable: true },
-        { title: _("# of users"), sortable: true },
-        { title: _("Accounts") },
-    ];
+
+    const currentTextFilter = typeof options.group == "string" ? options.group : '';
+    const setCurrentTextFilter = val => {
+        const newOptions = { ...cockpit.location.options };
+        if (val)
+            newOptions.group = val;
+        else
+            delete newOptions.group;
+        cockpit.location.replace(cockpit.location.path, newOptions);
+    };
+
     const filtered_groups = groups.filter(group => {
         if (currentTextFilter !== "" &&
             (group.name.toLowerCase().indexOf(currentTextFilter.toLowerCase()) === -1) &&
@@ -239,26 +229,17 @@ const GroupsList = ({ groups, accounts, isExpanded, setIsExpanded, min_gid, max_
 
         return true;
     });
-    const ref = useRef();
 
-    useEffect(() => {
-        if (ref.current != currentTextFilter) {
-            ref.current = currentTextFilter;
-            const newOptions = { ...options };
-            if (currentTextFilter) {
-                newOptions.group = currentTextFilter;
-            } else {
-                delete newOptions.group;
-            }
-            cockpit.location.go([], newOptions);
-        } else {
-            setCurrentTextFilter(options.group || "");
-        }
-    }, [currentTextFilter, options]);
+    const columns = [
+        { title: _("Group name"), sortable: true },
+        { title: _("ID"), sortable: true },
+        { title: _("# of users"), sortable: true },
+        { title: _("Accounts") },
+    ];
 
     const sortRows = (rows, direction, idx) => {
         // GID and members columns are numeric
-        const isNumeric = idx == 1 || idx == 2;
+        const isNumeric = idx === 1 || idx === 2;
         const sortedRows = rows.sort((a, b) => {
             const aitem = a.columns[idx].sortKey || a.columns[idx].title;
             const bitem = b.columns[idx].sortKey || b.columns[idx].title;
@@ -292,7 +273,7 @@ const GroupsList = ({ groups, accounts, isExpanded, setIsExpanded, min_gid, max_
                 { superuser.allowed &&
                     <>
                         {isExpanded && <ToolbarItem variant="separator" />}
-                        <ToolbarItem align={{ md: 'alignRight' }}>
+                        <ToolbarItem align={{ md: "alignEnd" }}>
                             <Button variant="secondary" id="groups-create" onClick={() => group_create_dialog(groups, setIsExpanded, min_gid, max_gid)}>
                                 {_("Create new group")}
                             </Button>
@@ -304,7 +285,7 @@ const GroupsList = ({ groups, accounts, isExpanded, setIsExpanded, min_gid, max_
     );
 
     return (
-        <Card className="ct-card" isExpanded={isExpanded}>
+        <Card className="ct-card card-groups" isExpanded={isExpanded}>
             <CardHeader actions={{ actions: tableToolbar, hasNoOffset: true }}
                 className="ct-card-expandable-header"
                 onExpand={() => setIsExpanded(!isExpanded)}
@@ -313,13 +294,13 @@ const GroupsList = ({ groups, accounts, isExpanded, setIsExpanded, min_gid, max_
                     'aria-label': _("Groups"),
                     'aria-expanded': isExpanded
                 }}>
-                <CardTitle className="pf-v5-l-flex pf-m-align-items-center pf-m-space-items-md">
-                    <Text component={TextVariants.h2}>{_("Groups")}</Text>
+                <CardTitle className="pf-v6-l-flex pf-m-align-items-center pf-m-space-items-md">
+                    {_("Groups")}
                     {(!isExpanded && !groups.length) && <HelperText> <HelperTextItem variant="indeterminate">{_("Loading...")}</HelperTextItem></HelperText>}
                     {(!isExpanded && filtered_groups.length > 0) && <>
                         {filtered_groups.slice(0, 3)
                                 .map(group => {
-                                    const color = group.isAdmin ? "gold" : "cyan";
+                                    const color = group.isAdmin ? "yellow" : "blue";
                                     return (
                                         <Label key={group.name} variant="filled" color={color}>
                                             {group.name + ": " + (group.userlistPrimary.length + group.userlist.length)}
@@ -338,7 +319,8 @@ const GroupsList = ({ groups, accounts, isExpanded, setIsExpanded, min_gid, max_
                     rows={ filtered_groups.map(a => getGroupRow(a, accounts)) }
                     loading={ groups.length && accounts.length ? '' : _("Loading...") }
                     sortMethod={sortRows}
-                    emptyComponent={<EmptyStatePanel title={_("No matching results")} icon={SearchIcon} />}
+                    emptyComponent={<EmptyStatePanel title={_("No matching results")} icon={SearchIcon} action={_("Clear filter")}
+                                                     onAction={() => setCurrentTextFilter('')} actionVariant="link" />}
                     variant="compact" sortBy={{ index: 2, direction: SortByDirection.asc }} />
             </CardExpandableContent>
         </Card>
@@ -347,7 +329,17 @@ const GroupsList = ({ groups, accounts, isExpanded, setIsExpanded, min_gid, max_
 
 const AccountsList = ({ accounts, current_user, groups, min_uid, max_uid, shells }) => {
     const { options } = usePageLocation();
-    const [currentTextFilter, setCurrentTextFilter] = useState(options.user || '');
+
+    const currentTextFilter = typeof options.user == "string" ? options.user : '';
+    const setCurrentTextFilter = val => {
+        const newOptions = { ...cockpit.location.options };
+        if (val)
+            newOptions.user = val;
+        else
+            delete newOptions.user;
+        cockpit.location.replace(cockpit.location.path, newOptions);
+    };
+
     const filtered_accounts = accounts.filter(account => {
         if (currentTextFilter !== "" &&
             (account.name.toLowerCase().indexOf(currentTextFilter.toLowerCase()) === -1) &&
@@ -358,22 +350,6 @@ const AccountsList = ({ accounts, current_user, groups, min_uid, max_uid, shells
 
         return true;
     });
-    const ref = useRef();
-
-    useEffect(() => {
-        if (ref.current != currentTextFilter) {
-            ref.current = currentTextFilter;
-            const newOptions = { ...options };
-            if (currentTextFilter) {
-                newOptions.user = currentTextFilter;
-            } else {
-                delete newOptions.user;
-            }
-            cockpit.location.go([], newOptions);
-        } else {
-            setCurrentTextFilter(options.user || "");
-        }
-    }, [currentTextFilter, options]);
 
     const columns = [
         { title: _("Username"), sortable: true },
@@ -381,6 +357,7 @@ const AccountsList = ({ accounts, current_user, groups, min_uid, max_uid, shells
         { title: _("ID"), sortable: true },
         { title: _("Last active"), sortable: true },
         { title: _("Group") },
+        { title: "", sortable: false, props: { screenReaderText: _("Actions") } },
     ];
 
     const sortRows = (rows, direction, idx) => {
@@ -409,7 +386,7 @@ const AccountsList = ({ accounts, current_user, groups, min_uid, max_uid, shells
                 return bitem.sortKey - aitem.sortKey;
             }
 
-            if (idx == 2)
+            if (idx === 2)
                 return bitem.title - aitem.title;
             return ((typeof aitem == 'string' ? aitem : (aitem.sortKey || aitem.title)).localeCompare(typeof bitem == 'string' ? bitem : (bitem.sortKey || bitem.title)));
         });
@@ -429,7 +406,7 @@ const AccountsList = ({ accounts, current_user, groups, min_uid, max_uid, shells
                 { superuser.allowed &&
                     <>
                         <ToolbarItem variant="separator" />
-                        <ToolbarItem align={{ md: 'alignRight' }}>
+                        <ToolbarItem align={{ md: "alignEnd" }}>
                             <Button id="accounts-create" onClick={() => account_create_dialog(accounts, min_uid, max_uid, shells)}>
                                 {_("Create new account")}
                             </Button>
@@ -441,7 +418,7 @@ const AccountsList = ({ accounts, current_user, groups, min_uid, max_uid, shells
     );
 
     return (
-        <Card className="ct-card">
+        <Card isPlain className="ct-card">
             <CardHeader actions={{ actions: tableToolbar }}>
                 <CardTitle component="h2">{_("Accounts")}</CardTitle>
             </CardHeader>
@@ -451,7 +428,8 @@ const AccountsList = ({ accounts, current_user, groups, min_uid, max_uid, shells
                           rows={ filtered_accounts.map(a => getAccountRow(a, current_user === a.name, groups)) }
                           loading={ accounts.length ? '' : _("Loading...") }
                           sortMethod={sortRows}
-                          emptyComponent={<EmptyStatePanel title={_("No matching results")} icon={SearchIcon} />}
+                          emptyComponent={<EmptyStatePanel title={_("No matching results")} icon={SearchIcon} action={_("Clear filter")}
+                                                           onAction={() => setCurrentTextFilter('')} actionVariant="link" />}
                           variant="compact" sortBy={{ index: 0, direction: SortByDirection.asc }} />
         </Card>
 
@@ -468,8 +446,8 @@ export const AccountsMain = ({ accountsInfo, current_user, groups, isGroupsExpan
     });
 
     return (
-        <Page id="accounts">
-            <PageSection>
+        <Page id="accounts" className="pf-m-no-sidebar">
+            <PageSection hasBodyWrapper={false}>
                 <Stack hasGutter>
                     <GroupsList accounts={accounts} groups={groups} isExpanded={isGroupsExpanded} setIsExpanded={setIsGroupsExpanded} min_gid={min_gid} max_gid={max_gid} />
                     <AccountsList accounts={accounts} current_user={current_user} groups={groups} shells={shells} min_uid={min_uid} max_uid={max_uid} />

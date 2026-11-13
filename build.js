@@ -1,21 +1,30 @@
 #!/usr/bin/env node
 
-import child_process from 'child_process';
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import process from 'process';
+import child_process from 'node:child_process';
+import fs from 'node:fs';
+import { createRequire } from 'node:module';
+import os from 'node:os';
+import path from 'node:path';
+import process from 'node:process';
 
 import { getFiles, getTestFiles, all_subdirs } from './files.js';
 
+const srcdir = import.meta.dirname;
 const production = process.env.NODE_ENV === 'production';
-const useWasm = os.arch() != 'x64';
+const useWasm = os.arch() !== 'x64';
 
 // ensure node_modules is present and up to date
-child_process.spawnSync('tools/node-modules', ['make_package_lock_json'], { stdio: 'inherit' });
+child_process.spawnSync('tools/node-modules', ['make_package_lock_json'], { stdio: 'inherit', cwd: srcdir });
 
 // List of directories to use when resolving import statements
-const nodePaths = ['pkg/lib'];
+const nodePaths = [`${srcdir}/pkg/lib`];
+
+const parser = (await import('argparse')).default.ArgumentParser();
+parser.add_argument('-o', '--outdir', { help: "base output directory", default: ".", metavar: "DIR" });
+parser.add_argument('-r', '--rsync', { help: "rsync bundles to ssh target after build", metavar: "HOST" });
+parser.add_argument('-w', '--watch', { action: 'store_true', help: "Enable watch mode" });
+parser.add_argument('onlydir', { nargs: '?', help: "The pkg/<DIRECTORY> to build (eg. base1, shell, ...)", metavar: "DIRECTORY" });
+const args = parser.parse_args();
 
 // context options for distributed pages in dist/
 const pkgOptions = {
@@ -28,30 +37,26 @@ const pkgOptions = {
         ".py": "text",
         ".sh": "text",
     },
+    metafile: true,
     minify: production,
     nodePaths,
-    outbase: './pkg',
-    outdir: "./dist",
-    target: ['es2020'],
+    outbase: `${srcdir}/pkg`,
+    outdir: `${args.outdir}/dist`,
+    target: ['es2021'],
 };
 
 // context options for qunit tests in qunit/
 const qunitOptions = {
+    sourcemap: "linked",
     bundle: true,
     minify: false,
     nodePaths,
-    outbase: './pkg',
-    outdir: "./qunit",
+    outbase: `${srcdir}/pkg`,
+    outdir: `${args.outdir}/qunit`,
     loader: {
         ".sh": "text",
     },
 };
-
-const parser = (await import('argparse')).default.ArgumentParser();
-parser.add_argument('-r', '--rsync', { help: "rsync bundles to ssh target after build", metavar: "HOST" });
-parser.add_argument('-w', '--watch', { action: 'store_true', help: "Enable watch mode" });
-parser.add_argument('onlydir', { nargs: '?', help: "The pkg/<DIRECTORY> to build (eg. base1, shell, ...)", metavar: "DIRECTORY" });
-const args = parser.parse_args();
 
 if (args.onlydir?.includes('/'))
     parser.error("Directory must not contain '/'");
@@ -102,20 +107,48 @@ function watch_dirs(dir, on_change) {
 
 async function build() {
     // dynamic imports which need node_modules
-    const copy = (await import('esbuild-plugin-copy')).default;
-    const esbuild = (await import(useWasm ? 'esbuild-wasm' : 'esbuild')).default;
+    const esbuild = await (async () => {
+        try {
+            // Try node_modules first for installs with devDependencies
+            return (await import(useWasm ? 'esbuild-wasm' : 'esbuild')).default;
+        } catch (e) {
+            if (e.code !== 'ERR_MODULE_NOT_FOUND')
+                throw e;
+
+            // Fall back to distro package (e.g. Debian's /usr/lib/*/nodejs/esbuild)
+            // Use createRequire to leverage Node's module resolution which searches system paths
+            // Use require.resolve to find esbuild in system paths, then import it
+            const require = createRequire(import.meta.url);
+            return (await import(require.resolve('esbuild'))).default;
+        }
+    })();
+
+    // Check if qunit is available
+    const qunitAvailable = await (async () => {
+        try {
+            await import('qunit');
+            return true;
+        } catch (e) {
+            if (e.code === 'ERR_MODULE_NOT_FOUND') {
+                console.log('qunit not found, skipping test builds');
+                return false;
+            }
+            throw e;
+        }
+    })();
+
+    const sassPlugin = (await import('esbuild-sass-plugin')).sassPlugin;
 
     const cleanPlugin = (await import('./pkg/lib/esbuild-cleanup-plugin.js')).cleanPlugin;
     const cockpitCompressPlugin = (await import('./pkg/lib/esbuild-compress-plugin.js')).cockpitCompressPlugin;
     const cockpitPoEsbuildPlugin = (await import('./pkg/lib/cockpit-po-plugin.js')).cockpitPoEsbuildPlugin;
     const cockpitRsyncEsbuildPlugin = (await import('./pkg/lib/cockpit-rsync-plugin.js')).cockpitRsyncEsbuildPlugin;
     const cockpitTestHtmlPlugin = (await import('./pkg/lib/esbuild-test-html-plugin.js')).cockpitTestHtmlPlugin;
-
-    const esbuildStylesPlugins = (await import('./pkg/lib/esbuild-common.js')).esbuildStylesPlugins;
+    const cockpitRemoveRHIconsPlugin = (await import('./pkg/lib/cockpit-remove-rhicons-plugin.js')).cockpitRemoveRHIconsPlugin;
 
     const { entryPoints, assetFiles, redhat_fonts } = getFiles(args.onlydir);
     const tests = getTestFiles();
-    const testEntryPoints = tests.map(test => "pkg/" + test + ".js");
+    const testEntryPoints = tests.map(test => `${srcdir}/pkg/${test}`);
 
     const pkgFirstPlugins = [
         cleanPlugin({ subdir: args.onlydir }),
@@ -123,20 +156,44 @@ async function build() {
 
     const pkgPlugins = [
         cockpitJSResolvePlugin,
-        ...esbuildStylesPlugins
+        sassPlugin({
+            loadPaths: [...nodePaths, `${srcdir}/node_modules`],
+            filter: /\.scss/,
+            quietDeps: true,
+            silenceDeprecations: [
+                "if-function" // https://github.com/patternfly/patternfly/issues/8077
+            ]
+        })
     ];
 
     const getTime = () => new Date().toTimeString().split(' ')[0];
 
     const pkgLastPlugins = [
         cockpitPoEsbuildPlugin({
+            podir: path.join(srcdir, 'po'),
             subdirs: args.onlydir ? [args.onlydir] : all_subdirs,
             // login page does not have cockpit.js, but reads window.cockpit_po
-            wrapper: subdir => subdir == "static" ? "window.cockpit_po = PO_DATA;" : undefined,
+            wrapper: subdir => subdir === "static" ? "window.cockpit_po = PO_DATA;" : undefined,
         }),
-        // Esbuild will only copy assets that are explicitly imported and used
-        // in the code. This is a problem for index.html and manifest.json which are not imported
-        copy({ assets: [...assetFiles, ...redhat_fonts] }),
+
+        // copy the static asset files determined in ./files.js
+        {
+            name: 'copy-assets',
+            setup(build) {
+                build.onEnd(() => {
+                    for (const file of [...assetFiles, ...redhat_fonts]) {
+                        const destDir = path.join(pkgOptions.outdir, file.to);
+                        fs.mkdirSync(destDir, { recursive: true });
+                        fs.copyFileSync(file.from, path.join(destDir, path.basename(file.from)));
+                    }
+                });
+            }
+        },
+
+        // HACK: filter out RH icons until they become default
+        // Reduces PF icon byte size by >50% per icon
+        cockpitRemoveRHIconsPlugin(),
+
         // cockpit-ws cannot currently serve compressed login page
         ...production ? [cockpitCompressPlugin({ subdir: args.onlydir, exclude: /\/static/ })] : [],
 
@@ -148,7 +205,7 @@ async function build() {
         },
 
         ...(args.rsync || process.env.RSYNC)
-            ? [cockpitRsyncEsbuildPlugin({ source: "dist/" + (args.onlydir || '') })]
+            ? [cockpitRsyncEsbuildPlugin({ source: `${pkgOptions.outdir}/${args.onlydir || ''}` })]
             : [],
     ];
 
@@ -173,17 +230,19 @@ async function build() {
         }
 
         // build all tests in one go, they are small enough
-        console.log("building qunit tests");
-        const context = await esbuild.context({
-            ...qunitOptions,
-            entryPoints: testEntryPoints,
-            plugins: [
-                cockpitTestHtmlPlugin({ testFiles: tests }),
-            ],
-        });
+        if (qunitAvailable) {
+            console.log("building qunit tests");
+            const context = await esbuild.context({
+                ...qunitOptions,
+                entryPoints: testEntryPoints,
+                plugins: [
+                    cockpitTestHtmlPlugin({ testFiles: tests }),
+                ],
+            });
 
-        await context.rebuild();
-        context.dispose();
+            await context.rebuild();
+            context.dispose();
+        }
     } else {
         // with native esbuild, build everything in one go, that's fastest
         const pkgContext = await esbuild.context({
@@ -192,17 +251,50 @@ async function build() {
             plugins: [...pkgFirstPlugins, ...pkgPlugins, ...pkgLastPlugins],
         });
 
-        const qunitContext = await esbuild.context({
-            ...qunitOptions,
-            entryPoints: testEntryPoints,
-            plugins: [
-                cockpitTestHtmlPlugin({ testFiles: tests }),
-            ],
-        });
+        const qunitContext = qunitAvailable
+            ? await esbuild.context({
+                ...qunitOptions,
+                entryPoints: testEntryPoints,
+                plugins: [
+                    cockpitTestHtmlPlugin({ testFiles: tests }),
+                ],
+            })
+            : null;
 
         try {
-            await Promise.all([pkgContext.rebuild(), qunitContext.rebuild()]);
+            const results = await Promise.all([pkgContext.rebuild(), qunitContext?.rebuild()]);
+            // skip metafile and runtime module calculation in watch and onlydir modes
+            if (!args.watch && !args.onlydir) {
+                fs.writeFileSync(`${args.outdir}/metafile.json`, JSON.stringify(results[0].metafile));
+
+                // Extract bundled npm packages for dependency tracking
+                const bundledPackages = new Set();
+                for (const inputPath of Object.keys(results[0].metafile.inputs)) {
+                    const rel = path.relative(srcdir, inputPath);
+
+                    // Match paths like node_modules/package-name/ or node_modules/@scope/package-name/
+                    const match = rel.match(/^node_modules\/(@[^/]+\/[^/]+|[^/]+)\//);
+                    if (match)
+                        bundledPackages.add(match[1]);
+                }
+
+                // Look up versions from package-lock.json and output simple format
+                const packageLock = JSON.parse(fs.readFileSync(`${srcdir}/package-lock.json`, 'utf8'));
+                const deps = [];
+                for (const pkgName of Array.from(bundledPackages).sort()) {
+                    const lockKey = `node_modules/${pkgName}`;
+                    const pkgInfo = packageLock.packages?.[lockKey];
+                    if (pkgInfo?.version)
+                        deps.push(`${pkgName} ${pkgInfo.version}`);
+                    else
+                        console.error(`Warning: Could not find version for ${pkgName}`);
+                }
+                fs.writeFileSync(`${args.outdir}/runtime-npm-modules.txt`, deps.join('\n') + '\n');
+            }
         } catch (e) {
+            const msg = String(e);
+            if (!msg.includes("Build failed"))
+                console.error("build.js:", msg);
             if (!args.watch)
                 process.exit(1);
             // ignore errors in watch mode
@@ -211,19 +303,19 @@ async function build() {
         if (args.watch) {
             const on_change = async path => {
                 console.log("change detected:", path);
-                await Promise.all([pkgContext.cancel(), qunitContext.cancel()]);
+                await Promise.all([pkgContext.cancel(), qunitContext?.cancel()]);
                 try {
-                    await Promise.all([pkgContext.rebuild(), qunitContext.rebuild()]);
+                    await Promise.all([pkgContext.rebuild(), qunitContext?.rebuild()]);
                 } catch (e) {} // ignore in watch mode
             };
 
-            watch_dirs('pkg', on_change);
+            watch_dirs(`${srcdir}/pkg`, on_change);
             // wait forever until Control-C
             await new Promise(() => {});
         }
 
         pkgContext.dispose();
-        qunitContext.dispose();
+        qunitContext?.dispose();
     }
 }
 

@@ -1,55 +1,43 @@
 /*
+ * SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2013 Red Hat Inc.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- *     * Redistributions of source code must retain the above
- *       copyright notice, this list of conditions and the
- *       following disclaimer.
- *     * Redistributions in binary form must reproduce the
- *       above copyright notice, this list of conditions and
- *       the following disclaimer in the documentation and/or
- *       other materials provided with the distribution.
- *     * The names of contributors to this software may not be
- *       used to endorse or promote products derived from this
- *       software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS
- * OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
- * AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
- * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
- * DAMAGE.
- *
  * Author: Stef Walter <stefw@redhat.com>
  */
 
 #include "config.h"
-#include "testlib/retest.h"
 
 #include "cockpitbase64.h"
+#include "testlib/cockpittest.h"
 
-#include <assert.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 static void
-check_decode_msg (const char *file,
-                  int line,
-                  const char *function,
-                  const char *input,
-                  ssize_t input_len,
-                  const unsigned char *expected,
-                  ssize_t expected_len)
+check_encode_success (const unsigned char *input,
+                      ssize_t input_len,
+                      const char *expected,
+                      ssize_t expected_len)
+{
+  char encoded[8192];
+  int length;
+
+  if (input_len < 0)
+    input_len = strlen ((char *)input);
+  if (expected_len < 0)
+    expected_len = strlen (expected);
+  length = cockpit_base64_ntop (input, input_len, encoded, sizeof (encoded));
+
+  g_assert_cmpint (length, >=, 0);
+  g_assert_cmpint (length, ==, expected_len);
+  g_assert_cmpint (memcmp (encoded, expected, length), ==, 0);
+}
+
+static void
+check_decode_success (const char *input,
+                      ssize_t input_len,
+                      const unsigned char *expected,
+                      ssize_t expected_len)
 {
   unsigned char decoded[8192];
   int length;
@@ -60,31 +48,24 @@ check_decode_msg (const char *file,
     expected_len = strlen ((char *)expected);
   length = cockpit_base64_pton (input, input_len, decoded, sizeof (decoded));
 
-  if (expected == NULL)
-    {
-      if (length >= 0)
-        re_test_fail (file, line, function, "decoding should have failed");
-
-    }
-  else
-    {
-      if (length < 0)
-        re_test_fail (file, line, function, "decoding failed");
-      if (expected_len != length)
-        {
-          re_test_fail (file, line, function, "wrong length: (%lu != %lu)",
-                        (unsigned long)expected_len, (unsigned long)length);
-        }
-      if (memcmp (decoded, expected, length) != 0)
-        re_test_fail (file, line, function, "decoded wrong");
-    }
+  g_assert_cmpint (length, >=, 0);
+  g_assert_cmpint (length, ==, expected_len);
+  g_assert_cmpint (memcmp (decoded, expected, length), ==, 0);
 }
 
-#define check_decode_success(input, input_len, expected, expected_len) \
-  check_decode_msg (__FILE__, __LINE__, __FUNCTION__, input, input_len, expected, expected_len)
+static void
+check_decode_failure (const char *input,
+                      ssize_t input_len)
+{
+  unsigned char decoded[8192];
+  int length;
 
-#define check_decode_failure(input, input_len) \
-  check_decode_msg (__FILE__, __LINE__, __FUNCTION__, input, input_len, NULL, 0)
+  if (input_len < 0)
+    input_len = strlen (input);
+  length = cockpit_base64_pton (input, input_len, decoded, sizeof (decoded));
+
+  g_assert_cmpint (length, <, 0);
+}
 
 static void
 test_decode_simple (void)
@@ -94,6 +75,22 @@ test_decode_simple (void)
   check_decode_success ("YmxhaAo=", -1, (unsigned char *)"blah\n", -1);
   check_decode_success ("bGVlbGEK", -1, (unsigned char *)"leela\n", -1);
   check_decode_success ("bGVlbG9vCg==", -1, (unsigned char *)"leeloo\n", -1);
+  check_decode_success ("dXNlcgpwYXNzd29yZAo=", -1, (unsigned char *)"user\npassword\n", -1);
+}
+
+static void
+test_decode_failure (void)
+{
+  unsigned char decoded[8192];
+  int length;
+
+  /* Invalid base64 */
+  check_decode_failure ("!!!invalid!!!", -1);
+  check_decode_failure ("invalid", -1);
+
+  /* Buffer too small - "blah\n" needs 5 bytes, only 4 provided */
+  length = cockpit_base64_pton ("YmxhaAo=", strlen ("YmxhaAo="), decoded, 4);
+  g_assert_cmpint (length, <, 0);
 }
 
 static void
@@ -197,11 +194,54 @@ test_decode_thawte (void)
   check_decode_success (input, -1, output, sizeof (output));
 }
 
+static void
+test_encode_simple (void)
+{
+  check_encode_success ((unsigned char *)"", 0, "", 0);
+  check_encode_success ((unsigned char *)"1", 1, "MQ==", -1);
+  check_encode_success ((unsigned char *)"blah\n", -1, "YmxhaAo=", -1);
+  check_encode_success ((unsigned char *)"leela\n", -1, "bGVlbGEK", -1);
+  check_encode_success ((unsigned char *)"leeloo\n", -1, "bGVlbG9vCg==", -1);
+  check_encode_success ((unsigned char *)"user\npassword\n", -1, "dXNlcgpwYXNzd29yZAo=", -1);
+}
+
+static void
+test_roundtrip_all_bytes (void)
+{
+  unsigned char input[256];
+  char encoded[8192];
+  unsigned char decoded[8192];
+  int encode_len, decode_len;
+  int i;
+
+  /* Create input with all possible byte values */
+  for (i = 0; i < 256; i++)
+    input[i] = i;
+
+  /* Encode */
+  encode_len = cockpit_base64_ntop (input, sizeof (input), encoded, sizeof (encoded));
+  g_assert_cmpint (encode_len, >=, 0);
+
+  /* Decode */
+  decode_len = cockpit_base64_pton (encoded, encode_len, decoded, sizeof (decoded));
+  g_assert_cmpint (decode_len, >=, 0);
+
+  /* Check round-trip */
+  g_assert_cmpint (decode_len, ==, sizeof (input));
+  g_assert_cmpint (memcmp (input, decoded, sizeof (input)), ==, 0);
+}
+
 int
 main (int argc,
       char *argv[])
 {
-  re_test (test_decode_simple, "/base64/decode-simple");
-  re_test (test_decode_thawte, "/base64/decode-thawte");
-  return re_test_run (argc, argv);
+  cockpit_test_init (&argc, &argv);
+
+  g_test_add_func ("/base64/decode-simple", test_decode_simple);
+  g_test_add_func ("/base64/decode-failure", test_decode_failure);
+  g_test_add_func ("/base64/decode-thawte", test_decode_thawte);
+  g_test_add_func ("/base64/encode-simple", test_encode_simple);
+  g_test_add_func ("/base64/roundtrip-all-bytes", test_roundtrip_all_bytes);
+
+  return g_test_run ();
 }

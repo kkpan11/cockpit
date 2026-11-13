@@ -41,6 +41,18 @@
         },
         "journal": {
             "label": "Logs Box"
+        },
+        "remote": {
+            "label": "Remote channel"
+        },
+        "terminal": {
+            "label": "Terminal"
+        },
+        "packagemanager": {
+            "label": "PackageManager (install dialog)"
+        },
+        "dialog": {
+            "label": "Dialog Implementation Convenience Kit"
         }
     },
     "preload": [ "preloaded" ],

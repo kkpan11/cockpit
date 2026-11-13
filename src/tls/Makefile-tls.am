@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # -----------------------------------------------------------------------------
 # libcockpit-tls.a: code used in cockpit-tls, helpers, and tests
 
@@ -5,14 +6,14 @@ noinst_LIBRARIES += libcockpit-tls.a
 
 libcockpit_tls_a_LIBS = \
 	libcockpit-tls.a \
-	$(libcockpit_common_nodeps_a_LIBS) \
+	$(libcockpit_common_a_LIBS) \
 	$(gnutls_LIBS) \
 	-lpthread \
 	$(NULL)
 
 libcockpit_tls_a_SOURCES = \
-	src/tls/certificate.c \
-	src/tls/certificate.h \
+	src/tls/credentials.c \
+	src/tls/credentials.h \
 	src/tls/client-certificate.c \
 	src/tls/client-certificate.h \
 	src/tls/connection.c \

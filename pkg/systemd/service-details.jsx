@@ -1,24 +1,9 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2019 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import React, { useState } from "react";
-import PropTypes from "prop-types";
 import { Button } from "@patternfly/react-core/dist/esm/components/Button/index.js";
 import { DescriptionList, DescriptionListDescription, DescriptionListGroup, DescriptionListTerm } from "@patternfly/react-core/dist/esm/components/DescriptionList/index.js";
 import { DropdownItem } from '@patternfly/react-core/dist/esm/components/Dropdown/index.js';
@@ -28,10 +13,13 @@ import { ExpandableSection } from "@patternfly/react-core/dist/esm/components/Ex
 import { Tooltip, TooltipPosition } from "@patternfly/react-core/dist/esm/components/Tooltip/index.js";
 import { Card, CardHeader, CardBody, CardTitle } from "@patternfly/react-core/dist/esm/components/Card/index.js";
 import { List, ListItem } from "@patternfly/react-core/dist/esm/components/List/index.js";
-import { Modal } from "@patternfly/react-core/dist/esm/components/Modal/index.js";
+import {
+    Modal, ModalBody, ModalFooter, ModalHeader
+} from '@patternfly/react-core/dist/esm/components/Modal/index.js';
 import { Spinner } from "@patternfly/react-core/dist/esm/components/Spinner/index.js";
 import { Stack } from "@patternfly/react-core/dist/esm/layouts/Stack/index.js";
 import { Switch } from "@patternfly/react-core/dist/esm/components/Switch/index.js";
+import { Icon } from "@patternfly/react-core/dist/esm/components/Icon/index.js";
 import {
     AsleepIcon,
     BanIcon, ErrorCircleOIcon, OnRunningIcon, OffIcon,
@@ -50,8 +38,14 @@ import { ModalError } from 'cockpit-components-inline-notification.jsx';
 import './service-details.scss';
 import { KebabDropdown } from "cockpit-components-dropdown";
 
+import { TimerDialog } from "./timer-dialog.jsx";
+import { from_boot_usec, from_on_calendar } from "./timer-dialog-helpers.js";
+
 const _ = cockpit.gettext;
 const METRICS_POLL_DELAY = 30000; // 30s
+
+// This marker comment is inserted at the beginning of unit files created by Cockpit
+export const CockpitManagedMarker = "# Managed by Cockpit.\n";
 
 /*
  * React template for showing basic dialog for confirming action
@@ -73,21 +67,21 @@ const ServiceConfirmDialog = ({ id, title, message, confirmText, confirmAction }
     return (
         <Modal id={id} isOpen
                position="top" variant="medium"
-               onClose={Dialogs.close}
-               title={title}
-               footer={
-                   <>
-                       { confirmText && confirmAction &&
-                       <Button variant='danger' onClick={confirmAction}>
-                           {confirmText}
-                       </Button>
-                       }
-                       <Button variant='link' className='btn-cancel' onClick={Dialogs.close}>
-                           { _("Cancel") }
-                       </Button>
-                   </>
-               }>
-            {message}
+               onClose={Dialogs.close}>
+            <ModalHeader title={title} />
+            <ModalBody>
+                {message}
+            </ModalBody>
+            <ModalFooter>
+                { confirmText && confirmAction &&
+                <Button variant='danger' onClick={confirmAction}>
+                    {confirmText}
+                </Button>
+                }
+                <Button variant='link' className='btn-cancel' onClick={Dialogs.close}>
+                    { _("Cancel") }
+                </Button>
+            </ModalFooter>
         </Modal>
     );
 };
@@ -116,7 +110,7 @@ const ServiceConfirmDialog = ({ id, title, message, confirmText, confirmAction }
  *  - disabled
  *      Button is disabled
  */
-const ServiceActions = ({ masked, active, failed, canReload, actionCallback, deleteActionCallback, fileActionCallback, disabled, isPinned, pinUnitCallback }) => {
+const ServiceActions = ({ masked, active, failed, canReload, actionCallback, editActionCallback, deleteActionCallback, fileActionCallback, disabled, isPinned, pinUnitCallback }) => {
     const Dialogs = useDialogs();
 
     const actions = [];
@@ -145,10 +139,20 @@ const ServiceActions = ({ masked, active, failed, canReload, actionCallback, del
             );
         }
 
-        if (deleteActionCallback) {
-            actions.push(<Divider key="delete-divider" />);
+        if (editActionCallback || deleteActionCallback) {
+            actions.push(<Divider key="modify-unit-divider" />);
+        }
+
+        if (editActionCallback) {
             actions.push(
-                <DropdownItem key="delete" className="pf-m-danger" onClick={() => deleteActionCallback()}>{ _("Delete") }</DropdownItem>
+                <DropdownItem key="edit" onClick={() => editActionCallback()}>{_("Edit")}</DropdownItem>
+            );
+        }
+
+        if (deleteActionCallback) {
+            actions.push(
+                <DropdownItem key="delete" className="pf-m-danger"
+                              onClick={() => deleteActionCallback()}>{_("Delete")}</DropdownItem>
             );
         }
 
@@ -219,12 +223,14 @@ export class ServiceDetails extends React.Component {
             unit_properties: {},
             showDeleteDialog: false,
             unitPaths: [],
+            cockpitManaged: false,
             isPinned: this.props.pinnedUnits.includes(this.props.unit.Id),
         };
 
         this.onOnOffSwitch = this.onOnOffSwitch.bind(this);
         this.unitAction = this.unitAction.bind(this);
         this.unitFileAction = this.unitFileAction.bind(this);
+        this.editTimerAction = this.editTimerAction.bind(this);
         this.deleteAction = this.deleteAction.bind(this);
         this.deleteTimer = this.deleteTimer.bind(this);
         this.pinUnit = this.pinUnit.bind(this);
@@ -234,9 +240,21 @@ export class ServiceDetails extends React.Component {
         this.doMemoryCurrentPolling = this.doMemoryCurrentPolling.bind(this);
 
         // MemoryCurrent property does not emit a changed signal - do polling for this property
-        if (props.unit.ActiveState == "active") {
+        if (props.unit.ActiveState === "active") {
             this.doMemoryCurrentPolling();
             this.interval = setInterval(this.doMemoryCurrentPolling, METRICS_POLL_DELAY);
+        }
+    }
+
+    componentDidMount() {
+        if (this.props.unit.FragmentPath?.startsWith("/etc/systemd")) {
+            cockpit.file(this.props.unit.FragmentPath)
+                    .read()
+                    .then(content => {
+                        if (content?.startsWith(CockpitManagedMarker)) {
+                            this.setState({ cockpitManaged: true });
+                        }
+                    });
         }
     }
 
@@ -287,8 +305,8 @@ export class ServiceDetails extends React.Component {
     }
 
     addUnitProperties(prop, value) {
-        if (prop == "MemoryCurrent" && this.state.unit_properties.MemoryCurrent !== value)
-            this.setState({ unit_properties: Object.assign(this.state.unit_properties, { [prop]: value }) });
+        if (prop === "MemoryCurrent" && this.state.unit_properties.MemoryCurrent !== value)
+            this.setState(prevState => ({ unit_properties: { ...prevState.unit_properties, [prop]: value } }));
     }
 
     onOnOffSwitch() {
@@ -328,7 +346,7 @@ export class ServiceDetails extends React.Component {
 
     pinUnit() {
         const newPinned = this.state.isPinned
-            ? this.props.pinnedUnits.filter(unitId => unitId != this.props.unit.Id)
+            ? this.props.pinnedUnits.filter(unitId => unitId !== this.props.unit.Id)
             : [...this.props.pinnedUnits, this.props.unit.Id];
 
         localStorage.setItem('systemd:pinnedUnits', JSON.stringify(newPinned));
@@ -340,10 +358,10 @@ export class ServiceDetails extends React.Component {
         this.setState({ waitsFileAction: true });
         const args = [[this.props.unit.Names[0]], false];
         if (force !== undefined)
-            args.push(force == "true");
+            args.push(force === "true");
         const promise = systemd_client[this.props.owner].call(s_bus.O_MANAGER, s_bus.I_MANAGER, method, args)
                 .then(([results]) => {
-                    if (results.length == 2 && !results[0])
+                    if (results.length === 2 && !results[0])
                         this.show_note(_("This unit is not designed to be enabled explicitly."));
                     /* Executing daemon reload after file operations is necessary -
                      * see https://github.com/systemd/systemd/blob/main/src/systemctl/systemctl.c [enable_unit function]
@@ -358,6 +376,51 @@ export class ServiceDetails extends React.Component {
         } else {
             return promise;
         }
+    }
+
+    editTimerAction() {
+        async function getCommand(bus, serviceUnitName) {
+            const serviceDbusPath = await bus.call(s_bus.O_MANAGER, s_bus.I_MANAGER, "LoadUnit", [serviceUnitName]);
+            const serviceProperties = await bus.call(serviceDbusPath[0], s_bus.I_PROPS, "GetAll", [s_bus.I_SERVICE]);
+            const exec = serviceProperties[0].ExecStart.v;
+
+            // ensure there is exactly one ExecStart= in the unit file that matches "/bin/sh -c CMD"
+
+            if (exec.length !== 1) {
+                console.warn(`${exec.length} ExecStart= entries were found for ${serviceUnitName} instead of 1`);
+                return null;
+            }
+
+            const [cmd, args] = exec[0];
+            if (cmd !== "/bin/sh" || args.length !== 3 || args[1] !== "-c") {
+                console.warn(`ExecStart= entry is not of the form "/bin/sh -c CMD"`);
+                return null;
+            }
+
+            return args[2];
+        }
+
+        const Dialogs = this.context;
+
+        const timerName = this.props.unit.Id.slice(0, this.props.unit.Id.lastIndexOf("."));
+        const serviceUnitName = timerName + ".service"; // timers created with cockpit only trigger one service
+
+        const timerSettings = {
+            name: timerName,
+            description: this.props.unit.Description
+        };
+
+        let conditions = null;
+        if (this.props.unit.TimersMonotonic.length > 0) {
+            conditions = from_boot_usec(this.props.unit.TimersMonotonic[0][1]);
+        } else if (this.props.unit.TimersCalendar.length > 0) {
+            conditions = from_on_calendar(this.props.unit.TimersCalendar.map(item => item[1]));
+        }
+
+        getCommand(systemd_client[this.props.owner], serviceUnitName).then(command => {
+            const timer = { ...timerSettings, ...conditions, command };
+            Dialogs.show(<TimerDialog owner={this.props.owner} timer={timer} />);
+        });
     }
 
     deleteAction() {
@@ -396,7 +459,7 @@ export class ServiceDetails extends React.Component {
 
         return Promise.all(promises).then(() => {
             const deletions = this.state.unitPaths.filter(path => path.startsWith("/etc/systemd/system"))
-                    .map(path => cockpit.file(path, { superuser: "required" }).replace(null));
+                    .map(path => cockpit.file(path, { superuser: "require" }).replace(null));
 
             // Reload after unit/timer removal
             return Promise.all(deletions).then(() =>
@@ -413,16 +476,19 @@ export class ServiceDetails extends React.Component {
         const failed = this.props.unit.ActiveState === "failed";
         const masked = this.props.unit.LoadState === "masked";
         const unit = this.state.unit_properties;
-        const showAction = this.props.permitted || this.props.owner == "user";
+        const showAction = this.props.permitted || this.props.owner === "user";
         const isCustom = this.props.unit.FragmentPath.startsWith("/etc/systemd/system") && !masked;
         const isTimer = (this.unitType === "timer");
+        const isQuadlet = this.props.unit.SourcePath?.includes("/containers/systemd/");
 
         let status = [];
 
         if (masked) {
             status.push(
                 <div key="masked" className="status-masked">
-                    <BanIcon className="status-icon" />
+                    <Icon>
+                        <BanIcon className="status-icon" />
+                    </Icon>
                     <span className="status">{ _("Masked") }</span>
                     <span className="side-note font-xs">{ _("Forbidden from running") }</span>
                 </div>
@@ -432,7 +498,9 @@ export class ServiceDetails extends React.Component {
         if (!enabled && !active && !masked && !isStatic) {
             status.push(
                 <div key="disabled" className="status-disabled">
-                    <OffIcon className="status-icon" />
+                    <Icon>
+                        <OffIcon className="status-icon" />
+                    </Icon>
                     <span className="status">{ _("Disabled") }</span>
                 </div>
             );
@@ -441,7 +509,9 @@ export class ServiceDetails extends React.Component {
         if (failed) {
             status.push(
                 <div key="failed" className="status-failed">
-                    <ErrorCircleOIcon className="status-icon" />
+                    <Icon status="danger">
+                        <ErrorCircleOIcon className="status-icon" />
+                    </Icon>
                     <span className="status">{ _("Failed to start") }</span>
                     { showAction &&
                     <Button variant="secondary" className="action-button" onClick={() => this.unitAction("StartUnit") }>{ _("Start service") }</Button>
@@ -454,7 +524,9 @@ export class ServiceDetails extends React.Component {
             if (active) {
                 status.push(
                     <div key="running" className="status-running">
-                        <OnRunningIcon className="status-icon" />
+                        <Icon status="success">
+                            <OnRunningIcon className="status-icon" />
+                        </Icon>
                         <span className="status">{ _("Running") }</span>
                         <span className="side-note font-xs">{ _("Active since ") + timeformat.dateTime(this.props.unit.ActiveEnterTimestamp / 1000) }</span>
                     </div>
@@ -462,7 +534,9 @@ export class ServiceDetails extends React.Component {
             } else {
                 status.push(
                     <div key="stopped" className="status-stopped">
-                        <OffIcon className="status-icon" />
+                        <Icon>
+                            <OffIcon className="status-icon" />
+                        </Icon>
                         <span className="status">{ _("Not running") }</span>
                     </div>
                 );
@@ -472,7 +546,9 @@ export class ServiceDetails extends React.Component {
         if (isStatic && !masked) {
             status.unshift(
                 <div key="static" className="status-static">
-                    <AsleepIcon className="status-icon" />
+                    <Icon>
+                        <AsleepIcon className="status-icon" />
+                    </Icon>
                     <span className="status">{ _("Static") }</span>
                     { this.props.unit.WantedBy && this.props.unit.WantedBy.length > 0 &&
                         <>
@@ -489,7 +565,9 @@ export class ServiceDetails extends React.Component {
         if (!showAction && this.props.owner !== 'user') {
             status.unshift(
                 <div key="readonly" className="status-readonly">
-                    <UserIcon className="status-icon" />
+                    <Icon>
+                        <UserIcon className="status-icon" />
+                    </Icon>
                     <span className="status">{ _("Read-only") }</span>
                     <span className="side-note font-xs">{ _("Requires administration access to edit") }</span>
                 </div>
@@ -499,7 +577,9 @@ export class ServiceDetails extends React.Component {
         if (enabled) {
             status.push(
                 <div key="enabled" className="status-enabled">
-                    <OkIcon className="status-icon" />
+                    <Icon status="success">
+                        <OkIcon className="status-icon" />
+                    </Icon>
                     <span className="status">{ _("Automatically starts") }</span>
                 </div>
             );
@@ -518,7 +598,9 @@ export class ServiceDetails extends React.Component {
         if (this.state.waitsAction || this.state.waitsFileAction) {
             status = [
                 <div key="updating" className="status-updating">
-                    <Spinner size="md" className="status-icon" />
+                    <Icon>
+                        <Spinner size="md" className="status-icon" />
+                    </Icon>
                     <span className="status">{ _("Updating status...") }</span>
                 </div>
             ];
@@ -536,13 +618,9 @@ export class ServiceDetails extends React.Component {
                 icon={ExclamationCircleIcon}
                 title={title}
                 paragraph={this.props.unitId}
-                action={
-                    <Button variant="link"
-                            component="a"
-                            onClick={() => cockpit.jump(path, cockpit.transport.host)}>
-                        {_("View all services")}
-                    </Button>
-                }
+                action={_("View all services")}
+                actionVariant="link"
+                onAction={() => cockpit.jump(path, cockpit.transport.host)}
             />;
         }
 
@@ -600,13 +678,13 @@ export class ServiceDetails extends React.Component {
             });
 
         return (
-            <Card id="service-details-unit" className="ct-card">
+            <Card isPlain id="service-details-unit" className="ct-card">
                 { this.state.showDeleteDialog &&
                 <DeleteModal
                     name={this.props.unit.Description}
                     handleCancel={() => this.setState({ showDeleteDialog: false })}
                     handleDelete={this.deleteTimer}
-                    reason={<Flex flex={{ default: 'column' }}>
+                    reason={<Flex>
                         <p>{_("Deletion will remove the following files:")}</p>
                         <List>
                             {this.state.unitPaths.map(item => <ListItem key={item}>{item}</ListItem>)}
@@ -634,6 +712,7 @@ export class ServiceDetails extends React.Component {
                                 }
                                 <ServiceActions { ...{ active, failed, enabled, masked } } canReload={this.props.unit.CanReload}
                                                 actionCallback={this.unitAction} fileActionCallback={this.unitFileAction}
+                                                editActionCallback={isCustom && isTimer && this.state.cockpitManaged ? this.editTimerAction : null}
                                                 deleteActionCallback={isCustom && isTimer ? this.deleteAction : null}
                                                 disabled={this.state.waitsAction || this.state.waitsFileAction}
                                                 isPinned={this.state.isPinned} pinUnitCallback={this.pinUnit} />
@@ -666,6 +745,15 @@ export class ServiceDetails extends React.Component {
                                     {cockpit.format("$0 ($1)", this.props.unit.Listen[0][1], this.props.unit.Listen[0][0])}
                                 </DescriptionListDescription>
                             </DescriptionListGroup>}
+                            {isQuadlet && cockpit.manifests?.podman?.capabilities?.includes("service-filtering") && <DescriptionListGroup>
+                                <DescriptionListTerm>{ _("Container") }</DescriptionListTerm>
+                                <DescriptionListDescription id="container">
+                                    <Button variant="link" isInline onClick={
+                                        () => cockpit.jump(`/podman#/?service=${this.props.unit.Id}`)}>
+                                        {_("View Podman container")}
+                                    </Button>
+                                </DescriptionListDescription>
+                            </DescriptionListGroup>}
                             { notMetConditions.length > 0 &&
                                 <DescriptionListGroup>
                                     <DescriptionListTerm className="failed">{ _("Condition failed") }</DescriptionListTerm>
@@ -689,36 +777,32 @@ export class ServiceDetails extends React.Component {
         );
     }
 }
-ServiceDetails.propTypes = {
-    unit: PropTypes.object.isRequired,
-    // not required: can be null initially, we don't wait for the proxy
-    permitted: PropTypes.bool,
-    isValid: PropTypes.func.isRequired,
-};
 
 const DeleteModal = ({ reason, name, handleCancel, handleDelete }) => {
     const [inProgress, setInProgress] = useState(false);
     const [dialogError, setDialogError] = useState(undefined);
     return (
         <Modal isOpen
-               showClose={false}
                position="top" variant="medium"
                onClose={handleCancel}
-               title={cockpit.format(_("Confirm deletion of $0"), name)}
-               titleIconVariant="warning"
-               footer={<>
-                   <Button id="delete-timer-modal-btn" variant="danger" isDisabled={inProgress} isLoading={inProgress}
-                           onClick={() => { setInProgress(true); handleDelete().catch(exc => { setDialogError(exc.message); setInProgress(false) }) }}
-                   >
-                       {_("Delete")}
-                   </Button>
-                   <Button variant="link" isDisabled={inProgress} onClick={handleCancel}>{_("Cancel")}</Button>
-               </>}
         >
-            <Stack hasGutter>
-                {dialogError && <ModalError dialogError={_("Timer deletion failed")} dialogErrorDetail={dialogError} />}
-                {reason}
-            </Stack>
+            <ModalHeader title={cockpit.format(_("Confirm deletion of $0"), name)}
+                titleIconVariant="warning"
+            />
+            <ModalBody>
+                <Stack hasGutter>
+                    {dialogError && <ModalError dialogError={_("Timer deletion failed")} dialogErrorDetail={dialogError} />}
+                    {reason}
+                </Stack>
+            </ModalBody>
+            <ModalFooter>
+                <Button id="delete-timer-modal-btn" variant="danger" isDisabled={inProgress} isLoading={inProgress}
+                        onClick={() => { setInProgress(true); handleDelete().catch(exc => { setDialogError(exc.message); setInProgress(false) }) }}
+                >
+                    {_("Delete")}
+                </Button>
+                <Button variant="link" isDisabled={inProgress} onClick={handleCancel}>{_("Cancel")}</Button>
+            </ModalFooter>
         </Modal>
     );
 };

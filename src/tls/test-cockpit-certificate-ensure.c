@@ -1,32 +1,15 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2021 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
 
-#include "common/cockpitsystem.h"
 #include "testlib/cockpittest.h"
 
 #include <fcntl.h>
 #include <glib.h>
 #include <sys/stat.h>
-
-#include "common/cockpithacks-glib.h"
 
 #define CERTIFICATE_HELPER  BUILDDIR "/cockpit-certificate-ensure"
 
@@ -226,10 +209,10 @@ test_copy (Fixture *fixture,
   cockpit_assert_strmatch (stderr_str, tc->copy_stderr);
   g_assert_cmpint (g_subprocess_get_exit_status (helper), ==, tc->copy_exit);
 
-  g_autofree gchar *cert_source = areadlinkat (fixture->runtime_dir_fd, "server/cert.source");
+  g_autofree gchar *cert_source = areadlinkat (fixture->runtime_dir_fd, "server/0.crt.source");
   cockpit_assert_strmatch (cert_source, tc->cert_source);
 
-  g_autofree gchar *key_source = areadlinkat (fixture->runtime_dir_fd, "server/key.source");
+  g_autofree gchar *key_source = areadlinkat (fixture->runtime_dir_fd, "server/0.key.source");
   cockpit_assert_strmatch (key_source, tc->key_source);
 
   if (tc->copy_exit == EXIT_SUCCESS)
@@ -242,8 +225,8 @@ test_copy (Fixture *fixture,
       g_autoptr(GTlsCertificate) input = g_tls_certificate_new_from_pem (input_data->str, input_data->len, &error);
       g_assert_no_error (error);
 
-      g_autofree gchar *certfile = g_build_filename (fixture->runtime_dir, "server", "cert", NULL);
-      g_autofree gchar *keyfile = g_build_filename (fixture->runtime_dir, "server", "key", NULL);
+      g_autofree gchar *certfile = g_build_filename (fixture->runtime_dir, "server", "0.crt", NULL);
+      g_autofree gchar *keyfile = g_build_filename (fixture->runtime_dir, "server", "0.key", NULL);
       g_autoptr(GTlsCertificate) output = g_tls_certificate_new_from_files (certfile, keyfile, &error);
 #if !GLIB_CHECK_VERSION(2,58,0)
       /* Older GLib (RHEL 8) doesn't know how to find EC private keys */
@@ -263,17 +246,17 @@ test_copy (Fixture *fixture,
 }
 
 const gchar *no_files[] = { NULL };
-const gchar *good_rsa_files[] = { SRCDIR "/src/bridge/mock-server.crt",
-                                  SRCDIR "/src/bridge/mock-server.key", NULL };
-const gchar *good_ecc_files[] = { SRCDIR "/src/ws/mock-ecc.crt",
-                                  SRCDIR "/src/ws/mock-ecc.key", NULL };
+const gchar *good_rsa_files[] = { SRCDIR "/test/data/mock-server.crt",
+                                  SRCDIR "/test/data/mock-server.key", NULL };
+const gchar *good_ecc_files[] = { SRCDIR "/test/data/mock-ecc.crt",
+                                  SRCDIR "/test/data/mock-ecc.key", NULL };
 const gchar *bad_files[] = { SRCDIR "/bad", NULL };
-const gchar *bad_files2[] = { SRCDIR "/src/bridge/mock-server.crt", SRCDIR "/bad2", NULL };
-const gchar *invalid_files1[] = { SRCDIR "/src/ws/mock-config/cockpit/cockpit.conf",
-                                  SRCDIR "/src/ws/mock-config/cockpit/cockpit-alt.conf", NULL };
-const gchar *invalid_files2[] = { SRCDIR "/src/bridge/mock-server.crt",
-                                  SRCDIR "/src/bridge/mock-client.crt", NULL };
-const gchar *invalid_files3[] = { SRCDIR "/src/bridge/mock-client.key", NULL };
+const gchar *bad_files2[] = { SRCDIR "/test/data/mock-server.crt", SRCDIR "/bad2", NULL };
+const gchar *invalid_files1[] = { SRCDIR "/src/common/mock-config/cockpit/cockpit.conf",
+                                  SRCDIR "/src/common/mock-config/cockpit/cockpit-alt.conf", NULL };
+const gchar *invalid_files2[] = { SRCDIR "/test/data/mock-server.crt",
+                                  SRCDIR "/test/data/mock-client.crt", NULL };
+const gchar *invalid_files3[] = { SRCDIR "/test/data/mock-client.key", NULL };
 
 static const TestCase case_good_rsa_file = {
   .files = good_rsa_files,

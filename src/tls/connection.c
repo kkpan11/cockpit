@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2019 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
@@ -50,7 +36,7 @@
 #include <common/cockpitmemory.h>
 #include <common/cockpitwebcertificate.h>
 
-#include "certificate.h"
+#include "credentials.h"
 #include "client-certificate.h"
 #include "httpredirect.h"
 #include "socket-io.h"
@@ -59,7 +45,7 @@
 /* cockpit-tls TCP server state (singleton) */
 static struct {
   gnutls_certificate_request_t request_mode;
-  Certificate *certificate;
+  Credentials *credentials;
   bool require_https;
   int wsinstance_sockdir;
   int cert_session_dir;
@@ -383,11 +369,10 @@ request_dynamic_wsinstance (const char *fingerprint)
 {
   bool status = false;
   char reply[20];
-  int fd;
 
   debug (CONNECTION, "requesting dynamic wsinstance for %s:\n", fingerprint);
 
-  fd = socket (AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+  int fd = socket (AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
   if (fd == -1)
     {
       warn ("socket() failed");
@@ -441,7 +426,8 @@ connection_connect_to_dynamic_wsinstance (Connection *self)
   if (af_unix_connectat (self->ws_fd, parameters.wsinstance_sockdir, sockname) == 0)
     return true;
 
-  if (errno != ENOENT && errno != ECONNREFUSED)
+  /* EACCES: systemd does not atomically set the socket's permissions before we try to connect to it */
+  if (errno != ENOENT && errno != ECONNREFUSED && errno != EACCES)
     warn ("connect(%s) failed on the first attempt", sockname);
 
   debug (CONNECTION, "  -> failed (%m).  Requesting activation.");
@@ -593,7 +579,7 @@ connection_handshake (Connection *self)
     {
       debug (CONNECTION, "first byte is %i, initializing TLS", (int) b);
 
-      if (parameters.certificate == NULL)
+      if (parameters.credentials == NULL)
         {
           warnx ("got TLS connection, but our server does not have a certificate/key; refusing");
           return false;
@@ -614,7 +600,7 @@ connection_handshake (Connection *self)
         }
 
       ret = gnutls_credentials_set (self->tls, GNUTLS_CRD_CERTIFICATE,
-                                    certificate_get_credentials (parameters.certificate));
+                                    credentials_get (parameters.credentials));
       if (ret != GNUTLS_E_SUCCESS)
         {
           warnx ("gnutls_credentials_set failed: %s", gnutls_strerror (ret));
@@ -663,7 +649,7 @@ connection_thread_loop (Connection *self)
       ws_revents = calculate_revents (&self->ws_to_client_buffer, &self->client_to_ws_buffer);
 
       if (self->tls && buffer_can_read (&self->client_to_ws_buffer))
-        client_revents |= POLLIN * gnutls_record_check_pending (self->tls);
+        client_revents |= POLLIN * (gnutls_record_check_pending (self->tls) != 0);
 
       debug (POLL, "poll | client %d/x%x/x%x | ws %d/x%x/x%x |",
              self->client_fd, client_events, client_revents,
@@ -738,7 +724,7 @@ connection_create_metadata (Connection *self)
       {
         struct sockaddr_in *in_addr = (struct sockaddr_in *) &addr;
 
-        port = in_addr->sin_port;
+        port = ntohs (in_addr->sin_port);
         const char *r = inet_ntop (AF_INET, &in_addr->sin_addr, ip, sizeof ip);
         assert (r != NULL);
       }
@@ -748,7 +734,7 @@ connection_create_metadata (Connection *self)
       {
         struct sockaddr_in6 *in6_addr = (struct sockaddr_in6 *) &addr;
 
-        port = in6_addr->sin6_port;
+        port = ntohs (in6_addr->sin6_port);
         const char *r = inet_ntop (AF_INET6, &in6_addr->sin6_addr, ip, sizeof ip);
         assert (r != NULL);
 
@@ -846,19 +832,24 @@ connection_thread_main (int fd)
  * support for connections. If this function is not called, the server
  * will only be able to handle http requests.
  *
- * The certificate file must either contain the key as well, or end with
- * "*.crt" or "*.cert" and have a corresponding "*.key" file.
+ * Loads certificate/key pairs named `{n}.crt` and `{n}.key` for values
+ * of n from 0 until the first missing `.crt` file. Files are deleted
+ * after loading to avoid leaving unnecessary copies of secrets lying
+ * around.
  *
- * @certfile: Server TLS certificate file; cannot be %NULL
+ * @cert_dirfd: Directory fd containing certificate/key files
+ * @allow_unencrypted: Whether to allow plain HTTP connections
  * @request_mode: Whether to ask for client certificates
  */
 void
-connection_crypto_init (const char *certificate_filename,
-                        const char *key_filename,
+connection_crypto_init (int cert_dirfd,
                         bool allow_unencrypted,
                         gnutls_certificate_request_t request_mode)
 {
-  parameters.certificate = certificate_load (certificate_filename, key_filename);
+  parameters.credentials = credentials_load (cert_dirfd);
+  if (parameters.credentials == NULL)
+    errx (EXIT_FAILURE, "Failed to load certificates from directory");
+
   parameters.request_mode = request_mode;
   /* If we aren't called, then require_https is false */
   parameters.require_https = !allow_unencrypted;
@@ -898,10 +889,10 @@ connection_cleanup (void)
   assert (parameters.wsinstance_sockdir != -1);
   assert (parameters.cert_session_dir != -1);
 
-  if (parameters.certificate)
+  if (parameters.credentials)
     {
-      certificate_unref (parameters.certificate);
-      parameters.certificate = NULL;
+      credentials_unref (parameters.credentials);
+      parameters.credentials = NULL;
     }
 
   parameters.require_https = false;

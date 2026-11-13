@@ -1,24 +1,10 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2018 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import 'cockpit-dark-theme'; // once per page
-import '../lib/patternfly/patternfly-5-cockpit.scss';
+import '../lib/patternfly/patternfly-6-cockpit.scss';
 import 'polyfills'; // once per application
 
 import cockpit from "cockpit";
@@ -36,20 +22,22 @@ import { EmptyState } from "@patternfly/react-core/dist/esm/components/EmptyStat
 import { Flex, FlexItem } from "@patternfly/react-core/dist/esm/layouts/Flex/index.js";
 import { Gallery } from "@patternfly/react-core/dist/esm/layouts/Gallery/index.js";
 import { Page, PageBreadcrumb, PageSection } from "@patternfly/react-core/dist/esm/components/Page/index.js";
-import { Text, TextVariants } from "@patternfly/react-core/dist/esm/components/Text/index.js";
+import { Content, ContentVariants } from "@patternfly/react-core/dist/esm/components/Content/index.js";
 import { Breadcrumb, BreadcrumbItem } from "@patternfly/react-core/dist/esm/components/Breadcrumb/index.js";
-import { Modal } from "@patternfly/react-core/dist/esm/components/Modal/index.js";
+import {
+    Modal, ModalBody, ModalFooter, ModalHeader
+} from '@patternfly/react-core/dist/esm/components/Modal/index.js';
 import { Switch } from "@patternfly/react-core/dist/esm/components/Switch/index.js";
 import { ExternalLinkAltIcon } from "@patternfly/react-icons";
 import { SortByDirection } from "@patternfly/react-table";
 import { ListingTable } from "cockpit-components-table.jsx";
 import { WithDialogs, useDialogs } from "dialogs.jsx";
 
-import kernelopt_sh from "./kernelopt.sh";
+import kernelopt_sh from "kernelopt.sh";
 import detect from "./hw-detect.js";
 
 import { superuser } from "superuser";
-import { PrivilegedButton } from "cockpit-components-privileged.jsx";
+import { PrivilegedButton } from "cockpit-components-privileged";
 import { useInit } from "hooks";
 
 import "./hwinfo.scss";
@@ -125,9 +113,11 @@ const SystemInfo = ({ info, onSecurityClick }) => {
     );
 };
 
+let cachedMitigations;
+
 function availableMitigations() {
-    if (availableMitigations.cachedMitigations !== undefined)
-        return Promise.resolve(availableMitigations.cachedMitigations);
+    if (cachedMitigations !== undefined)
+        return Promise.resolve(cachedMitigations);
     /* nosmt */
     const promises = [cockpit.spawn(["lscpu"], { environ: ["LC_ALL=C.UTF-8"], }), cockpit.file("/proc/cmdline").read()];
     return Promise.all(promises).then(values => {
@@ -146,12 +136,12 @@ function availableMitigations() {
         const nosmt_available = threads_per_core > 1 && (values[1].indexOf("nosmt=") === -1 || values[1].indexOf("nosmt=force") !== -1);
         const mitigations_match = values[1].match(/\bmitigations=(\S*)\b/);
 
-        availableMitigations.cachedMitigations = {
+        cachedMitigations = {
             available: nosmt_available,
             nosmt_enabled,
             mitigations_arg: mitigations_match ? mitigations_match[1] : undefined,
         };
-        return availableMitigations.cachedMitigations;
+        return cachedMitigations;
     });
 }
 
@@ -172,9 +162,9 @@ const CPUSecurityMitigationsDialog = () => {
             options = ['set', 'nosmt'];
         } else {
             // this may either be an argument of its own, or part of mitigations=
-            const ma = availableMitigations.cachedMitigations.mitigations_arg;
+            const ma = cachedMitigations.mitigations_arg;
             if (ma && ma.indexOf("nosmt") >= 0) {
-                const new_args = ma.split(',').filter(opt => opt != 'nosmt');
+                const new_args = ma.split(',').filter(opt => opt !== 'nosmt');
                 options = ['set', 'mitigations=' + new_args.join(',')];
             } else {
                 options = ['remove', 'nosmt'];
@@ -223,26 +213,25 @@ const CPUSecurityMitigationsDialog = () => {
     }
 
     const footer = (
-        <>
+        <ModalFooter>
             <Button variant='danger' isDisabled={rebooting || nosmt === undefined} onClick={saveAndReboot}>
                 { _("Save and reboot") }
             </Button>
             <Button variant='link' className='btn-cancel' isDisabled={rebooting} onClick={Dialogs.close}>
                 { _("Cancel") }
             </Button>
-        </>
+        </ModalFooter>
     );
 
     return (
         <Modal isOpen id="cpu-mitigations-dialog"
                position="top" variant="medium"
-               footer={footer}
-               onClose={Dialogs.close}
-               title={ _("CPU security toggles") }>
-            <>
-                <Text className='cpu-mitigations-dialog-info' component={TextVariants.p}>
+               onClose={Dialogs.close}>
+            <ModalHeader title={ _("CPU security toggles") } />
+            <ModalBody>
+                <Content className='cpu-mitigations-dialog-info' component={ContentVariants.p}>
                     { _("Software-based workarounds help prevent CPU security issues. These mitigations have the side effect of reducing performance. Change these settings at your own risk.") }
-                </Text>
+                </Content>
                 <DataList>
                     { rows }
                 </DataList>
@@ -250,7 +239,8 @@ const CPUSecurityMitigationsDialog = () => {
                 <Alert variant="danger"
                     actionClose={<AlertActionCloseButton onClose={() => setAlert(undefined)} />}
                     title={alert} />}
-            </>
+            </ModalBody>
+            {footer}
         </Modal>
     );
 };
@@ -301,16 +291,16 @@ const HardwareInfo = ({ info }) => {
     }
 
     return (
-        <Page>
-            <PageBreadcrumb stickyOnBreakpoint={{ default: "top" }}>
+        <Page className='pf-m-no-sidebar'>
+            <PageBreadcrumb hasBodyWrapper={false} stickyOnBreakpoint={{ default: "top" }}>
                 <Breadcrumb>
-                    <BreadcrumbItem onClick={ () => cockpit.jump("/system", cockpit.transport.host)} className="pf-v5-c-breadcrumb__link">{ _("Overview") }</BreadcrumbItem>
+                    <BreadcrumbItem onClick={ () => cockpit.jump("/system", cockpit.transport.host)} className="pf-v6-c-breadcrumb__link">{ _("Overview") }</BreadcrumbItem>
                     <BreadcrumbItem isActive>{ _("Hardware information") }</BreadcrumbItem>
                 </Breadcrumb>
             </PageBreadcrumb>
-            <PageSection>
+            <PageSection hasBodyWrapper={false}>
                 <Gallery hasGutter>
-                    <Card>
+                    <Card isPlain>
                         <CardHeader>
                             <CardTitle component="h2">{_("System information")}</CardTitle>
                         </CardHeader>
@@ -321,7 +311,7 @@ const HardwareInfo = ({ info }) => {
                                             : undefined } />
                         </CardBody>
                     </Card>
-                    <Card id="pci-listing">
+                    <Card isPlain id="pci-listing">
                         <CardHeader>
                             <CardTitle component="h2">{_("PCI")}</CardTitle>
                         </CardHeader>
@@ -329,7 +319,7 @@ const HardwareInfo = ({ info }) => {
                             { pci }
                         </CardBody>
                     </Card>
-                    <Card id="memory-listing">
+                    <Card isPlain id="memory-listing">
                         <CardHeader>
                             <CardTitle component="h2">{_("Memory")}</CardTitle>
                         </CardHeader>

@@ -1,21 +1,9 @@
 #!/usr/bin/python3 -cimport os, sys; os.execv(os.path.dirname(sys.argv[1]) + "/../common/pywrap", sys.argv)
 
-# This file is part of Cockpit.
 #
 # Copyright (C) 2013 Red Hat, Inc.
-#
-# Cockpit is free software; you can redistribute it and/or modify it
-# under the terms of the GNU Lesser General Public License as published by
-# the Free Software Foundation; either version 2.1 of the License, or
-# (at your option) any later version.
-#
-# Cockpit is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-# Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
 
 import json
 
@@ -25,13 +13,14 @@ import testlib
 
 @testlib.skipOstree("NetworkManager-team not installed")
 @testlib.skipImage("TODO: networkmanager fails on Arch Linux", "arch")
-@testlib.skipDistroPackage()
+@testlib.skipImage("team not supported", "centos-10*", "rhel-10*", "fedora-eln")
 @testlib.nondestructive
 class TestTeam(netlib.NetworkCase):
     def testBasic(self):
         b = self.browser
 
         self.login_and_go("/network")
+        b.wait_visible("#networking")
 
         b.wait_visible("button:contains('Add team')")
 
@@ -58,21 +47,19 @@ class TestTeam(netlib.NetworkCase):
         b.set_checked(f"input[data-iface='{iface2}']", val=True)
         b.click("#network-team-settings-dialog button:contains('Add')")
         b.wait_not_present("#network-team-settings-dialog")
+        self.toggle_onoff("label[for='interface-switch']")
 
-        b.wait_attr("#networking", "data-test-wait", "false")
+        b.wait_text("#network-interface-name", "tteam")
         b.wait(lambda: 'nmcli con show | grep tteam')
-        b.wait_visible("#networking-interfaces tr[data-interface='tteam']")
 
         # Check that the members are displayed
-        self.select_iface('tteam')
-        b.wait_visible("#network-interface")
         b.wait_visible(f"#network-interface-members tr[data-interface='{iface1}']")
         b.wait_visible(f"#network-interface-members tr[data-interface='{iface2}']")
 
         # Deactivate the team and make sure it is still there after a
         # reload.
-        self.wait_onoff(".pf-v5-c-card__header:contains('tteam')", val=True)
-        self.toggle_onoff(".pf-v5-c-card__header:contains('tteam')")
+        self.wait_onoff("label[for='interface-switch']", val=True)
+        self.toggle_onoff("label[for='interface-switch']")
         self.wait_for_iface_setting('Status', 'Inactive')
         b.reload()
         b.enter_page("/network")
@@ -111,18 +98,17 @@ class TestTeam(netlib.NetworkCase):
         b.set_checked(f"input[data-iface='{iface}']", val=True)
         b.click("#network-team-settings-dialog button:contains('Add')")
         b.wait_not_present("#network-team-settings-dialog")
+        self.toggle_onoff("label[for='interface-switch']")
 
-        b.wait_attr("#networking", "data-test-wait", "false")
+        b.wait_text("#network-interface-name", "tteam")
         b.wait(lambda: 'nmcli con show | grep tteam')
 
         # Check that it has the interface and the right IP address
-        self.select_iface('tteam')
-        b.wait_visible("#network-interface")
         b.wait_visible(f"#network-interface-members tr[data-interface='{iface}']")
-        b.wait_in_text("#network-interface .pf-v5-c-card:contains('tteam')", "10.111")
+        b.wait_in_text("#network-interface .pf-v6-c-card:contains('tteam')", "10.111")
 
         # Check team port
-        b.click("#network-interface-members button:contains(cockpit1)")
+        b.click("#network-interface-members button:contains('cockpit1')")
         b.click("#networking-edit-teamport")
         b.wait_visible("#network-team-port-settings-dialog")
         b.set_input_text("#network-team-port-settings-activebackup-prio-input", "10")

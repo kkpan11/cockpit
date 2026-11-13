@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2023 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -34,7 +20,7 @@ import {
 import { StorageLink, StorageUsageBar, StorageSize } from "../storage-controls.jsx";
 import { StorageCard, StorageDescription, new_card, useIsNarrow } from "../pages.jsx";
 
-import { format_dialog } from "../block/format-dialog.jsx";
+import { std_format_action } from "../block/actions.jsx";
 import { is_mounted, MountPoint, mount_point_text, edit_mount_point } from "./utils.jsx";
 import { mounting_dialog } from "./mounting-dialog.jsx";
 import { check_mismounted_fsys, MismountAlert } from "./mismounting.jsx";
@@ -100,8 +86,11 @@ export function make_filesystem_card(next, backing_block, content_block, fstab_c
                 { title: _("Edit mount point"), action: () => edit_mount_point(content_block || backing_block) },
             content_block && mounted
                 ? { title: _("Unmount"), action: () => mounting_dialog(client, content_block, "unmount") }
-                : { title: _("Mount"), action: () => mounting_dialog(client, content_block || backing_block, "mount") },
-            { title: _("Format"), action: () => format_dialog(client, backing_block.path), danger: true },
+                : null,
+            !(content_block && mounted) && !client.in_anaconda_mode()
+                ? { title: _("Mount"), action: () => mounting_dialog(client, content_block || backing_block, "mount") }
+                : null,
+            std_format_action(backing_block, content_block),
         ]
     });
 }

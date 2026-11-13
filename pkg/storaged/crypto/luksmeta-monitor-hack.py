@@ -1,7 +1,9 @@
 #! /usr/bin/python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 
 # This simulates the org.freedesktop.UDisks.Encrypted.Slots property
 # et al for versions of UDisks that don't have them yet.
+# https://github.com/storaged-project/udisks/pull/539
 
 import atexit
 import base64
@@ -21,7 +23,7 @@ def b64_decode(data):
 
 
 def get_clevis_config_from_protected_header(protected_header):
-    header = b64_decode(protected_header).decode("utf-8")
+    header = b64_decode(protected_header).decode()
     header_object = json.loads(header)
     clevis = header_object.get("clevis", None)
     if clevis is None:
@@ -41,6 +43,12 @@ def get_clevis_config_from_protected_header(protected_header):
             else:
                 subpins[subpin].append(subconf[subpin])
         return {"pin": "sss", "sss": {"t": clevis["sss"]["t"], "pins": subpins}}
+    elif pin == "tpm2":
+        return {"pin": pin, "tpm2": {"hash": clevis["tpm2"]["hash"],
+                                     "key": clevis["tpm2"]["key"],
+                                     "pcr_ids": clevis["tpm2"].get("pcr_ids", ""),
+                                     "pcr_bank": clevis["tpm2"].get("pcr_bank", "")
+                                     }}
     else:
         return {"pin": pin, pin: {}}
 
@@ -73,9 +81,9 @@ def info(dev):
             in_luks2_token_section = True
 
         if in_luks2_slot_section:
-            match = re.match(b"  ([0-9]+): luks2$", line)
+            match = re.match(rb"  ([0-9]+): luks2$", line)
         else:
-            match = re.match(b"Key Slot ([0-9]+): ENABLED$", line)
+            match = re.match(rb"Key Slot ([0-9]+): ENABLED$", line)
         if match:
             slot = int(match.group(1))
             entry = {"Index": {"v": slot}}
@@ -85,7 +93,7 @@ def info(dev):
                                                         "-u", "cb6e8904-81ff-40da-a84a-07ab9ab5715e"],
                                                        stderr=subprocess.PIPE)
                     entry["ClevisConfig"] = {
-                        "v": json.dumps(get_clevis_config_from_jwe(luksmeta.decode("utf-8")))
+                        "v": json.dumps(get_clevis_config_from_jwe(luksmeta.decode()))
                     }
                 except (subprocess.CalledProcessError, FileNotFoundError):
                     pass
@@ -93,12 +101,13 @@ def info(dev):
                 slots[slot] = entry
 
         if in_luks2_token_section:
-            match = re.match(b"  ([0-9]+): clevis$", line)
+            match = re.match(rb"  ([0-9]+): clevis$", line)
             if match:
                 try:
-                    token = subprocess.check_output(["cryptsetup", "token", "export", dev, "--token-id", match.group(1)],
+                    token = subprocess.check_output(["cryptsetup", "token", "export",
+                                                     dev, "--token-id", match.group(1)],
                                                     stderr=subprocess.PIPE)
-                    token_object = json.loads(token.decode("utf-8"))
+                    token_object = json.loads(token.decode())
                     if token_object.get("type") == "clevis":
                         config = json.dumps(get_clevis_config_from_protected_header(token_object["jwe"]["protected"]))
                         for slot_str in token_object.get("keyslots", []):
@@ -118,10 +127,16 @@ def monitor(dev):
     # kills us.  It will eventually exit on its own since its stdout
     # will be closed when we exit, but that will only happen when it
     # actually writes something.
+    #
+    # We use a process group to do the killing, since the Rust version
+    # of stdbuf will fork/exec udevadm and we thus need to kill both
+    # the stdbuf process and the udevadm process. (The GNU version of
+    # stdbuf will just exec udevadm and there was only one process to
+    # kill in that case.)
 
     def killmon():
         if mon:
-            mon.terminate()
+            os.killpg(mon.pid, signal.SIGTERM)
 
     def sigexit(_signo, _stack):
         killmon()
@@ -134,7 +149,7 @@ def monitor(dev):
 
     path = subprocess.check_output(["udevadm", "info", "-q", "path", dev]).rstrip(b"\n")
     mon = subprocess.Popen(["stdbuf", "-o", "L", "udevadm", "monitor", "-u", "-s", "block"],
-                           stdout=subprocess.PIPE)
+                           stdout=subprocess.PIPE, preexec_fn=lambda: os.setpgid(0, 0))
 
     old_infos = info(dev)
     sys.stdout.write(json.dumps(old_infos) + "\n")

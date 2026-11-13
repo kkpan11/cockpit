@@ -1,7 +1,4 @@
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
 .alert-link.more-button {
-  margin-inline-start: var(--pf-v5-global--spacer--sm);
-}
-
-.notification-message {
-  white-space: pre-wrap;
+  margin-inline-start: var(--pf-t--global--spacer--sm);
 }

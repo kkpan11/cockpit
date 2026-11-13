@@ -1,42 +1,28 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2020 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
-import '../lib/patternfly/patternfly-5-cockpit.scss';
+import '../lib/patternfly/patternfly-6-cockpit.scss';
 import 'polyfills'; // once per application
 import 'cockpit-dark-theme'; // once per page
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect } from "react";
 import { createRoot } from 'react-dom/client';
 import { Flex, FlexItem } from "@patternfly/react-core/dist/esm/layouts/Flex/index.js";
-import { Select, SelectOption } from "@patternfly/react-core/dist/esm/deprecated/components/Select/index.js";
-import { Page, PageSection, PageSectionVariants } from "@patternfly/react-core/dist/esm/components/Page/index.js";
-import { Card } from "@patternfly/react-core/dist/esm/components/Card/index.js";
+import { Page, PageSection, } from "@patternfly/react-core/dist/esm/components/Page/index.js";
+import { Card, CardHeader } from "@patternfly/react-core/dist/esm/components/Card/index.js";
 import { SearchInput } from "@patternfly/react-core/dist/esm/components/SearchInput/index.js";
 import { ToggleGroup, ToggleGroupItem } from "@patternfly/react-core/dist/esm/components/ToggleGroup/index.js";
 import { Toolbar, ToolbarContent, ToolbarFilter, ToolbarItem, ToolbarToggleGroup } from "@patternfly/react-core/dist/esm/components/Toolbar/index.js";
 import { ExclamationCircleIcon, FilterIcon } from '@patternfly/react-icons';
 
+import { CheckboxSelect } from "cockpit-components-checkbox-select";
 import { EmptyStatePanel } from "cockpit-components-empty-state.jsx";
 import { Service } from "./service.jsx";
-import { ServiceTabs, service_tabs_suffixes } from "./service-tabs.jsx";
+import { ServiceTabs, service_tabs_suffixes } from "./service-tabs";
 import { ServicesList } from "./services-list.jsx";
-import { CreateTimerDialog } from "./timer-dialog.jsx";
+import { CreateTimerDialogButton } from "./timer-dialog.jsx";
 import { page_status } from "notifications";
 import * as python from "python";
 import * as timeformat from "timeformat";
@@ -66,7 +52,7 @@ let monotonic_timer_base = null; // µs
 export const MAX_UINT64 = 2 ** 64 - 1;
 
 function debug() {
-    if (window.debugging == "all" || window.debugging?.includes("services"))
+    if (window.debugging === "all" || window.debugging?.includes("services"))
         console.debug.apply(console, arguments);
 }
 
@@ -182,6 +168,7 @@ class ServicesPageBody extends React.Component {
             /* State related to the toolbar components */
             isFullyLoaded: false,
             error: null,
+            pinnedUnits: [],
         };
 
         /* data storage
@@ -212,8 +199,6 @@ class ServicesPageBody extends React.Component {
         this.seenUnitFileStates = new Set();
         this.reloading = false;
 
-        this.filtersRef = React.createRef();
-
         // Possible LoadState values: stub, loaded, not-found, bad-setting, error, merged, masked
         // See: typedef enum UnitLoadStateState https://github.com/systemd/systemd/blob/main/src/basic/unit-def.h
         this.loadState = {
@@ -239,7 +224,7 @@ class ServicesPageBody extends React.Component {
         };
 
         // Possible UnitFileState values: enabled, enabled-runtime, linked, linked-runtime, alias, masked, masked-runtime, static, disabled, invalid, indirect, generated, transient, bad
-        // See: typedef enum UnitFileState https://github.com/systemd/systemd/blob/main/src/basic/unit-file.h
+        // See: typedef enum UnitFileState https://github.com/systemd/systemd/blob/main/src/shared/unit-file.h
         this.unitFileState = {
             enabled: _("Enabled"),
             "enabled-runtime": _("Enabled"),
@@ -261,21 +246,22 @@ class ServicesPageBody extends React.Component {
         this.loadPinnedUnits = this.loadPinnedUnits.bind(this);
         this.onOptionsChanged = this.onOptionsChanged.bind(this);
         this.compareUnits = this.compareUnits.bind(this);
+        this.addTimerPropertiesFull = this.addTimerPropertiesFull.bind(this);
     }
 
     onOptionsChanged(options) {
         const currentOptions = { ...cockpit.location.options, ...options };
 
-        if (!currentOptions.activestate || options.activestate == "[]")
+        if (!currentOptions.activestate || options.activestate === "[]")
             delete currentOptions.activestate;
 
-        if (!currentOptions.filestate || options.filestate == "[]")
+        if (!currentOptions.filestate || options.filestate === "[]")
             delete currentOptions.filestate;
 
         if (!currentOptions.name)
             delete currentOptions.name;
 
-        cockpit.location.go(cockpit.location.path, currentOptions);
+        cockpit.location.replace(cockpit.location.path, currentOptions);
     }
 
     componentDidMount() {
@@ -283,8 +269,8 @@ class ServicesPageBody extends React.Component {
             this.systemd_subscription = systemd_client[this.props.owner].call(s_bus.O_MANAGER, s_bus.I_MANAGER, "Subscribe", null)
                     .finally(this.listUnits)
                     .catch(error => {
-                        if (error.name != "org.freedesktop.systemd1.AlreadySubscribed" &&
-                        error.name != "org.freedesktop.DBus.Error.FileExists")
+                        if (error.name !== "org.freedesktop.systemd1.AlreadySubscribed" &&
+                        error.name !== "org.freedesktop.DBus.Error.FileExists")
                             this.setState({ error: cockpit.format(_("Subscribing to systemd signals failed: $0"), error.toString()) });
                     });
         })
@@ -443,7 +429,7 @@ class ServicesPageBody extends React.Component {
     isTemplate(id) {
         const tp = id.indexOf("@");
         const sp = id.lastIndexOf(".");
-        return (tp != -1 && (tp + 1 == sp || tp + 1 == id.length));
+        return (tp !== -1 && (tp + 1 === sp || tp + 1 === id.length));
     }
 
     listUnits() {
@@ -483,7 +469,7 @@ class ServicesPageBody extends React.Component {
                     const unit_files = {};
                     unitFilesResults.forEach(([UnitFilePath, UnitFileState]) => {
                         const Id = UnitFilePath.split('/').pop();
-                        if (!this.isUnitHandled(Id) | this.isTemplate(Id))
+                        if (!this.isUnitHandled(Id) || this.isTemplate(Id))
                             return;
 
                         this.seenUnitFileStates.add(UnitFileState);
@@ -515,7 +501,7 @@ class ServicesPageBody extends React.Component {
                 promises.push(dbus.call(path, s_bus.I_PROPS, "GetAll", [s_bus.I_TIMER])
                         .then(([props]) => {
                             this.timers[path] = {};
-                            this.addTimerProperties(props, this.timers[path]);
+                            this.addTimerPropertiesFull(props, this.timers[path]);
                         })
                         .catch(ex => console.warn("Loading timer information for", path, "failed:", ex.toString()))); // not-covered: OS error
             }
@@ -535,11 +521,11 @@ class ServicesPageBody extends React.Component {
         const pinned_b = this.state.pinnedUnits.includes(unit_b.Id) ? 1 : 0;
 
         if (!unit_a || !unit_b)
-            return false;
+            return 0;
 
-        if (failed_a != failed_b)
+        if (failed_a !== failed_b)
             return failed_b - failed_a;
-        else if (pinned_a != pinned_b)
+        else if (pinned_a !== pinned_b)
             return pinned_b - pinned_a;
         else
             return unit_a_t[0].localeCompare(unit_b_t[0]);
@@ -565,9 +551,16 @@ class ServicesPageBody extends React.Component {
         unit.NextRunTime = next_run_time ? timeformat.dateTime(next_run_time / 1000) : _("unknown");
     }
 
+    addTimerPropertiesFull(timer_props, unit) {
+        this.addTimerProperties(timer_props, unit);
+
+        unit.TimersCalendar = timer_props.TimersCalendar.v;
+        unit.TimersMonotonic = timer_props.TimersMonotonic.v;
+    }
+
     /* Add some computed properties into a unit object - does not call setState */
     updateComputedProperties(unit) {
-        unit.HasFailed = unit.ActiveState == "failed" || (
+        unit.HasFailed = unit.ActiveState === "failed" || (
             unit.LoadState && unit.LoadState !== "loaded" && unit.LoadState !== "masked");
 
         unit.CombinedState = this.activeState[unit.ActiveState] || unit.ActiveState;
@@ -584,8 +577,8 @@ class ServicesPageBody extends React.Component {
         const tabErrors = { };
 
         Object.values(this.units).forEach(u => {
-            if (u.ActiveState == "failed" && u.LoadState != "not-found") {
-                const suffix = u.Id.substr(u.Id.lastIndexOf('.') + 1);
+            if (u.ActiveState === "failed" && u.LoadState !== "not-found") {
+                const suffix = u.Id.substring(u.Id.lastIndexOf('.') + 1);
                 if (service_tabs_suffixes.includes(suffix)) {
                     tabErrors[suffix] = true;
                     failed.add(u.Id);
@@ -666,7 +659,7 @@ class ServicesPageBody extends React.Component {
         /* Navigation: unit details page with a path, service list without;
          * the details page does its own loading, we don't need to wait for isFullyLoaded */
         const path = cockpit.location.path;
-        if (path.length == 1) {
+        if (path.length === 1) {
             const unit_id = path[0];
 
             return <Service unitIsValid={unitId => this.unit_files[unitId] || this.knownIds.has(unitId) }
@@ -674,7 +667,7 @@ class ServicesPageBody extends React.Component {
                             key={unit_id}
                             unitId={unit_id}
                             dbusClient={systemd_client[this.props.owner]}
-                            addTimerProperties={this.addTimerProperties}
+                            addTimerProperties={this.addTimerPropertiesFull}
                             pinnedUnits={this.state.pinnedUnits}
             />;
         }
@@ -688,8 +681,11 @@ class ServicesPageBody extends React.Component {
             { value: 'static', label: _("Static") },
         ];
         this.seenUnitFileStates.forEach(unitFileState => {
-            if (!['enabled', 'disabled', 'static'].includes(unitFileState.split('-runtime')[0])) {
-                fileStateDropdownOptions.push({ value: unitFileState, label: this.unitFileState[unitFileState] });
+            const baseState = unitFileState.split('-runtime')[0];
+            if (!['enabled', 'disabled', 'static'].includes(baseState)) {
+                const label = this.unitFileState[unitFileState];
+                if (!fileStateDropdownOptions.some(o => o.label === label))
+                    fileStateDropdownOptions.push({ value: baseState, label });
             }
         });
         const activeStateDropdownOptions = [
@@ -703,19 +699,29 @@ class ServicesPageBody extends React.Component {
         });
         const activeTab = this.props.activeTab;
 
+        const onClearAllFilters = () => {
+            this.onOptionsChanged({
+                name: '',
+                activestate: '[]',
+                filestate: '[]',
+            });
+        };
+
         return (
-            <PageSection>
-                <Card isCompact>
-                    <ServicesPageFilters activeStateDropdownOptions={activeStateDropdownOptions}
-                                         fileStateDropdownOptions={fileStateDropdownOptions}
-                                         filtersRef={this.filtersRef}
-                                         loadingUnits={this.props.isLoading}
-                                         options={cockpit.location.options}
-                                         onOptionsChanged={this.onOptionsChanged}
-                    />
+            <PageSection hasBodyWrapper={false}>
+                <Card isPlain isCompact>
+                    <CardHeader id='services-card-header'>
+                        <ServicesPageFilters activeStateDropdownOptions={activeStateDropdownOptions}
+                                            fileStateDropdownOptions={fileStateDropdownOptions}
+                                            onClearAllFilters={onClearAllFilters}
+                                            loadingUnits={this.props.isLoading}
+                                            options={cockpit.location.options}
+                                            onOptionsChanged={this.onOptionsChanged}
+                        />
+                    </CardHeader>
                     <ServicesList key={cockpit.format("$0-list", activeTab)}
-                                  isTimer={activeTab == 'timer'}
-                                  filtersRef={this.filtersRef}
+                                  isTimer={activeTab === 'timer'}
+                                  onClearAllFilters={onClearAllFilters}
                                   units={this.computeSelectedUnits()} />
                 </Card>
             </PageSection>
@@ -726,59 +732,50 @@ class ServicesPageBody extends React.Component {
 const ServicesPageFilters = ({
     activeStateDropdownOptions,
     fileStateDropdownOptions,
-    filtersRef,
     loadingUnits,
     options,
     onOptionsChanged,
+    onClearAllFilters,
 }) => {
     const { activestate, filestate, name } = options;
-    const [activeStateFilterIsOpen, setActiveStateFilterIsOpen] = useState(false);
-    const [currentTextFilter, setCurrentTextFilter] = useState(decodeURIComponent(name || ""));
-    const [fileStateFilterIsOpen, setFileStateFilterIsOpen] = useState(false);
-    const [filters, setFilters] = useState({
+
+    const currentTextFilter = decodeURIComponent(name || "");
+    const setCurrentTextFilter = val => {
+        onOptionsChanged({ name: encodeURIComponent(val) });
+    };
+
+    const filters = {
         activeState: JSON.parse(activestate || '[]'),
         fileState: JSON.parse(filestate || '[]'),
-    });
+    };
 
-    useEffect(() => {
-        const _filters = { activeState: JSON.parse(options.activestate || '[]'), fileState: JSON.parse(options.filestate || '[]') };
+    const setFilters = val => {
+        onOptionsChanged({
+            activestate: JSON.stringify(val.activeState),
+            filestate: JSON.stringify(val.fileState),
+        });
+    };
 
-        setCurrentTextFilter(decodeURIComponent(options.name || ""));
-        setFilters(_filters);
-    }, [options, setCurrentTextFilter, setFilters]);
-
-    useEffect(() => {
-        const _options = {};
-
-        _options.activestate = JSON.stringify(filters.activeState);
-        _options.filestate = JSON.stringify(filters.fileState);
-        _options.name = encodeURIComponent(currentTextFilter);
-
-        onOptionsChanged(_options);
-    }, [filters, currentTextFilter, onOptionsChanged]);
-
-    const onSelect = (type, event, selection) => {
-        const checked = event.target.checked;
-
+    const onSelect = (type, checked, selection) => {
         setFilters({ ...filters, [type]: checked ? [...filters[type], selection] : filters[type].filter(value => value !== selection) });
     };
 
-    const onActiveStateSelect = (event, selection) => {
-        onSelect('activeState', event, selection);
+    const onActiveStateSelect = (selection, checked) => {
+        onSelect('activeState', checked, selection);
     };
 
-    const onFileStateSelect = (event, selection) => {
-        onSelect('fileState', event, selection);
+    const onFileStateSelect = (selection, checked) => {
+        onSelect('fileState', checked, selection);
     };
 
     const getFilterLabelKey = (typeLabel) => {
-        if (typeLabel == 'Active state')
+        if (typeLabel === 'Active state')
             return 'activeState';
-        else if (typeLabel == 'File state')
+        else if (typeLabel === 'File state')
             return 'fileState';
     };
 
-    const onDeleteChip = useCallback((typeLabel = '', id = '') => {
+    const onDeleteChip = (typeLabel = '', id = '') => {
         const type = getFilterLabelKey(typeLabel);
 
         if (type) {
@@ -789,32 +786,28 @@ const ServicesPageFilters = ({
                 fileState: []
             });
         }
-    }, [filters]);
+    };
 
     const onDeleteChipGroup = (typeLabel) => {
         const type = getFilterLabelKey(typeLabel);
 
-        setFilters({ ...filters, [type]: [] });
+        if (type)
+            setFilters({ ...filters, [type]: [] });
+        else
+            setFilters({
+                activeState: [],
+                fileState: []
+            });
     };
-
-    const onClearAllFilters = useCallback(() => {
-        setCurrentTextFilter('');
-        onDeleteChip();
-    }, [setCurrentTextFilter, onDeleteChip]);
 
     const onTextFilterChanged = textFilter => {
         setCurrentTextFilter(textFilter);
     };
 
-    /* Make onClearAllFilters global so at to let it be used by the parent component */
-    useEffect(() => {
-        filtersRef.current = onClearAllFilters;
-    }, [filtersRef, onClearAllFilters]);
-
-    const toolbarItems = <>
-        <ToolbarToggleGroup toggleIcon={<><span className="pf-v5-c-button__icon pf-m-start"><FilterIcon /></span>{_("Toggle filters")}</>} breakpoint="sm"
-                            variant="filter-group" alignment={{ default: 'alignLeft' }}>
-            <ToolbarItem variant="search-filter">
+    const toolbarItems =
+        <ToolbarToggleGroup toggleIcon={<><span className="pf-v6-c-button__icon pf-m-start"><FilterIcon /></span>{_("Toggle filters")}</>} breakpoint="sm"
+                            variant="filter-group">
+            <ToolbarItem>
                 <SearchInput id="services-text-filter"
                              className="services-text-filter"
                              placeholder={_("Filter by name or description")}
@@ -822,47 +815,55 @@ const ServicesPageFilters = ({
                              onChange={(_, val) => onTextFilterChanged(val)}
                              onClear={() => onTextFilterChanged('')} />
             </ToolbarItem>
-            <ToolbarFilter chips={filters.activeState}
-                           deleteChip={onDeleteChip}
-                           deleteChipGroup={onDeleteChipGroup}
+            <ToolbarFilter labels={filters.activeState}
+                           deleteLabel={onDeleteChip}
+                           deleteLabelGroup={onDeleteChipGroup}
                            categoryName={_("Active state")}>
-                <Select aria-label={_("Active state")}
-                        toggleId="services-dropdown-active-state"
-                        variant="checkbox"
-                        onToggle={(_, isOpen) => setActiveStateFilterIsOpen(isOpen)}
-                        onSelect={onActiveStateSelect}
-                        selections={filters.activeState}
-                        isOpen={activeStateFilterIsOpen}
-                        placeholderText={_("Active state")}>
-                    {activeStateDropdownOptions.map(option => <SelectOption key={option.value}
-                                                                            value={option.label} />)}
-                </Select>
+                <CheckboxSelect
+                    toggleProps={{
+                        id: "services-dropdown-active-state",
+                        "aria-label": _("Active state")
+                    }}
+                    toggleContent={_("Active state")}
+                    onSelect={onActiveStateSelect}
+                    selected={filters.activeState}
+                    options={activeStateDropdownOptions.map(option => {
+                        return {
+                            value: option.label, // sic
+                            content: option.label,
+                            "data-label": option.label,
+                        };
+                    })} />
             </ToolbarFilter>
-            <ToolbarFilter chips={filters.fileState}
-                           deleteChip={onDeleteChip}
-                           deleteChipGroup={onDeleteChipGroup}
+            <ToolbarFilter labels={filters.fileState}
+                           deleteLabel={onDeleteChip}
+                           deleteLabelGroup={onDeleteChipGroup}
                            categoryName={_("File state")}>
-                <Select aria-label={_("File state")}
-                        toggleId="services-dropdown-file-state"
-                        variant="checkbox"
-                        onToggle={(_, isOpen) => setFileStateFilterIsOpen(isOpen)}
-                        onSelect={onFileStateSelect}
-                        selections={filters.fileState}
-                        isOpen={fileStateFilterIsOpen}
-                        placeholderText={_("File state")}>
-                    {fileStateDropdownOptions.map(option => <SelectOption key={option.value}
-                                                                          value={option.label} />)}
-                </Select>
+                <CheckboxSelect
+                    toggleProps={{
+                        id: "services-dropdown-file-state",
+                        "aria-label": _("File state")
+                    }}
+                    toggleContent={_("File state")}
+                    onSelect={onFileStateSelect}
+                    selected={filters.fileState}
+                    options={fileStateDropdownOptions.map(option => {
+                        return {
+                            value: option.label, // sic
+                            content: option.label,
+                            "data-label": option.label,
+                        };
+                    })} />
             </ToolbarFilter>
-        </ToolbarToggleGroup>
-    </>;
+        </ToolbarToggleGroup>;
 
     return (
-        <Toolbar data-loading={loadingUnits}
+        <Toolbar
+                data-loading={loadingUnits}
                  clearAllFilters={onClearAllFilters}
                  className="pf-m-sticky-top ct-compact services-toolbar"
                  id="services-toolbar"
-                 numberOfFiltersText={n => cockpit.format("$0 filters applied")}>
+                 numberOfFiltersText={n => cockpit.format(_("$0 filters applied"), n)}>
             <ToolbarContent>{toolbarItems}</ToolbarContent>
         </Toolbar>
     );
@@ -897,9 +898,9 @@ const ServicesPage = () => {
 
     return (
         <WithDialogs>
-            <Page>
-                {cockpit.location.path.length == 0 &&
-                <PageSection variant={PageSectionVariants.light} type="nav" className="services-header">
+            <Page className='pf-m-no-sidebar'>
+                {cockpit.location.path.length === 0 &&
+                <PageSection hasBodyWrapper={false} className="services-header">
                     <Flex>
                         <ServiceTabs activeTab={activeTab}
                                       tabErrors={tabErrors}
@@ -908,17 +909,17 @@ const ServicesPage = () => {
                                       }} />
                         <FlexItem align={{ default: 'alignRight' }}>
                             {loggedUser && loggedUser !== 'root' && <ToggleGroup>
-                                <ToggleGroupItem isSelected={owner == "system"}
+                                <ToggleGroupItem isSelected={owner === "system"}
                                                                                           buttonId="system"
                                                                                           text={_("System")}
                                                                                           onChange={() => setOwner("system")} />
-                                <ToggleGroupItem isSelected={owner == "user"}
+                                <ToggleGroupItem isSelected={owner === "user"}
                                                                                           buttonId="user"
                                                                                           text={_("User")}
                                                                                           onChange={() => setOwner("user")} />
                             </ToggleGroup>}
                         </FlexItem>
-                        {activeTab == "timer" && owner == "system" && superuser.allowed && <CreateTimerDialog isLoading={isLoading} owner={owner} />}
+                        {activeTab === "timer" && owner === "system" && superuser.allowed && <CreateTimerDialogButton isLoading={isLoading} owner={owner} />}
                     </Flex>
                 </PageSection>}
                 <ServicesPageBody

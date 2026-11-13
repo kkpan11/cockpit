@@ -1,27 +1,12 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2013-2014 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
 
 #include "cockpitwebservice.h"
 
-#include "cockpitcompat.h"
 #include "cockpitws.h"
 
 #include <string.h>
@@ -33,13 +18,13 @@
 #include "common/cockpitauthorize.h"
 #include "common/cockpitconf.h"
 #include "common/cockpithex.h"
-#include "common/cockpitjson.h"
+#include "cockpitjson.h"
 #include "common/cockpitmemory.h"
-#include "common/cockpitsystem.h"
-#include "common/cockpitwebresponse.h"
-#include "common/cockpitwebserver.h"
+#include "cockpitsystem.h"
+#include "cockpitwebresponse.h"
+#include "cockpitwebserver.h"
 
-#include "websocket/websocket.h"
+#include "websocket.h"
 
 
 #include <stdlib.h>
@@ -512,7 +497,7 @@ process_transport_authorize (CockpitWebService *self,
   char *alloc = NULL;
   const char *response = NULL;
   const gchar *challenge;
-  const gchar *password;
+  const gchar *password = NULL;
   const gchar *host;
   GBytes *data;
 
@@ -535,7 +520,6 @@ process_transport_authorize (CockpitWebService *self,
       g_message ("received invalid authorize challenge command");
     }
   else if (g_str_equal (type, "plain1") ||
-           g_str_equal (type, "crypt1") ||
            g_str_equal (type, "basic"))
     {
       data = cockpit_creds_get_password (self->creds);
@@ -550,15 +534,7 @@ process_transport_authorize (CockpitWebService *self,
       else
         {
           password = g_bytes_get_data (data, NULL);
-          if (g_str_equal (type, "crypt1"))
-            {
-              alloc = cockpit_compat_reply_crypt1 (challenge, password);
-              if (alloc)
-                response = alloc;
-              else
-                g_message ("failed to \"authorize\" crypt1 \"challenge\"");
-            }
-          else if (g_str_equal (type, "basic"))
+          if (g_str_equal (type, "basic"))
             {
               alloc = cockpit_authorize_build_basic (cockpit_creds_get_user (self->creds), password);
               response = alloc;
@@ -579,6 +555,14 @@ process_transport_authorize (CockpitWebService *self,
                                                  NULL);
       cockpit_transport_send (transport, NULL, payload);
       g_bytes_unref (payload);
+    }
+
+  /* only give the password once; if the superuser bridge asks again, the password is either wrong, or PAM has
+   * follow-up questions (such as a forced password change); we must not respond with the same password again */
+  if (password)
+    {
+      g_debug ("authorize: poisoning password after using it once");
+      cockpit_creds_poison (self->creds);
     }
 
   free (type);
@@ -1131,6 +1115,9 @@ on_web_socket_open (WebSocketConnection *connection,
   json_array_add_string_element (capabilities, "multi");
   json_array_add_string_element (capabilities, "credentials");
   json_array_add_string_element (capabilities, "binary");
+  // https://github.com/cockpit-project/cockpit/pull/22310
+  // commit a4dfe17769d576d34f226bb653e0a26d1e5156af
+  json_array_add_string_element (capabilities, "websocket-channel-close-fix");
   json_object_set_array_member (object, "capabilities", capabilities);
 
   info = json_object_new ();
@@ -1290,6 +1277,23 @@ cockpit_web_service_new (CockpitCreds *creds,
   return self;
 }
 
+/* Escape a host string for fnmatch.
+ * IPv6 addresses look like [::1]:9090 which fnmatch treats as character classes.
+ */
+static gchar *
+escape_host_for_fnmatch (const gchar *host)
+{
+  GString* escaped = g_string_new(NULL);
+  for (int i = 0; host[i]; i++)
+    {
+      if (strchr ("[]?*\\", host[i]))
+        g_string_append_c (escaped, '\\');
+      g_string_append_c (escaped, host[i]);
+    }
+
+  return g_string_free (escaped, FALSE);
+}
+
 WebSocketConnection *
 cockpit_web_service_create_socket (const gchar **protocols,
                                    CockpitWebRequest *request)
@@ -1299,34 +1303,27 @@ cockpit_web_service_create_socket (const gchar **protocols,
   gchar *allocated = NULL;
   gchar *origin = NULL;
   gchar *defaults[2];
-  gboolean is_https;
-  gchar *url;
 
   const gchar *host = cockpit_web_request_get_host (request);
   const gchar *protocol = cockpit_web_request_get_protocol (request);
-  g_debug("cockpit_web_service_create_socket: host %s, protocol %s", host, protocol);
-  is_https = g_str_equal (protocol, "https") == 0;
-
-  url = g_strdup_printf ("%s://%s%s",
-                         is_https ? "wss" : "ws",
-                         host ? host : "localhost",
-                         cockpit_web_request_get_path (request));
 
   origins = cockpit_conf_strv ("WebService", "Origins", ' ');
   if (origins == NULL)
     {
-      origin = g_strdup_printf ("%s://%s", protocol, host);
+      /* Origins are checked with fnmatch(), escape [..] in IPv6 addresses */
+      g_autofree gchar *escaped_host = escape_host_for_fnmatch (host);
+      origin = g_strdup_printf ("%s://%s", protocol, escaped_host);
+
       defaults[0] = origin;
       defaults[1] = NULL;
       origins = (const gchar **)defaults;
     }
 
-  connection = web_socket_server_new_for_stream (url, origins, protocols,
+  connection = web_socket_server_new_for_stream (origins, protocols,
                                                  cockpit_web_request_get_io_stream (request),
                                                  cockpit_web_request_get_headers (request),
                                                  cockpit_web_request_get_buffer (request));
   g_free (allocated);
-  g_free (url);
   g_free (origin);
 
   return connection;

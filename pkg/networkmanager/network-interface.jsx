@@ -1,39 +1,47 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2021 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 import cockpit from "cockpit";
-import React, { useContext } from "react";
+import React, { useContext, useEffect, useRef, useState } from "react";
+import { useEvent, useInit } from "hooks";
 import { Breadcrumb, BreadcrumbItem } from "@patternfly/react-core/dist/esm/components/Breadcrumb/index.js";
 import { Button } from "@patternfly/react-core/dist/esm/components/Button/index.js";
 import { Card, CardBody, CardHeader, CardTitle } from '@patternfly/react-core/dist/esm/components/Card/index.js';
 import { Checkbox } from "@patternfly/react-core/dist/esm/components/Checkbox/index.js";
 import { DescriptionList, DescriptionListDescription, DescriptionListGroup, DescriptionListTerm } from "@patternfly/react-core/dist/esm/components/DescriptionList/index.js";
+import { Form } from "@patternfly/react-core/dist/esm/components/Form/index.js";
+import { Flex, FlexItem } from "@patternfly/react-core/dist/esm/layouts/Flex/index.js";
 import { Gallery } from "@patternfly/react-core/dist/esm/layouts/Gallery/index.js";
-import { Page, PageBreadcrumb, PageSection, PageSectionVariants } from "@patternfly/react-core/dist/esm/components/Page/index.js";
+import { Modal, ModalBody, ModalFooter, ModalHeader } from '@patternfly/react-core/dist/esm/components/Modal/index.js';
+import { Page, PageBreadcrumb, PageSection } from "@patternfly/react-core/dist/esm/components/Page/index.js";
+import { Progress } from "@patternfly/react-core/dist/esm/components/Progress/index.js";
+import { SearchInput } from "@patternfly/react-core/dist/esm/components/SearchInput/index.js";
+import { Spinner } from "@patternfly/react-core/dist/esm/components/Spinner/index.js";
 import { Switch } from "@patternfly/react-core/dist/esm/components/Switch/index.js";
+import { Tooltip } from "@patternfly/react-core/dist/esm/components/Tooltip/index.js";
+import { ActionsColumn, SortByDirection } from '@patternfly/react-table';
+import {
+    ConnectedIcon,
+    DisconnectedIcon,
+    LockIcon,
+    LockOpenIcon,
+    PlusIcon,
+    RedoIcon,
+    ThumbtackIcon,
+} from "@patternfly/react-icons";
 
-import { Privileged } from "cockpit-components-privileged.jsx";
+import { ListingTable } from "cockpit-components-table.jsx";
+import { Privileged } from "cockpit-components-privileged";
+import { distanceToNow } from "timeformat";
+import { fmt_to_fragments, in_anaconda_mode } from "utils";
+import { useDialogs } from "dialogs.jsx";
 
 import { ModelContext } from './model-context.jsx';
 import { NetworkInterfaceMembers } from "./network-interface-members.jsx";
 import { NetworkAction } from './dialogs-common.jsx';
 import { NetworkPlots } from "./plots";
-import { fmt_to_fragments } from 'utils.jsx';
+import * as utils from "./utils.js";
 
 import {
     array_join,
@@ -44,6 +52,7 @@ import {
     is_managed,
     render_active_connection,
     settings_applier,
+    show_error_dialog,
     show_unexpected_error,
     syn_click,
     with_checkpoint,
@@ -58,7 +67,147 @@ import {
 
 import { get_ip_method_choices } from './ip-settings.jsx';
 
+import {
+    useDialogState,
+    DialogError, DialogErrorMessage,
+    DialogTextInput,
+    DialogPasswordInput,
+    DialogDropdownSelect,
+    DialogActionButton, DialogCancelButton,
+} from 'cockpit/dialog';
+
 const _ = cockpit.gettext;
+
+// known networks: with ssid; hidden networks: no ssid
+const WiFiConnectDialog = ({ dev, model, ssid: knownSsid, ap }) => {
+    useEvent(model, "changed");
+    const Dialogs = useDialogs();
+
+    const isHidden = !knownSsid;
+    const idPrefix = "network-wifi-connect";
+
+    function validate() {
+        if (isHidden) {
+            dlg.field("ssid").validate(val => {
+                if (val.trim() === "")
+                    return _("SSID can not be empty");
+            });
+        }
+        if (!isHidden || dlg.values.security !== "none") {
+            dlg.field("password").validate(val => {
+                if (val.trim() === "")
+                    return _("Password can not be empty");
+            });
+        }
+    }
+
+    const dlg = useDialogState({
+        ssid: knownSsid || "",
+        security: "wpa-psk",
+        password: "",
+    }, validate);
+
+    const onConnect = async ({ ssid, security, password }) => {
+        utils.debug("Connecting to", ssid, isHidden ? `with security ${security}` : "with password");
+
+        const settings = {
+            connection: {
+                id: ssid,
+                type: "802-11-wireless",
+                autoconnect: true,
+            },
+            "802-11-wireless": {
+                ssid: utils.ssid_to_nm(ssid),
+                mode: "infrastructure",
+            },
+        };
+
+        if (isHidden) {
+            settings["802-11-wireless"].hidden = true;
+        }
+
+        if (!isHidden || security !== "none") {
+            settings["802-11-wireless-security"] = {
+                "key-mgmt": isHidden ? security : "wpa-psk",
+                psk: password,
+            };
+        }
+
+        let connection = null;
+        try {
+            // ap might be stale if there was a scan since opening the dialog, so pass NULL
+            // NM will find the right AP by SSID
+            const result = await dev.activate_with_settings(settings, null);
+            connection = result.connection;
+
+            dlg.set_cancel(
+                () => {
+                    utils.debug("Cancelling connection to", ssid);
+                    dev.cancel_pending_connection();
+                    connection.delete_()
+                            .catch(err => console.warn("Failed to delete connection:", err));
+                });
+
+            utils.debug("Connection activation started");
+            await dev.wait_connection(ssid);
+            utils.debug("Connected successfully to", ssid);
+        } catch (err) {
+            // just in case something survived, clean up
+            connection?.delete_()
+                    .catch(err => utils.debug("Failed to delete failed connection:", err));
+
+            throw new DialogError(
+                _("Failed to connect"),
+                err.reason === 7 // NM_DEVICE_STATE_REASON_NO_SECRETS
+                    ? _("Check your password.")
+                    : err.toString());
+        }
+    };
+
+    return (
+        <Modal id={idPrefix + "-dialog"}
+               position="top"
+               variant="small"
+               isOpen
+               onClose={Dialogs.close}>
+            <ModalHeader title={isHidden ? _("Connect to hidden network") : cockpit.format(_("Connect to $0"), knownSsid)} />
+            <ModalBody>
+                <DialogErrorMessage dialog={dlg} />
+                <Form id={idPrefix + "-body"} onSubmit={ev => ev.preventDefault()} isHorizontal>
+                    {isHidden && (
+                        <>
+                            <DialogTextInput
+                                label={_("Network name")}
+                                field={dlg.field("ssid")}
+                            />
+                            <DialogDropdownSelect
+                                label={_("Security")}
+                                field={dlg.field("security")}
+                                options={[
+                                    { value: "none", label: _("None") },
+                                    { value: "wpa-psk", label: _("WPA/WPA2 Personal") },
+                                ]}
+                            />
+                        </>
+                    )}
+                    {(!isHidden || dlg.values.security !== "none") && (
+                        <DialogPasswordInput
+                            label={_("Password")}
+                            field={dlg.field("password")}
+                            autoFocus={!isHidden} // eslint-disable-line jsx-a11y/no-autofocus
+                        />
+                    )}
+                </Form>
+            </ModalBody>
+            <ModalFooter>
+                <DialogActionButton dialog={dlg} action={onConnect} onClose={Dialogs.close}>
+                    {_("Connect")}
+                </DialogActionButton>
+                <DialogCancelButton dialog={dlg} onClose={Dialogs.close} />
+            </ModalFooter>
+        </Modal>
+    );
+};
 
 export const NetworkInterfacePage = ({
     privileged,
@@ -69,10 +218,63 @@ export const NetworkInterfacePage = ({
     iface
 }) => {
     const model = useContext(ModelContext);
+    useEvent(model, "changed");
+    const [isScanning, setIsScanning] = useState(false);
+    const [prevAPCount, setPrevAPCount] = useState(0);
+    const [networkSearch, setNetworkSearch] = useState("");
+
+    const anaconda_mode = in_anaconda_mode();
 
     const dev_name = iface.Name;
     const dev = iface.Device;
     const isManaged = iface && (!dev || is_managed(dev));
+
+    const accessPointCount = dev?.DeviceType === '802-11-wireless' ? (dev.AccessPoints?.length || 0) : 0;
+
+    const Dialogs = useDialogs();
+
+    // Trigger (passive) scan on page load for wireless devices on page load
+    useInit(() => {
+        if (dev?.DeviceType === '802-11-wireless') {
+            utils.debug("Requesting initial WiFi scan for", dev_name);
+            dev.request_scan();
+        }
+    });
+
+    // WiFi scanning: re-enable button when APs change or after timeout
+    useEffect(() => {
+        if (isScanning) {
+            if (accessPointCount !== prevAPCount && prevAPCount !== 0)
+                setIsScanning(false);
+            const timer = setTimeout(() => setIsScanning(false), 5000);
+            return () => clearTimeout(timer);
+        }
+        setPrevAPCount(accessPointCount);
+    }, [isScanning, accessPointCount, prevAPCount]);
+
+    // Track stable WiFi network order (by signal strength on first scan, preserved thereafter)
+    const stableAPOrder = useRef([]);
+
+    // Update stable AP order when APs are added/removed
+    useEffect(() => {
+        if (dev?.DeviceType !== '802-11-wireless')
+            return;
+
+        const accessPoints = dev.AccessPoints || [];
+        const currentMACs = new Set(accessPoints.map(ap => ap.HwAddress));
+        const stableMACs = new Set(stableAPOrder.current);
+
+        // Re-sort if APs added/removed
+        const needsResort = currentMACs.size !== stableMACs.size ||
+                           ![...currentMACs].every(mac => stableMACs.has(mac));
+
+        if (needsResort) {
+            // Sort by signal strength
+            const sorted = [...accessPoints].sort((a, b) => b.Strength - a.Strength);
+            // Store MAC addresses
+            stableAPOrder.current = sorted.map(ap => ap.HwAddress);
+        }
+    }, [dev?.AccessPoints, dev?.DeviceType]);
 
     let ghostSettings = null;
     let connectionSettings = null;
@@ -165,33 +367,34 @@ export const NetworkInterfacePage = ({
     }
 
     function renderDesc() {
-        let desc, cs;
+        let desc;
+        let cs;
         if (dev) {
-            if (dev.DeviceType == 'ethernet' || dev.IdVendor || dev.IdModel) {
+            if (dev.DeviceType === 'ethernet' || dev.IdVendor || dev.IdModel) {
                 desc = cockpit.format("$IdVendor $IdModel $Driver", dev);
-            } else if (dev.DeviceType == 'bond') {
+            } else if (dev.DeviceType === 'bond') {
                 desc = _("Bond");
-            } else if (dev.DeviceType == 'team') {
+            } else if (dev.DeviceType === 'team') {
                 desc = _("Team");
-            } else if (dev.DeviceType == 'vlan') {
+            } else if (dev.DeviceType === 'vlan') {
                 desc = _("VLAN");
-            } else if (dev.DeviceType == 'bridge') {
+            } else if (dev.DeviceType === 'bridge') {
                 desc = _("Bridge");
-            } else if (dev.Driver == 'wireguard') {
+            } else if (dev.Driver === 'wireguard') {
                 desc = "WireGuard";
             } else
                 desc = cockpit.format(_("Unknown \"$0\""), dev.DeviceType);
         } else if (iface) {
             cs = connection_settings(iface.Connections[0]);
-            if (cs.type == "bond")
+            if (cs.type === "bond")
                 desc = _("Bond");
-            else if (cs.type == "team")
+            else if (cs.type === "team")
                 desc = _("Team");
-            else if (cs.type == "vlan")
+            else if (cs.type === "vlan")
                 desc = _("VLAN");
-            else if (cs.type == "bridge")
+            else if (cs.type === "bridge")
                 desc = _("Bridge");
-            else if (cs.type == "wireguard")
+            else if (cs.type === "wireguard")
                 desc = "WireGuard";
             else if (cs.type)
                 desc = cockpit.format(_("Unknown \"$0\""), cs.type);
@@ -217,8 +420,8 @@ export const NetworkInterfacePage = ({
         }
 
         const can_edit_mac = (privileged && iface && iface.MainConnection &&
-                              (connection_settings(iface.MainConnection).type == "802-3-ethernet" ||
-                               connection_settings(iface.MainConnection).type == "bond"));
+                              (connection_settings(iface.MainConnection).type === "802-3-ethernet" ||
+                               connection_settings(iface.MainConnection).type === "bond"));
 
         let mac_desc;
         if (can_edit_mac) {
@@ -237,7 +440,7 @@ export const NetworkInterfacePage = ({
             return (
                 <DescriptionListGroup>
                     <DescriptionListTerm>{_("Carrier")}</DescriptionListTerm>
-                    <DescriptionListDescription>
+                    <DescriptionListDescription data-label="Carrier">
                         {dev.Carrier ? (dev.Speed ? cockpit.format_bits_per_sec(dev.Speed * 1e6) : _("Yes")) : _("No")}
                     </DescriptionListDescription>
                 </DescriptionListGroup>
@@ -254,7 +457,7 @@ export const NetworkInterfacePage = ({
 
         if (!dev)
             state = _("Inactive");
-        else if (isManaged && dev.State != 100)
+        else if (isManaged && dev.State !== 100)
             state = dev.StateText;
         else
             state = null;
@@ -263,9 +466,8 @@ export const NetworkInterfacePage = ({
         return (
             <DescriptionListGroup>
                 <DescriptionListTerm>{_("Status")}</DescriptionListTerm>
-                <DescriptionListDescription className="networking-interface-status">
-                    {activeConnection}
-                    {state ? <span>{state}</span> : null}
+                <DescriptionListDescription data-label="Status" className="networking-interface-status">
+                    {[activeConnection, state].filter(val => val).join(", ")}
                 </DescriptionListDescription>
             </DescriptionListGroup>
         );
@@ -283,26 +485,28 @@ export const NetworkInterfacePage = ({
             const params = settings[topic];
             const parts = [];
 
-            if (params.method != "manual")
+            if (params.method !== "manual")
                 parts.push(choice_title(get_ip_method_choices(topic), params.method, _("Unknown configuration")));
 
-            const addr_is_extra = (params.method != "manual");
+            const addr_is_extra = (params.method !== "manual");
             const addrs = [];
-            params.addresses.forEach(function (a) {
-                let addr = a[0] + "/" + a[1];
-                if (a[2] && a[2] != "0.0.0.0" && a[2] != "0:0:0:0:0:0:0:0")
-                    addr += " via " + a[2];
-                addrs.push(addr);
+            params.address_data?.forEach(function (a) {
+                addrs.push(a.address + "/" + a.prefix);
             });
+
             if (addrs.length > 0)
                 parts.push(cockpit.format(addr_is_extra ? _("Additional address $val") : _("Address $val"),
                                           { val: addrs.join(", ") }));
 
-            const dns_is_extra = (!params["ignore-auto-dns"] && params.method != "manual");
-            if (params.dns.length > 0)
+            const gateway = params.gateway;
+            if (gateway && gateway !== "0.0.0.0" && gateway !== "::")
+                parts.push(cockpit.format(_("Gateway $gateway"), { gateway }));
+
+            const dns_is_extra = (!params["ignore-auto-dns"] && params.method !== "manual");
+            if (params.dns_data?.length > 0)
                 parts.push(cockpit.format(dns_is_extra ? _("Additional DNS $val") : _("DNS $val"),
-                                          { val: params.dns.join(", ") }));
-            if (params.dns_search.length > 0)
+                                          { val: params.dns_data.join(", ") }));
+            if (params.dns_search?.length > 0)
                 parts.push(cockpit.format(dns_is_extra ? _("Additional DNS search domains $val") : _("DNS search domains $val"),
                                           { val: params.dns_search.join(", ") }));
 
@@ -314,11 +518,11 @@ export const NetworkInterfacePage = ({
                 return (
                     <DescriptionListGroup>
                         <DescriptionListTerm>{_("General")}</DescriptionListTerm>
-                        <DescriptionListDescription>
+                        <DescriptionListDescription data-label="General">
                             <Checkbox id="autoreconnect" isDisabled={!privileged}
                                       onChange={(_event, checked) => {
                                           settings.connection.autoconnect = checked;
-                                          settings_applier(self.model, dev, con)(settings);
+                                          settings_applier(model, dev, con)(settings);
                                       }}
                                       isChecked={settings.connection.autoconnect}
                                       label={_("Connect automatically")} />
@@ -339,7 +543,7 @@ export const NetworkInterfacePage = ({
             return (
                 <DescriptionListGroup>
                     <DescriptionListTerm>{title}</DescriptionListTerm>
-                    <DescriptionListDescription>
+                    <DescriptionListDescription data-label={title}>
                         {link_text.length
                             ? <span className="network-interface-settings-text">
                                 {link_text}
@@ -399,7 +603,7 @@ export const NetworkInterfacePage = ({
                 return (
                     <DescriptionListGroup>
                         <DescriptionListTerm>{_("Group")}</DescriptionListTerm>
-                        <DescriptionListDescription>
+                        <DescriptionListDescription data-label="Group">
                             {array_join(con.Groups.map(render_connection_link), ", ")}
                         </DescriptionListDescription>
                     </DescriptionListGroup>
@@ -442,7 +646,7 @@ export const NetworkInterfacePage = ({
             else {
                 if (config.runner)
                     parts.push(choice_title(team_runner_choices, config.runner.name, config.runner.name));
-                if (config.link_watch && config.link_watch.name != "ethtool")
+                if (config.link_watch && config.link_watch.name !== "ethtool")
                     parts.push(choice_title(team_watch_choices, config.link_watch.name, config.link_watch.name));
             }
 
@@ -467,8 +671,8 @@ export const NetworkInterfacePage = ({
                 !group_settings.team ||
                 !group_settings.team.config ||
                 !group_settings.team.config.runner ||
-                !(group_settings.team.config.runner.name == "activebackup" ||
-                  group_settings.team.config.runner.name == "lacp"))
+                !(group_settings.team.config.runner.name === "activebackup" ||
+                  group_settings.team.config.runner.name === "lacp"))
                 return null;
 
             const config = settings.team_port.config;
@@ -496,13 +700,13 @@ export const NetworkInterfacePage = ({
 
             if (options.stp) {
                 addRow(_("Spanning tree protocol"));
-                if (options.priority != 32768)
+                if (options.priority !== 32768)
                     addRow(_("Priority $priority"), options);
-                if (options.forward_delay != 15)
+                if (options.forward_delay !== 15)
                     addRow(_("Forward delay $forward_delay"), options);
-                if (options.hello_time != 2)
+                if (options.hello_time !== 2)
                     addRow(_("Hello time $hello_time"), options);
-                if (options.max_age != 20)
+                if (options.max_age !== 20)
                     addRow(_("Maximum message age $max_age"), options);
             }
 
@@ -521,9 +725,9 @@ export const NetworkInterfacePage = ({
                 rows.push(cockpit.format(fmt, args));
             }
 
-            if (options.priority != 32)
+            if (options.priority !== 32)
                 addRow(_("Priority $priority"), options);
-            if (options.path_cost != 100)
+            if (options.path_cost !== 100)
                 addRow(_("Path cost $path_cost"), options);
             if (options.hairpin_mode)
                 addRow(_("Hairpin mode"));
@@ -579,6 +783,326 @@ export const NetworkInterfacePage = ({
         ];
     }
 
+    function renderWiFiNetworks() {
+        if (!dev || dev.DeviceType !== '802-11-wireless')
+            return null;
+
+        const accessPoints = dev.AccessPoints || [];
+        if (accessPoints.length === 0)
+            return null;
+
+        const activeSSID = dev.ActiveAccessPoint ? dev.ActiveAccessPoint.Ssid : null;
+
+        function forgetNetwork(ap) {
+            utils.debug("Forgetting network", ap.Ssid);
+
+            if (ap.Connection) {
+                ap.Connection.delete_()
+                        .then(() => utils.debug("Forgot network", ap.Ssid))
+                        .catch(show_unexpected_error);
+            }
+        }
+
+        async function connectToAP(ap) {
+            // we don't show a Connect button for hidden networks
+            cockpit.assert(ap.Ssid);
+            utils.debug("Connecting to", ap.Ssid);
+
+            try {
+                if (ap.Connection) {
+                    // Activate existing connection (which already has password if needed)
+                    utils.debug("Activating existing connection for", ap.Ssid);
+                    await ap.Connection.activate(dev, ap);
+                    utils.debug("Connection activation started for", ap.Ssid);
+                    await dev.wait_connection(ap.Ssid);
+                    utils.debug("Connected successfully to", ap.Ssid);
+                    return;
+                }
+
+                // Create new connection
+                const isSecured = !!(ap.WpaFlags || ap.RsnFlags);
+
+                if (isSecured) {
+                    // Show password dialog for secured networks
+                    utils.debug("Showing password dialog for", ap.Ssid);
+                    Dialogs.show(<WiFiConnectDialog dev={dev} ap={ap} ssid={ap.Ssid} model={model} />);
+                    return;
+                }
+
+                // Create new connection for open networks
+                utils.debug("Creating new connection for", ap.Ssid);
+                const settings = {
+                    connection: {
+                        id: ap.Ssid,
+                        type: "802-11-wireless",
+                        autoconnect: true,
+                    },
+                    "802-11-wireless": {
+                        ssid: utils.ssid_to_nm(ap.Ssid),
+                        mode: "infrastructure",
+                    }
+                };
+
+                // Pass null for specific_object - NM will find the right AP by SSID
+                await dev.activate_with_settings(settings, null);
+                utils.debug("Connection activation started for", ap.Ssid);
+                await dev.wait_connection(ap.Ssid);
+                utils.debug("Connected successfully to", ap.Ssid);
+            } catch (error) {
+                // Provide context-appropriate error message
+                const errorMsg = error.reason === 7 // NM_DEVICE_STATE_REASON_NO_SECRETS
+                    ? _("Network password is not stored. Please forget and reconnect to this network.")
+                    : error.toString();
+                show_error_dialog(
+                    cockpit.format(_("Failed to connect to $0"), ap.Ssid),
+                    errorMsg
+                );
+            }
+        }
+
+        const networkSort = (rows, direction, columnIndex) => {
+            // Separate hidden networks row from named networks rows
+            const hiddenRow = rows.find(r => r.props["data-hidden"]);
+            const namedRows = rows.filter(r => !r.props["data-hidden"]);
+
+            if (columnIndex === 0) {
+                // Network column: simple alphabetical sort, no special cases
+                const sorted = [...namedRows].sort((a, b) =>
+                    a.columns[0].sortKey.localeCompare(b.columns[0].sortKey)
+                );
+                // Always put hidden networks at the bottom
+                const result = direction === SortByDirection.asc ? sorted : sorted.reverse();
+                return hiddenRow ? [...result, hiddenRow] : result;
+            } else {
+                // Signal column (default): group by connected > known > unknown, each sorted by signal strength
+
+                // Separate into groups
+                const activeRows = [];
+                const knownRows = [];
+                const unknownRows = [];
+
+                namedRows.forEach(r => {
+                    const isActive = activeSSID && r.props["data-ssid"] === activeSSID;
+                    if (isActive) {
+                        activeRows.push(r);
+                    } else if (r.props["data-known"]) {
+                        knownRows.push(r);
+                    } else {
+                        unknownRows.push(r);
+                    }
+                });
+
+                // Sort each group by stable signal order
+                // Build a map for O(1) lookups instead of O(n) indexOf
+                const orderMap = new Map();
+                stableAPOrder.current.forEach((mac, index) => orderMap.set(mac, index));
+
+                const sortByStableOrder = (a, b) => {
+                    const aMAC = a.props.key;
+                    const bMAC = b.props.key;
+                    const aOrder = orderMap.get(aMAC);
+                    const bOrder = orderMap.get(bMAC);
+                    if (aOrder === undefined || bOrder === undefined) {
+                        return a.columns[2].sortKey.localeCompare(b.columns[2].sortKey);
+                    }
+                    return aOrder - bOrder;
+                };
+
+                knownRows.sort(sortByStableOrder);
+                unknownRows.sort(sortByStableOrder);
+
+                // Concatenate groups
+                const result = [...activeRows, ...knownRows, ...unknownRows];
+                const sortedResult = direction === SortByDirection.asc ? result : result.reverse();
+                // Always put hidden networks at the bottom
+                return hiddenRow ? [...sortedResult, hiddenRow] : sortedResult;
+            }
+        };
+
+        // Filter by name
+        let filteredVisibleAPs = dev.visibleSsids;
+        if (networkSearch) {
+            const searchLower = networkSearch.toLowerCase();
+            filteredVisibleAPs = dev.visibleSsids.filter(ap => ap.Ssid.toLowerCase().includes(searchLower));
+        }
+
+        const rows = filteredVisibleAPs.map((ap, index) => {
+            const isActive = activeSSID && ap.Ssid === activeSSID;
+            const isSecured = !!(ap.WpaFlags || ap.RsnFlags);
+
+            const securityIcon = isSecured
+                ? <LockIcon aria-label={_("secured")} />
+                : <LockOpenIcon aria-label={_("open")} />;
+
+            const nameContent = (
+                <>
+                    {ap.Ssid}
+                    {isActive && <>{" "} <ConnectedIcon className="nm-icon-connected" /></>}
+                    {!isActive && ap.Connection && <>{" "} <ThumbtackIcon className="nm-icon-known" /></>}
+                </>
+            );
+
+            const timestamp = ap.Connection?.Settings?.connection?.timestamp || 0;
+            const nameColumn = timestamp > 0
+                ? (
+                    <Tooltip content={cockpit.format(_("Last connected: $0"), distanceToNow(timestamp * 1000))}>
+                        <span>{nameContent}</span>
+                    </Tooltip>
+                )
+                : nameContent;
+
+            const signalColumn = (
+                <Progress value={ap.Strength}
+                          label={ap.Strength + "%"}
+                          aria-label={_("Signal strength")}
+                          size="sm" />
+            );
+
+            let actionColumnContent;
+            if (isActive) {
+                actionColumnContent = (
+                    <Privileged allowed={privileged}
+                                tooltipId={"wifi-disconnect-" + index}
+                                excuse={_("Not permitted to disconnect network")}>
+                        <Button variant="danger"
+                                size="sm"
+                                icon={<DisconnectedIcon />}
+                                isDisabled={!privileged}
+                                onClick={() => {
+                                    dev.disconnect()
+                                            .then(() => utils.debug("Disconnected successfully from", ap.Ssid))
+                                            .catch(show_unexpected_error);
+                                }}
+                                aria-label={_("Disconnect")}>
+                            {_("Disconnect")}
+                        </Button>
+                    </Privileged>
+                );
+            } else {
+                actionColumnContent = (
+                    <Privileged allowed={privileged}
+                                tooltipId={"wifi-connect-" + index}
+                                excuse={_("Not permitted to connect to network")}>
+                        <Button variant="secondary"
+                                size="sm"
+                                icon={<ConnectedIcon />}
+                                isDisabled={!privileged}
+                                onClick={() => connectToAP(ap)}
+                                aria-label={_("Connect")}>
+                            {_("Connect")}
+                        </Button>
+                    </Privileged>
+                );
+            }
+
+            const actionColumn = (
+                <Flex justifyContent={{ default: "justifyContentFlexEnd" }}>
+                    <FlexItem>
+                        {actionColumnContent}
+                    </FlexItem>
+                </Flex>
+            );
+
+            const networkColumns = [
+                { title: nameColumn, sortKey: ap.Ssid, header: true },
+                { title: <>{securityIcon} {ap.Mode}</>, sortKey: ap.Mode },
+                { title: signalColumn, sortKey: String(ap.Strength).padStart(3, '0') },
+                { title: cockpit.format_bits_per_sec(ap.MaxBitrate * 1000) },
+                { title: actionColumn },
+            ];
+
+            if (ap.Connection) {
+                const rowActions = <ActionsColumn
+                    items={[
+                        {
+                            title: _("Forget"),
+                            onClick: () => forgetNetwork(ap),
+                            isDanger: true,
+                            "aria-label": _("Forget")
+                        }
+                    ]}
+                    isDisabled={!privileged}
+                />;
+
+                networkColumns.push({ title: rowActions, props: { isActionCell: true } });
+            } else {
+                networkColumns.push({ title: "" });
+            }
+
+            return {
+                columns: networkColumns,
+                props: { key: ap.HwAddress, "data-ssid": ap.Ssid, "data-known": !!ap.Connection }
+            };
+        });
+
+        // Add aggregated hidden access points row at the bottom
+        if (dev.hiddenAPCount > 0) {
+            const hiddenLabel = cockpit.ngettext("$0 hidden network", "$0 hidden networks", dev.hiddenAPCount);
+            rows.push({
+                columns: [
+                    { title: cockpit.format(hiddenLabel, dev.hiddenAPCount), sortKey: "zzz-hidden", header: true },
+                    { title: "" },
+                    { title: "" },
+                    { title: "" },
+                    { title: "" },
+                    { title: "" },
+                ],
+                props: { key: "hidden-networks", "data-hidden": true }
+            });
+        }
+
+        return (
+            <Card isPlain id="network-interface-wifi-networks">
+                <CardHeader actions={{
+                    actions: (
+                        <Flex>
+                            {dev.visibleSsids.length >= 3 && (
+                                <FlexItem>
+                                    <SearchInput
+                                        placeholder={_("Filter")}
+                                        value={networkSearch}
+                                        onChange={(_event, value) => setNetworkSearch(value)}
+                                        onClear={() => setNetworkSearch("")}
+                                    />
+                                </FlexItem>
+                            )}
+                            <FlexItem>
+                                <Button variant="secondary"
+                                        onClick={() => Dialogs.show(<WiFiConnectDialog dev={dev} model={model} />)}
+                                        icon={<PlusIcon />}>
+                                    {_("Connect to hidden network")}
+                                </Button>
+                            </FlexItem>
+                            <FlexItem>
+                                <Button variant="secondary"
+                                        onClick={() => { setIsScanning(true); dev.request_scan() }}
+                                        isDisabled={isScanning}
+                                        icon={isScanning ? <Spinner size="md" /> : <RedoIcon />}>
+                                    {_("Refresh")}
+                                </Button>
+                            </FlexItem>
+                        </Flex>
+                    )
+                }}>
+                    <CardTitle component="h2">{_("Available networks")}</CardTitle>
+                </CardHeader>
+                <ListingTable aria-label={_("Available networks")}
+                              variant='compact'
+                              columns={[
+                                  { title: _("Network"), header: true, sortable: true },
+                                  { title: _("Mode") },
+                                  { title: _("Signal"), sortable: true },
+                                  { title: _("Rate") },
+                                  { props: { screenReaderText: _("Primary action") } },
+                                  { props: { screenReaderText: _("Secondary actions") } },
+                              ]}
+                              sortBy={{ index: 2, direction: SortByDirection.asc }}
+                              sortMethod={networkSort}
+                              rows={rows} />
+            </Card>
+        );
+    }
+
     function renderConnectionMembers(con) {
         const memberIfaces = { };
         const members = { };
@@ -600,7 +1124,7 @@ export const NetworkInterfacePage = ({
         };
 
         const cs = con && connection_settings(con);
-        if (!con || (cs.type != "bond" && cs.type != "team" && cs.type != "bridge")) {
+        if (plot_state && (!con || (cs.type !== "bond" && cs.type !== "team" && cs.type !== "bridge"))) {
             plot_state.plot_instances('rx', rx_plot_data, [dev_name], true);
             plot_state.plot_instances('tx', tx_plot_data, [dev_name], true);
             return null;
@@ -610,7 +1134,7 @@ export const NetworkInterfacePage = ({
 
         con.Members.forEach(member_con => {
             member_con.Interfaces.forEach(iface => {
-                if (iface.MainConnection != member_con)
+                if (iface.MainConnection !== member_con)
                     return;
 
                 const dev = iface.Device;
@@ -628,8 +1152,10 @@ export const NetworkInterfacePage = ({
             });
         });
 
-        plot_state.plot_instances('rx', rx_plot_data, plot_ifaces, true);
-        plot_state.plot_instances('tx', tx_plot_data, plot_ifaces, true);
+        if (plot_state) {
+            plot_state.plot_instances('rx', rx_plot_data, plot_ifaces, true);
+            plot_state.plot_instances('tx', tx_plot_data, plot_ifaces, true);
+        }
 
         const sorted_members = Object.keys(members).sort()
                 .map(name => members[name]);
@@ -651,17 +1177,17 @@ export const NetworkInterfacePage = ({
             },
             ipv4: {
                 method: "auto",
-                addresses: [],
-                dns: [],
+                address_data: [],
+                dns_data: [],
                 dns_search: [],
-                routes: []
+                route_data: []
             },
             ipv6: {
                 method: "auto",
-                addresses: [],
-                dns: [],
+                address_data: [],
+                dns_data: [],
                 dns_search: [],
-                routes: []
+                route_data: []
             }
         };
         complete_settings(settings, dev);
@@ -680,41 +1206,46 @@ export const NetworkInterfacePage = ({
                         excuse={ _("Not permitted to configure network devices") }>
                 <Switch id="interface-switch"
                         isChecked={!!(dev && dev.ActiveConnection)}
-                        isDisabled={!iface || (dev && dev.State == 20) || !privileged}
+                        isDisabled={!iface || (dev && dev.State === 20) || !privileged}
                         onChange={(_event, enable) => enable ? connect() : disconnect()}
                         aria-label={_("Enable or disable the device")} />
             </Privileged>
         );
     }
 
-    const isDeletable = (iface && !dev) || (dev && (dev.DeviceType == 'bond' ||
-                                                    dev.DeviceType == 'team' ||
-                                                    dev.DeviceType == 'vlan' ||
-                                                    dev.DeviceType == 'bridge' ||
-                                                    dev.DeviceType == 'wireguard'));
+    const isDeletable = (iface && !dev) || (dev && (dev.DeviceType === 'bond' ||
+                                                    dev.DeviceType === 'team' ||
+                                                    dev.DeviceType === 'vlan' ||
+                                                    dev.DeviceType === 'bridge' ||
+                                                    dev.DeviceType === 'wireguard'));
 
     const settingsRows = renderConnectionSettingsRows(iface.MainConnection, connectionSettings)
             .map((component, idx) => <React.Fragment key={idx}>{component}</React.Fragment>);
 
     return (
         <Page id="network-interface"
-              data-test-wait={operationInProgress}>
-            <PageBreadcrumb stickyOnBreakpoint={{ default: "top" }}>
-                <Breadcrumb>
-                    <BreadcrumbItem to='#/'>
-                        {_("Networking")}
-                    </BreadcrumbItem>
-                    <BreadcrumbItem isActive>
-                        {dev_name}
-                    </BreadcrumbItem>
-                </Breadcrumb>
-            </PageBreadcrumb>
-            <PageSection variant={PageSectionVariants.light}>
-                <NetworkPlots plot_state={plot_state} />
-            </PageSection>
-            <PageSection>
+              data-test-wait={operationInProgress}
+              className={"pf-m-no-sidebar" + (anaconda_mode ? " anaconda" : "")}>
+            { !anaconda_mode &&
+                (<PageBreadcrumb hasBodyWrapper={false} stickyOnBreakpoint={{ default: "top" }}>
+                    <Breadcrumb>
+                        <BreadcrumbItem to='#/'>
+                            {_("Networking")}
+                        </BreadcrumbItem>
+                        <BreadcrumbItem isActive>
+                            {dev_name}
+                        </BreadcrumbItem>
+                    </Breadcrumb>
+                </PageBreadcrumb>)
+            }
+            { plot_state &&
+                <PageSection hasBodyWrapper={false}>
+                    <NetworkPlots plot_state={plot_state} />
+                </PageSection>
+            }
+            <PageSection hasBodyWrapper={false}>
                 <Gallery hasGutter>
-                    <Card className="network-interface-details">
+                    <Card isPlain className="network-interface-details">
                         <CardHeader actions={{
                             actions: (
                                 <>
@@ -748,7 +1279,8 @@ export const NetworkInterfacePage = ({
                             : null
                         }
                     </Card>
-                    {renderConnectionMembers(iface.MainConnection)}
+                    {renderWiFiNetworks()}
+                    { !anaconda_mode && renderConnectionMembers(iface.MainConnection)}
                 </Gallery>
             </PageSection>
         </Page>

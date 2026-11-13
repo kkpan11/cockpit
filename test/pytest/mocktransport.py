@@ -17,17 +17,17 @@ class MockTransport(asyncio.Transport):
         await asyncio.sleep(0.1)
         assert self.queue.qsize() == 0
 
-    def send_json(self, _channel: str, **kwargs) -> None:
+    def send_json(self, channel_: str, **kwargs: JsonValue) -> None:
         # max_read_size is one of our special keys which uses underscores
         msg = {k.replace('_', '-') if k != "max_read_size" else k: v for k, v in kwargs.items()}
-        self.send_data(_channel, json.dumps(msg).encode('ascii'))
+        self.send_data(channel_, json.dumps(msg).encode('ascii'))
 
     def send_data(self, channel: str, data: bytes) -> None:
         msg = channel.encode('ascii') + b'\n' + data
         msg = str(len(msg)).encode('ascii') + b'\n' + msg
         self.protocol.data_received(msg)
 
-    def send_init(self, version=1, host=MOCK_HOSTNAME, **kwargs):
+    def send_init(self, version: int = 1, host:  str = MOCK_HOSTNAME, **kwargs: JsonValue) -> None:
         self.send_json('', command='init', version=version, host=host, **kwargs)
 
     def init(self, **kwargs: Any) -> Dict[str, object]:
@@ -42,7 +42,7 @@ class MockTransport(asyncio.Transport):
         self.next_id += 1
         return f'{prefix}.{self.next_id}'
 
-    def send_open(self, payload, channel=None, **kwargs):
+    def send_open(self, payload: str, channel: 'str | None' = None, **kwargs: JsonValue) -> str:
         if channel is None:
             channel = self.get_id('channel')
         self.send_json('', command='open', channel=channel, payload=payload, **kwargs)
@@ -50,13 +50,13 @@ class MockTransport(asyncio.Transport):
 
     async def check_open(
         self,
-        payload,
-        channel=None,
-        problem=None,
+        payload: str,
+        channel: 'str | None' = None,
+        problem: 'str | None' = None,
         reply_keys: Optional[JsonObject] = None,
         absent_keys: 'Iterable[str]' = (),
-        **kwargs,
-    ):
+        **kwargs: JsonValue,
+    ) -> str:
         assert isinstance(self.protocol, Router)
         ch = self.send_open(payload, channel, **kwargs)
         if problem is None:
@@ -68,17 +68,17 @@ class MockTransport(asyncio.Transport):
             assert ch not in self.protocol.open_channels
         return ch
 
-    def send_done(self, channel, **kwargs):
+    def send_done(self, channel: str, **kwargs: JsonValue) -> None:
         self.send_json('', command='done', channel=channel, **kwargs)
 
-    def send_close(self, channel, **kwargs):
+    def send_close(self, channel: str, **kwargs: JsonValue):
         self.send_json('', command='close', channel=channel, **kwargs)
 
-    async def check_close(self, channel, **kwargs):
+    async def check_close(self, channel: str, **kwargs: JsonValue):
         self.send_close(channel, **kwargs)
         await self.assert_msg('', command='close', channel=channel)
 
-    def send_ping(self, **kwargs):
+    def send_ping(self, **kwargs: JsonValue):
         self.send_json('', command='ping', **kwargs)
 
     def __init__(self, protocol: asyncio.Protocol):
@@ -92,13 +92,12 @@ class MockTransport(asyncio.Transport):
         _, channel, data = data.split(b'\n', 2)
         self.queue.put_nowait((channel.decode('ascii'), data))
 
-    def stop(self, event_loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
+    async def stop(self) -> None:
         keep_open = self.protocol.eof_received()
         if keep_open:
-            assert event_loop is not None
-            self.close_future = event_loop.create_future()
+            self.close_future = asyncio.get_running_loop().create_future()
             try:
-                event_loop.run_until_complete(self.close_future)
+                await self.close_future
             finally:
                 self.close_future = None
 

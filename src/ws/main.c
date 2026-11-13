@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2013 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
@@ -34,10 +20,8 @@
 #include "cockpitbranding.h"
 
 #include "common/cockpitconf.h"
-#include "common/cockpithacks-glib.h"
 #include "common/cockpitmemory.h"
-#include "common/cockpitsystem.h"
-#include "common/cockpitwebcertificate.h"
+#include "cockpitsystem.h"
 
 /* ---------------------------------------------------------------------------------------------------- */
 
@@ -52,7 +36,7 @@ static gboolean  opt_version      = FALSE;
 static GOptionEntry cmd_entries[] = {
   {"port", 'p', 0, G_OPTION_ARG_INT, &opt_port, "Local port to bind to (9090 if unset)", NULL},
   {"address", 'a', 0, G_OPTION_ARG_STRING, &opt_address, "Address to bind to (binds on all addresses if unset)", "ADDRESS"},
-  {"no-tls", 0, 0, G_OPTION_ARG_NONE, &opt_no_tls, "Don't use TLS", NULL},
+  {"no-tls", 0, 0, G_OPTION_ARG_NONE, &opt_no_tls, "Disable http to https redirection", NULL},
   {"for-tls-proxy", 0, 0, G_OPTION_ARG_NONE, &opt_for_tls_proxy,
       "Act behind a https-terminating proxy: accept only https:// origins by default",
       NULL},
@@ -71,7 +55,7 @@ print_version (void)
 {
   g_print ("Version: %s\n", PACKAGE_VERSION);
   g_print ("Protocol: 1\n");
-  g_print ("Authorization: crypt1\n");
+  g_print ("Authorization: basic\n");
 }
 
 static gchar **
@@ -79,6 +63,7 @@ setup_static_roots (GHashTable *os_release)
 {
   gchar **roots;
   const gchar *os_variant_id;
+  const gchar *os_version_id;
   const gchar *os_id;
   const gchar *os_id_like;
 
@@ -86,16 +71,18 @@ setup_static_roots (GHashTable *os_release)
     {
       os_id = g_hash_table_lookup (os_release, "ID");
       os_variant_id = g_hash_table_lookup (os_release, "VARIANT_ID");
+      os_version_id = g_hash_table_lookup (os_release, "VERSION_ID");
       os_id_like = g_hash_table_lookup (os_release, "ID_LIKE");
     }
   else
     {
       os_id = NULL;
       os_variant_id = NULL;
+      os_version_id = NULL;
       os_id_like = NULL;
     }
 
-  roots = cockpit_branding_calculate_static_roots (os_id, os_variant_id, os_id_like, TRUE);
+  roots = cockpit_branding_calculate_static_roots (os_id, os_variant_id, os_version_id, os_id_like, TRUE);
 
   return roots;
 }
@@ -115,7 +102,6 @@ main (int argc,
 {
   gint ret = 1;
   g_autoptr(GOptionContext) context = NULL;
-  g_autoptr(GTlsCertificate) certificate = NULL;
   g_autoptr(GError) error = NULL;
   g_auto(GStrv) roots = NULL;
   g_autoptr(GMainLoop) loop = NULL;
@@ -143,7 +129,7 @@ main (int argc,
   /* check mutually exclusive options */
   if (opt_for_tls_proxy && opt_no_tls)
     {
-      g_printerr ("--for-tls-proxy and --no-tls are mutually exclusive");
+      g_printerr ("--for-tls-proxy and --no-tls are mutually exclusive\n");
       goto out;
     }
 
@@ -157,29 +143,7 @@ main (int argc,
   if (opt_for_tls_proxy || cockpit_conf_bool ("WebService", "X-For-CockpitClient", FALSE))
     opt_no_tls = TRUE;
 
-  cockpit_hacks_redirect_gdebug_to_stderr ();
-
-  if (opt_local_session || opt_no_tls)
-    {
-      /* no certificate */
-    }
-  else
-    {
-      g_autofree char *message = NULL;
-      g_autofree gchar *cert_path = cockpit_certificate_locate (false, &message);
-      if (cert_path == NULL)
-        {
-          g_set_error_literal (&error, G_IO_ERROR, G_IO_ERROR_NOT_FOUND, message);
-          goto out;
-        }
-
-      g_autofree gchar *key_path = cockpit_certificate_key_path (cert_path);
-
-      certificate = g_tls_certificate_new_from_files (cert_path, key_path, &error);
-      if (certificate == NULL)
-        goto out;
-      g_info ("Using certificate: %s", cert_path);
-    }
+  g_log_writer_default_set_use_stderr (TRUE);
 
   loop = g_main_loop_new (NULL, FALSE);
 
@@ -187,21 +151,21 @@ main (int argc,
   data.auth = cockpit_auth_new (opt_local_ssh, opt_for_tls_proxy ? COCKPIT_AUTH_FOR_TLS_PROXY : COCKPIT_AUTH_NONE);
   roots = setup_static_roots (data.os_release);
 
+  const gchar *static_dir = cockpit_conf_string ("WebService", "CustomLoginPage");
+  const gchar *root_dir = static_dir ? static_dir : DATADIR "/cockpit/static";
   data.branding_roots = (const gchar **)roots;
-  login_html = g_strdup (DATADIR "/cockpit/static/login.html");
+
+  login_html = g_strconcat (root_dir, "/login.html", NULL);
   data.login_html = (const gchar *)login_html;
-  login_po_js = g_strdup (DATADIR "/cockpit/static/po.js");
+  login_po_js = g_strconcat (root_dir, "/po.js", NULL);
   data.login_po_js = (const gchar *)login_po_js;
 
   if (opt_for_tls_proxy)
     server_flags |= COCKPIT_WEB_SERVER_FOR_TLS_PROXY;
-  if (!cockpit_conf_bool ("WebService", "AllowUnencrypted", FALSE))
-    {
-      if (!opt_no_tls)
-        server_flags |= COCKPIT_WEB_SERVER_REDIRECT_TLS;
-    }
+  if (!opt_no_tls && !cockpit_conf_bool ("WebService", "AllowUnencrypted", FALSE))
+    server_flags |= COCKPIT_WEB_SERVER_REDIRECT_TLS;
 
-  server = cockpit_web_server_new (certificate, server_flags);
+  server = cockpit_web_server_new (server_flags);
 
   const gint n_listen_fds = sd_listen_fds (true);
   if (n_listen_fds)

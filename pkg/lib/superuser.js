@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2020 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -38,6 +24,11 @@ import cockpit from "cockpit";
  * UI elements that alert the user that they don't have administrative
  * access should be shown when the "allowed" field is exactly false,
  * but not when it is null.
+ *
+ * - superuser.configured
+ *
+ * This is true when the shell has at least one superuser bridge configured,
+ * false if there are no superuser bridges, or null during initialization.
  *
  * - superuser.addEventListener("changed", () => ...)
  *
@@ -74,25 +65,31 @@ function Superuser() {
     let reload_on_change = false;
 
     const compute_allowed = () => {
-        if (!proxy.valid || proxy.Current == "init")
+        if (!proxy.valid || proxy.Current === "init")
             return null;
-        return proxy.Current != "none";
+        return proxy.Current !== "none";
     };
 
-    const self = {
+    const compute_configured = () => {
+        if (proxy.Current === "init")
+            return null;
+        return (proxy.Bridges?.length ?? 0) > 0;
+    };
+
+    const self = cockpit.event_target({
         allowed: compute_allowed(),
+        configured: null,
         reload_page_on_change
-    };
-
-    cockpit.event_target(self);
+    });
 
     function changed(allowed) {
-        if (self.allowed != allowed) {
+        if (self.allowed !== allowed) {
             if (self.allowed != null && reload_on_change) {
                 window.location.reload(true);
             } else {
                 const prev = self.allowed;
                 self.allowed = allowed;
+                self.configured = compute_configured();
                 self.dispatchEvent("changed");
                 if (prev != null)
                     self.dispatchEvent("reconnect");

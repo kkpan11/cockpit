@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2023 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -28,7 +14,7 @@ const _ = cockpit.gettext;
 export function create_mdraid() {
     function mdraid_exists(name) {
         for (const p in client.mdraids) {
-            if (mdraid_name(client.mdraids[p]) == name)
+            if (mdraid_name(client.mdraids[p]) === name)
                 return true;
         }
         return false;
@@ -82,7 +68,7 @@ export function create_mdraid() {
                       {
                           value: "512",
                           visible: function (vals) {
-                              return vals.level != "raid1";
+                              return vals.level !== "raid1";
                           },
                           choices: [
                               { value: "4", title: _("4 KiB") },
@@ -100,12 +86,12 @@ export function create_mdraid() {
                          {
                              empty_warning: _("No disks are available."),
                              validate: function (disks, vals) {
-                                 const disks_needed = vals.level == "raid6" ? 4 : 2;
+                                 const disks_needed = vals.level === "raid6" ? 4 : 2;
                                  if (disks.length < disks_needed)
                                      return cockpit.format(cockpit.ngettext("At least $0 disk is needed.", "At least $0 disks are needed.", disks_needed),
                                                            disks_needed);
                              },
-                             spaces: get_available_spaces(client)
+                             spaces: get_available_spaces()
                          })
         ],
         Action: {

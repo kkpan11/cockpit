@@ -1,21 +1,9 @@
 #!/usr/bin/python3 -cimport os, sys; os.execv(os.path.dirname(sys.argv[1]) + "/../common/pywrap", sys.argv)
 
-# This file is part of Cockpit.
 #
 # Copyright (C) 2015 Red Hat, Inc.
-#
-# Cockpit is free software; you can redistribute it and/or modify it
-# under the terms of the GNU Lesser General Public License as published by
-# the Free Software Foundation; either version 2.1 of the License, or
-# (at your option) any later version.
-#
-# Cockpit is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-# Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
 
 import storagelib
 import testlib
@@ -35,23 +23,26 @@ class TestStorageUsed(storagelib.StorageCase):
         m.execute(f"parted -s {disk} mktable msdos")
         m.execute(f"parted -s {disk} mkpart primary ext2 1M 25")
         m.execute("udevadm settle")
+        m.execute(f"until udevadm info --query=all {disk} | grep -q ID_PART_TABLE_TYPE=dos; do sleep 0.1; done")
         m.execute(f"echo einszweidrei | cryptsetup luksFormat --pbkdf-memory 32768 {disk}1")
         m.execute(f"echo einszweidrei | cryptsetup luksOpen {disk}1 dm-test")
         m.execute("udevadm settle")
+        m.execute("until [ -b /dev/mapper/dm-test ]; do sleep 0.1; done")
+        m.execute("until udevadm info --query=all /dev/mapper/dm-test | grep -q DM_NAME=dm-test; do sleep 0.1; done")
         m.execute("mke2fs -q -L TEST /dev/mapper/dm-test")
-        m.execute("mount /dev/mapper/dm-test /mnt")
+        m.execute(f"mount /dev/mapper/dm-test {self.mnt_dir}")
 
         # Keep the mount point busy.  The extra "true" is here to
         # prevent bash from applying tail call optimization to the
         # "sleep" invocation.
-        sleep_pid = m.spawn("cd /mnt; sleep infinity; true", "sleep")
+        sleep_pid = m.spawn(f"cd {self.mnt_dir}; sleep infinity; true", "sleep")
         self.write_file("/etc/systemd/system/keep-mnt-busy.service",
-                        """
+                        f"""
 [Unit]
 Description=Test Service
 
 [Service]
-WorkingDirectory=/mnt
+WorkingDirectory={self.mnt_dir}
 ExecStart=/usr/bin/sleep infinity
 """)
         m.execute("systemctl start keep-mnt-busy")
@@ -66,20 +57,20 @@ ExecStart=/usr/bin/sleep infinity
         self.click_card_dropdown("ext2 filesystem", "Format")
         self.dialog_wait_open()
         self.dialog_set_val("type", "ext4")
-        b.click("#dialog button:contains(Currently in use)")
-        b.wait_in_text(".pf-v5-c-popover", str(sleep_pid))
-        b.wait_in_text(".pf-v5-c-popover", "keep-mnt-busy")
-        b.assert_pixels(".pf-v5-c-popover", "popover",
-                        mock={".pf-v5-c-popover__body ul:nth-of-type(2) li": "process (user: root, pid: 1234)"},
-                        scroll_into_view="#dialog button:contains(Currently in use)")
-        b.click(".pf-v5-c-popover button")
-        b.assert_pixels('#dialog', "format", wait_after_layout_change=True)
+        b.click("#dialog button:contains('Currently in use')")
+        b.wait_in_text(".pf-v6-c-popover", str(sleep_pid))
+        b.wait_in_text(".pf-v6-c-popover", "keep-mnt-busy")
+        b.assert_pixels(".pf-v6-c-popover", "popover",
+                        mock={".pf-v6-c-popover__body ul:nth-of-type(2) li": "process (user: root, pid: 1234)"},
+                        scroll_into_view="#dialog button:contains('Currently in use')")
+        b.click(".pf-v6-c-popover button")
+        b.assert_pixels('#dialog', "format", wait_after_layout_change=True, chrome_hack_double_shots=True)
         self.dialog_cancel()
         self.dialog_wait_close()
 
         self.click_card_dropdown("Partition", "Delete")
         self.dialog_wait_open()
-        b.wait_visible("#dialog button:contains(Currently in use)")
+        b.wait_visible("#dialog button:contains('Currently in use')")
         b.assert_pixels('#dialog', "delete")
         self.dialog_cancel()
         self.dialog_wait_close()
@@ -95,7 +86,7 @@ ExecStart=/usr/bin/sleep infinity
 
         def first_setup():
             self.dialog_set_val("type", "empty")
-            b.wait_visible("#dialog tbody:first-of-type button:contains(Currently in use)")
+            b.wait_visible("#dialog tbody:first-of-type button:contains('Currently in use')")
             b.assert_pixels('#dialog', "format-disk")
 
         def retry_setup():
@@ -158,10 +149,10 @@ ExecStart=/usr/bin/sleep infinity
         disk = self.add_ram_disk()
         b.wait_visible(self.card_row("Storage", name=disk))
         m.execute(f"mke2fs -q -L TEST {disk}")
-        m.execute(f"mount {disk} /mnt")
+        m.execute(f"mount {disk} {self.mnt_dir}")
 
         self.click_card_row("Storage", name=disk)
-        b.wait_in_text(self.card("ext2 filesystem"), "The filesystem is currently mounted on /mnt")
+        b.wait_in_text(self.card("ext2 filesystem"), f"The filesystem is currently mounted on {self.mnt_dir}")
 
         # Start formatting, and while the dialog is open, make the
         # filesystem unmountable.
@@ -171,22 +162,22 @@ ExecStart=/usr/bin/sleep infinity
         # is not. The first is only used to figure out when the dialog
         # is done initializing.
 
-        m.spawn("cd /mnt; sleep infinity; true", "sleep")
+        m.spawn(f"cd {self.mnt_dir}; sleep infinity; true", "sleep")
 
         self.click_card_dropdown("Solid State Drive", "Create partition table")
         self.dialog_wait_open()
-        b.wait_visible("#dialog tbody:first-of-type button:contains(Currently in use)")
+        b.wait_visible("#dialog tbody:first-of-type button:contains('Currently in use')")
         self.dialog_wait_apply_enabled()
-        m.spawn("cd /mnt; sleep infinity; true", "sleep")
+        m.spawn(f"cd {self.mnt_dir}; sleep infinity; true", "sleep")
         self.dialog_apply()
-        b.wait_in_text("#dialog", "umount: /mnt: target is busy")
+        b.wait_in_text("#dialog", f"umount: {self.mnt_dir}: target is busy")
         self.dialog_wait_apply_disabled()
         self.dialog_cancel()
         self.dialog_wait_close()
 
         self.click_card_dropdown("Solid State Drive", "Create partition table")
         self.dialog_wait_open()
-        b.wait_visible("#dialog button:contains(Currently in use)")
+        b.wait_visible("#dialog button:contains('Currently in use')")
         self.dialog_apply()
         self.dialog_wait_close()
 

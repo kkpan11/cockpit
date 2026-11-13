@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 import cockpit from "cockpit";
 import QUnit from "qunit-tests";
 
@@ -22,6 +23,7 @@ QUnit.test("user object", async assert => {
     assert.equal(typeof user.shell, "string", "user shell");
     assert.equal(typeof user.home, "string", "user home");
     assert.equal(typeof user.id, "number", "user id");
+    assert.equal(typeof user.gid, "number", "group id");
     assert.ok(Array.isArray(user.groups), "user groups");
 });
 

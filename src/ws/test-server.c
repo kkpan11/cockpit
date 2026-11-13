@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2013 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
@@ -24,13 +10,12 @@
 #include "cockpitchannelsocket.h"
 #include "cockpitws.h"
 
-#include "common/cockpitpipe.h"
+#include "cockpitpipe.h"
 #include "common/cockpitconf.h"
-#include "common/cockpitpipetransport.h"
-#include "common/cockpitsystem.h"
+#include "cockpitpipetransport.h"
 #include "testlib/cockpittest.h"
-#include "common/cockpitwebserver.h"
-#include "common/cockpitwebinject.h"
+#include "cockpitwebserver.h"
+#include "cockpitwebinject.h"
 
 #include "ws/mock-service.h"
 
@@ -121,7 +106,6 @@ mock_http_info (CockpitWebRequest *request,
                 CockpitWebResponse *response)
 {
   g_autoptr(JsonObject) info = json_object_new ();
-  json_object_set_boolean_member (info, "pybridge", strstr (bridge_argv[0], "py") != NULL);
   json_object_set_boolean_member (info, "skip_slow_tests", g_getenv ("COCKPIT_SKIP_SLOW_TESTS") != NULL);
 
   g_autoptr(GBytes) bytes = cockpit_json_write_bytes (info);
@@ -152,7 +136,7 @@ mock_http_qs (CockpitWebRequest *request,
 }
 
 static gboolean
-on_timeout_send (gpointer data)
+send_numbers (gpointer data)
 {
   CockpitWebResponse *response = data;
   gint *at = g_object_get_data (data, "at");
@@ -175,12 +159,72 @@ on_timeout_send (gpointer data)
   return TRUE;
 }
 
+static const char* SPLIT_UTF8_FRAMES[] = {
+    "initial",
+    /* split an é in the middle */
+    "first half \xc3",
+    "\xa9 second half",
+    "final",
+    NULL,
+};
+
 static gboolean
-mock_http_stream (CockpitWebResponse *response)
+send_split_utf8 (gpointer data)
+{
+  CockpitWebResponse *response = data;
+  gint *at = g_object_get_data (data, "at");
+  const char *frame = SPLIT_UTF8_FRAMES[*at];
+
+  if (frame == NULL)
+    {
+      cockpit_web_response_complete (response);
+      return FALSE;
+    }
+
+  (*at) += 1;
+
+  g_autoptr(GBytes) bytes = g_bytes_new_static (frame, strlen (frame));
+  cockpit_web_response_queue (response, bytes);
+  return TRUE;
+}
+
+static gboolean
+send_truncated_utf8 (gpointer data)
+{
+  CockpitWebResponse *response = data;
+  gint *at = g_object_get_data (data, "at");
+  const char *frame = SPLIT_UTF8_FRAMES[*at];
+
+  /* only send the first two frames */
+  if (*at == 2)
+    {
+      cockpit_web_response_complete (response);
+      return FALSE;
+    }
+
+  (*at) += 1;
+
+  g_autoptr(GBytes) bytes = g_bytes_new_static (frame, strlen (frame));
+  cockpit_web_response_queue (response, bytes);
+  return TRUE;
+}
+
+static gboolean
+send_binary_data (gpointer data)
+{
+  CockpitWebResponse *response = data;
+  g_autoptr(GBytes) bytes = g_bytes_new_static ("\xFF\x01\xFF\x02", 4);
+  cockpit_web_response_queue (response, bytes);
+  cockpit_web_response_complete (response);
+  return FALSE;
+}
+
+static gboolean
+mock_http_stream (CockpitWebResponse *response, GSourceFunc func)
 {
   cockpit_web_response_headers (response, 200, "OK", -1, NULL);
   g_object_set_data_full (G_OBJECT (response), "at", g_new0 (gint, 1), g_free);
-  g_timeout_add_full (G_PRIORITY_DEFAULT, 100, on_timeout_send,
+  g_timeout_add_full (G_PRIORITY_DEFAULT, 100, func,
                       g_object_ref (response), g_object_unref);
 
   return TRUE;
@@ -301,7 +345,13 @@ on_handle_mock (CockpitWebServer *server,
   if (g_str_equal (path, "/qs"))
     return mock_http_qs (request, response);
   if (g_str_equal (path, "/stream"))
-    return mock_http_stream (response);
+    return mock_http_stream (response, send_numbers);
+  if (g_str_equal (path, "/split-utf8"))
+    return mock_http_stream (response, send_split_utf8);
+  if (g_str_equal (path, "/truncated-utf8"))
+    return mock_http_stream (response, send_truncated_utf8);
+  if (g_str_equal (path, "/binary-data"))
+    return mock_http_stream (response, send_binary_data);
   if (g_str_equal (path, "/headers"))
     return mock_http_headers (response, headers);
   if (g_str_equal (path, "/host"))
@@ -491,12 +541,10 @@ on_handle_stream_external (CockpitWebServer *server,
       const gchar *protocols[] = { "cockpit1", NULL };
       const gchar *origins[2] = { NULL, NULL };
       WebSocketConnection *ws = NULL;
-      gchar *url;
 
-      url = g_strdup_printf ("ws://localhost:%u%s", server_port, path);
       origins[0] = g_strdup_printf ("http://localhost:%u", server_port);
 
-      ws = web_socket_server_new_for_stream (url, (const gchar **)origins,
+      ws = web_socket_server_new_for_stream ((const gchar **)origins,
                                              protocols, io_stream, headers, input);
 
       g_signal_connect (ws, "message", G_CALLBACK (on_echo_socket_message), NULL);
@@ -675,7 +723,7 @@ on_handle_source (CockpitWebServer *server,
       inject_address (response, "bus_address", bus_address);
       inject_address (response, "direct_address", direct_address);
     }
-  cockpit_web_response_file_or_gz (response, TRUE, path, (const gchar **)server_roots);
+  cockpit_web_response_file_or_gz (response, path, (const gchar **)server_roots);
   return TRUE;
 }
 
@@ -707,8 +755,7 @@ server_ready (void)
     server_port = 8765;
 
   server_roots = cockpit_web_response_resolve_roots (roots);
-  server = cockpit_web_server_new (NULL, /* TLS cert */
-                                   COCKPIT_WEB_SERVER_NONE);
+  server = cockpit_web_server_new (COCKPIT_WEB_SERVER_NONE);
   server_port = cockpit_web_server_add_inet_listener (server, NULL, server_port, &error);
   g_assert_no_error (error);
   g_assert (server_port != 0);
@@ -729,7 +776,7 @@ server_ready (void)
   g_signal_connect (server, "handle-resource::/mock/",
                     G_CALLBACK (on_handle_mock), NULL);
 
-  url = g_strdup_printf("http://localhost:%d", server_port);
+  url = g_strdup_printf("http://localhost:%d/", server_port);
 
   cockpit_web_server_start (server);
 
@@ -814,7 +861,7 @@ setup_path (const char *argv0)
                           old ? ":" : "",
                           old ? old : NULL);
 
-  cockpit_setenv_check ("PATH", path, TRUE);
+  cockpit_test_setenv ("PATH", path);
 
   g_free (path);
   g_free (dir);
@@ -883,9 +930,11 @@ main (int argc,
     { NULL }
   };
 
+  g_log_writer_default_set_use_stderr (TRUE);
+
   signal (SIGPIPE, SIG_IGN);
   /* avoid gvfs (http://bugzilla.gnome.org/show_bug.cgi?id=526454) */
-  cockpit_setenv_check ("GIO_USE_VFS", "local", TRUE);
+  cockpit_test_setenv ("GIO_USE_VFS", "local");
 
   /* playground config directory */
   g_autofree gchar *config_dir = g_dir_make_tmp ("cockpit.config.XXXXXX", NULL);
@@ -893,10 +942,10 @@ main (int argc,
   g_autofree gchar *machines_dir = g_build_filename (config_dir, "cockpit", "machines.d", NULL);
   g_assert (g_mkdir_with_parents (machines_dir, 0755) == 0);
 
-  cockpit_setenv_check ("PYTHONPATH", SRCDIR "/src", TRUE);
-  cockpit_setenv_check ("XDG_DATA_HOME", SRCDIR "/src/bridge/mock-resource/home", TRUE);
-  cockpit_setenv_check ("XDG_DATA_DIRS", SRCDIR "/src/bridge/mock-resource/system", TRUE);
-  cockpit_setenv_check ("XDG_CONFIG_DIRS", config_dir, TRUE);
+  cockpit_test_setenv ("PYTHONPATH", SRCDIR "/src");
+  cockpit_test_setenv ("XDG_DATA_HOME", SRCDIR "/test/data/mock-resource/home");
+  cockpit_test_setenv ("XDG_DATA_DIRS", SRCDIR "/test/data/mock-resource/system");
+  cockpit_test_setenv ("XDG_CONFIG_DIRS", config_dir);
 
   setup_path (argv[0]);
 
@@ -951,9 +1000,6 @@ main (int argc,
     bridge_argv[i++] = "-m";
     bridge_argv[i++] = "cockpit.bridge";
   }
-
-  // Use a local ssh session command
-  cockpit_ws_ssh_program = BUILDDIR "/cockpit-ssh";
 
   loop = g_main_loop_new (NULL, FALSE);
 

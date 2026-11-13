@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2023 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from 'cockpit';
@@ -24,16 +10,21 @@ import { HelperText, HelperTextItem } from "@patternfly/react-core/dist/esm/comp
 import { TextInput } from "@patternfly/react-core/dist/esm/components/TextInput/index.js";
 
 import { apply_modal_dialog, show_modal_dialog } from "cockpit-components-dialog.jsx";
+import { FormHelper } from "cockpit-components-form-helper";
+import { has_errors, is_valid_char_name } from "./dialog-utils.js";
 
 const _ = cockpit.gettext;
 
-function RenameGroupDialogBody({ state, change }) {
+function RenameGroupDialogBody({ state, errors, change }) {
     const { name } = state;
 
     return (
         <Form isHorizontal onSubmit={apply_modal_dialog}>
             <FormGroup fieldId="group-name" label={_("New name")}>
-                <TextInput id="group-name" onChange={(_event, val) => change("name", val)} value={name} />
+                <TextInput id="group-name"
+                           validated={(errors?.name) ? "error" : "default"}
+                           onChange={(_event, val) => change("name", val)} value={name} />
+                <FormHelper fieldId="group-name" helperTextInvalid={errors?.name} />
             </FormGroup>
             <HelperText>
                 <HelperTextItem variant="warning">{_("Renaming a group may affect sudo and similar rules")}</HelperTextItem>
@@ -42,15 +33,29 @@ function RenameGroupDialogBody({ state, change }) {
     );
 }
 
+function validate_name(name) {
+    if (!name)
+        return _("Group name cannot be empty");
+
+    for (let i = 0; i < name.length; i++) {
+        if (!is_valid_char_name(name[i]))
+            return _("Group name can only consist of letters, digits, dots, dashes, and underscores");
+    }
+
+    return null;
+}
+
 export function rename_group_dialog(group) {
     let dlg = null;
 
     const state = {
         name: group
     };
+    let errors = { };
 
     function change(field, value) {
         state[field] = value;
+        errors = { };
         update();
     }
 
@@ -58,9 +63,8 @@ export function rename_group_dialog(group) {
         const props = {
             id: "group-confirm-rename-dialog",
             title: cockpit.format(_("Rename group $0"), group),
-            body: <RenameGroupDialogBody state={state} change={change} />,
+            body: <RenameGroupDialogBody state={state} errors={errors} change={change} />,
             variant: 'small',
-            titleIconVariant: 'warning',
         };
 
         const footer = {
@@ -68,7 +72,14 @@ export function rename_group_dialog(group) {
                 {
                     caption: _("Rename"),
                     style: "primary",
-                    clicked: () => cockpit.spawn(["groupmod", group, "--new-name", state.name], { superuser: "require", err: "message" }).then(dlg.close)
+                    clicked: () => {
+                        errors.name = validate_name(state.name);
+                        if (has_errors(errors)) {
+                            update();
+                            return Promise.reject();
+                        }
+                        return cockpit.spawn(["groupmod", group, "--new-name", state.name], { superuser: "require", err: "message" }).then(dlg.close);
+                    }
                 }
             ]
         };

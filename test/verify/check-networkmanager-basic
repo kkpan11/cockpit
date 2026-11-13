@@ -1,28 +1,15 @@
 #!/usr/bin/python3 -cimport os, sys; os.execv(os.path.dirname(sys.argv[1]) + "/../common/pywrap", sys.argv)
 
-# This file is part of Cockpit.
 #
 # Copyright (C) 2013 Red Hat, Inc.
-#
-# Cockpit is free software; you can redistribute it and/or modify it
-# under the terms of the GNU Lesser General Public License as published by
-# the Free Software Foundation; either version 2.1 of the License, or
-# (at your option) any later version.
-#
-# Cockpit is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-# Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
 
 import netlib
 import testlib
 
 
 @testlib.nondestructive
-@testlib.skipDistroPackage()
 class TestNetworkingBasic(netlib.NetworkCase):
     def testBasic(self):
         b = self.browser
@@ -48,16 +35,25 @@ class TestNetworkingBasic(netlib.NetworkCase):
         b.wait_in_text("#networking-graphs", "Transmitting")
         b.wait_in_text("#networking-graphs", "Receiving")
 
+        # PCP is only enabled for pixel tests
+        # zoom/range selectors are hidden when PCP is disabled
+        if b.pixels_label:
+            b.click("#zoom-control button:nth-of-type(2)")
+            b.wait_in_text("#zoom-control button.pf-v6-c-menu-toggle", "1 hour")
+            b.click("#zoom-control button.pf-v6-c-menu-toggle")
+            b.click(".pf-v6-c-menu ul li:nth-child(3) > button")
+            b.wait_in_text("#zoom-control button.pf-v6-c-menu-toggle", "5 minutes")
+
         # FIXME: rtl test was flaky, debug it and remove the skip
         b.assert_pixels(
             "#networking", "network-main",
-            [
+            ignore=[
                 "td[data-label=Sending]",
                 "td[data-label=Receiving]",
                 "td[data-label='IP address']",
-                "#networking-graphs .pf-v5-l-grid",
-                ".cockpit-log-panel .pf-v5-c-card__body",
-                "#networking-firewall-summary .pf-v5-c-card__body",
+                "#networking-graphs .pf-v6-l-grid",
+                ".cockpit-log-panel .pf-v6-c-card__body",
+                "#networking-firewall-summary .pf-v6-c-card__body",
             ],
             # IPv6 addresses vary wildly, and their different rendered widths change the column widths
             skip_layouts=['medium', 'mobile', 'rtl']
@@ -94,44 +90,188 @@ class TestNetworkingBasic(netlib.NetworkCase):
         b.wait_visible("#network-ip-settings-dialog [data-field='dns_search'] input[type=checkbox]:disabled")
         b.wait_visible("#network-ip-settings-dialog [data-field='routes'] input[type=checkbox]:disabled")
 
+        # Test IPv4 validation
+        # Address
+        b.set_input_text('#network-ip-settings-address-0', "192.168.48.10.2")
+        b.set_input_text('#network-ip-settings-netmask-0', "24")
+        b.click("#network-ip-settings-save")
+        b.wait_in_text(".pf-v6-c-alert", "Invalid IP address: 192.168.48.10.2")
+        b.set_input_text('#network-ip-settings-address-0', "192.168.256.10")
+        b.click("#network-ip-settings-save")
+        b.wait_in_text(".pf-v6-c-alert", "Invalid IP address: 192.168.256.10")
+        b.set_input_text('#network-ip-settings-address-0', "192.168.48.10")
+        b.set_input_text('#network-ip-settings-gateway', "192.168.48.")
+        b.click("#network-ip-settings-save")
+        # Gateway
+        b.wait_in_text(".pf-v6-c-alert", "Invalid gateway address: 192.168.48.")
+        b.set_input_text('#network-ip-settings-gateway', "192.168.48.1")
+        # DNS
+        b.click("#network-ip-settings-dns-add")
+        b.set_input_text('#network-ip-settings-dns-server-0', "8..8")
+        b.click("#network-ip-settings-save")
+        b.wait_in_text(".pf-v6-c-alert", "Invalid DNS address: 8..8")
+        b.set_input_text('#network-ip-settings-dns-server-0', "8.8.8.8")
+        # Route
+        b.click("#network-ip-settings-route-add")
+        b.set_input_text('#network-ip-settings-route-address-0', "192")
+        b.set_input_text('#network-ip-settings-route-netmask-0', "24")
+        b.set_input_text('#network-ip-settings-route-gateway-0', "192.168.48.1")
+        b.set_input_text('#network-ip-settings-route-metric-0', "500")
+        b.click("#network-ip-settings-save")
+        b.wait_in_text(".pf-v6-c-alert", "Invalid destination address: 192")
+        b.set_input_text('#network-ip-settings-route-address-0', "192.168.66.0")
+        b.set_input_text('#network-ip-settings-route-gateway-0', "not.an.ip.address")
+        b.click("#network-ip-settings-save")
+        b.wait_in_text(".pf-v6-c-alert", "Invalid gateway address: not.an.ip.address")
+        b.set_input_text('#network-ip-settings-route-gateway-0', "192.168.48.1")
+
         b.set_input_text('#network-ip-settings-address-0', "1.2.3.4")
         b.set_input_text('#network-ip-settings-netmask-0', "255.255.0.8")
+        b.set_input_text('#network-ip-settings-gateway', "1.2.3.1")
         b.click("#network-ip-settings-save")
         b.wait_text_not("#network-ip-settings-error h4", "")
         b.set_input_text('#network-ip-settings-netmask-0', "255.255.192.0")
         b.click("#network-ip-settings-save")
         b.wait_not_present("#network-ip-settings-dialog")
-        self.wait_for_iface_setting("IPv4", "Address 1.2.3.4/18 via 1.2.3.1")
+        self.wait_for_iface_setting("IPv4", "Address 1.2.3.4/18Gateway 1.2.3.1DNS 8.8.8.8")
 
         m.execute(f"until ip a show dev {iface} | grep -q 'inet 1.2.3.4/18'; do sleep 0.3; done",
                   timeout=10)
+
+        # Add IPv4 route without optional properties
+        self.configure_iface_setting('IPv4')
+        b.wait_visible("#network-ip-settings-dialog")
+        # route without metric and next-hop address
+        b.set_input_text('#network-ip-settings-route-address-0', "192.168.67.0")
+        b.set_input_text('#network-ip-settings-route-netmask-0', "24")
+        b.set_input_text('#network-ip-settings-route-gateway-0', "")
+        b.set_input_text('#network-ip-settings-route-metric-0', "")
+        b.click("#network-ip-settings-save")
+        b.wait_not_present("#network-ip-settings-dialog")
+        route = m.execute(f"nmcli -t -f ipv4.routes con sh {iface}").strip()
+        self.assertEqual(route, "ipv4.routes:192.168.67.0/24")
+        # route without metric
+        self.configure_iface_setting('IPv4')
+        b.wait_visible("#network-ip-settings-dialog")
+        b.set_input_text('#network-ip-settings-route-address-0', "192.168.68.0")
+        b.set_input_text('#network-ip-settings-route-netmask-0', "24")
+        b.set_input_text('#network-ip-settings-route-gateway-0', "192.168.48.1")
+        b.set_input_text('#network-ip-settings-route-metric-0', "")
+        b.click("#network-ip-settings-save")
+        b.wait_not_present("#network-ip-settings-dialog")
+        route = m.execute(f"nmcli -t -f ipv4.routes con sh {iface}").strip()
+        self.assertEqual(route, "ipv4.routes:192.168.68.0/24 192.168.48.1")
+        # route without next-hop address
+        self.configure_iface_setting('IPv4')
+        b.wait_visible("#network-ip-settings-dialog")
+        b.set_input_text('#network-ip-settings-route-address-0', "192.168.69.0")
+        b.set_input_text('#network-ip-settings-route-netmask-0', "24")
+        b.set_input_text('#network-ip-settings-route-gateway-0', "")
+        b.set_input_text('#network-ip-settings-route-metric-0', "500")
+        b.click("#network-ip-settings-save")
+        b.wait_not_present("#network-ip-settings-dialog")
+        route = m.execute(f"nmcli -t -f ipv4.routes con sh {iface}").strip()
+        self.assertEqual(route, "ipv4.routes:192.168.69.0/24 500")
 
         # Configure manual IPv6 address
         b.click("#networking-edit-ipv6")
         b.wait_visible("#network-ip-settings-dialog")
         b.select_from_dropdown("#network-ip-settings-select-method", "manual")
+
+        # Test IPv6 validation
+        # Address
+        b.set_input_text('#network-ip-settings-address-0', "2001:db8::10::1")
+        b.set_input_text('#network-ip-settings-netmask-0', "64")
+        b.click("#network-ip-settings-save")
+        b.wait_in_text(".pf-v6-c-alert", "Invalid IP address: 2001:db8::10::1")
+        b.set_input_text('#network-ip-settings-address-0', "no:ipv6:here::1")
+        b.set_input_text('#network-ip-settings-netmask-0', "64")
+        b.click("#network-ip-settings-save")
+        b.wait_in_text(".pf-v6-c-alert", "Invalid IP address: no:ipv6:here::1")
+        b.set_input_text('#network-ip-settings-address-0', "2001:db8::10:2")
+        b.set_input_text('#network-ip-settings-netmask-0', "64")
+        b.set_input_text('#network-ip-settings-gateway', "2001:db8::10:q")
+        b.click("#network-ip-settings-save")
+        # Gateway
+        b.wait_in_text(".pf-v6-c-alert", "Invalid gateway address: 2001:db8::10:q")
+        b.set_input_text('#network-ip-settings-gateway', "2001:db8::10:1")
+        # DNS
+        b.click("#network-ip-settings-dns-add")
+        b.set_input_text('#network-ip-settings-dns-server-0', "2001:db8:64:::")
+        b.click("#network-ip-settings-save")
+        b.wait_in_text(".pf-v6-c-alert", "Invalid DNS address: 2001:db8:64:::")
+        b.set_input_text('#network-ip-settings-dns-server-0', "2001:db8:cafe::1")
+        # Route
+        b.click("#network-ip-settings-route-add")
+        b.set_input_text('#network-ip-settings-route-address-0', "2001")
+        b.set_input_text('#network-ip-settings-route-netmask-0', "48")
+        b.set_input_text('#network-ip-settings-route-gateway-0', "2001:db8::10:1")
+        b.set_input_text('#network-ip-settings-route-metric-0', "500")
+        b.click("#network-ip-settings-save")
+        b.wait_in_text(".pf-v6-c-alert", "Invalid destination address: 2001")
+        b.set_input_text('#network-ip-settings-route-address-0', "2001:db8:face::")
+        b.set_input_text('#network-ip-settings-route-gateway-0', "::db8:cafe::1")
+        b.click("#network-ip-settings-save")
+        b.wait_in_text(".pf-v6-c-alert", "Invalid gateway address: ::db8:cafe::1")
+        b.set_input_text('#network-ip-settings-route-gateway-0', "2001:db8::10:1")
+
         b.set_input_text("#network-ip-settings-address-0", "2001::1")
         b.set_input_text("#network-ip-settings-netmask-0", "64")
-        b.set_input_text("#network-ip-settings-gateway-0", "::")
+        b.set_input_text("#network-ip-settings-gateway", "::")
         b.click("button:contains('Save')")
         b.wait_not_present("#network-ip-settings-dialog")
-        self.wait_for_iface_setting("IPv6", "Address 2001:0:0:0:0:0:0:1/64")
+        self.wait_for_iface_setting("IPv6", "Address 2001::1/64DNS 2001:db8:cafe::1")
 
         m.execute(f"until ip a show dev {iface} | grep -q 'inet6 2001::1/64 scope global'; do sleep 0.3; done",
                   timeout=10)
 
+        # Add IPv6 route without optional properties
+        self.configure_iface_setting('IPv6')
+        b.wait_visible("#network-ip-settings-dialog")
+        # route without metric and next-hop address
+        b.set_input_text('#network-ip-settings-route-address-0', "2001:db8:face::")
+        b.set_input_text('#network-ip-settings-route-netmask-0', "64")
+        b.set_input_text('#network-ip-settings-route-gateway-0', "")
+        b.set_input_text('#network-ip-settings-route-metric-0', "")
+        b.click("#network-ip-settings-save")
+        b.wait_not_present("#network-ip-settings-dialog")
+        route = m.execute(f"nmcli -t -f ipv6.routes con sh {iface}").strip()
+        self.assertEqual(route, "ipv6.routes:2001:db8:face::/64")
+        # route without metric
+        self.configure_iface_setting('IPv6')
+        b.wait_visible("#network-ip-settings-dialog")
+        b.set_input_text('#network-ip-settings-route-address-0', "2001:db8:face:1::")
+        b.set_input_text('#network-ip-settings-route-netmask-0', "64")
+        b.set_input_text('#network-ip-settings-route-gateway-0', "2001:db8::10:1")
+        b.set_input_text('#network-ip-settings-route-metric-0', "")
+        b.click("#network-ip-settings-save")
+        b.wait_not_present("#network-ip-settings-dialog")
+        route = m.execute(f"nmcli -t -f ipv6.routes con sh {iface}").strip()
+        self.assertEqual(route, "ipv6.routes:2001:db8:face:1::/64 2001:db8::10:1")
+        # route without next-hop address
+        self.configure_iface_setting('IPv6')
+        b.wait_visible("#network-ip-settings-dialog")
+        b.set_input_text('#network-ip-settings-route-address-0', "2001:db8:face:2::")
+        b.set_input_text('#network-ip-settings-route-netmask-0', "64")
+        b.set_input_text('#network-ip-settings-route-gateway-0', "")
+        b.set_input_text('#network-ip-settings-route-metric-0', "500")
+        b.click("#network-ip-settings-save")
+        b.wait_not_present("#network-ip-settings-dialog")
+        route = m.execute(f"nmcli -t -f ipv6.routes con sh {iface}").strip()
+        self.assertEqual(route, "ipv6.routes:2001:db8:face:2::/64 500")
+
         # Disconnect
-        self.wait_onoff(f".pf-v5-c-card__header:contains('{iface}')", val=True)
-        self.toggle_onoff(f".pf-v5-c-card__header:contains('{iface}')")
+        self.wait_onoff("label[for='interface-switch']", val=True)
+        self.toggle_onoff("label[for='interface-switch']")
         self.wait_for_iface_setting('Status', 'Inactive')
 
         # Reconnect through the UI
-        self.toggle_onoff(f".pf-v5-c-card__header:contains('{iface}')")
-        b.wait_in_text(f"#network-interface .pf-v5-c-card:contains('{iface}')", "1.2.3.4/18")
+        self.toggle_onoff("label[for='interface-switch']")
+        b.wait_in_text(f"#network-interface .pf-v6-c-card:contains('{iface}')", "1.2.3.4/18")
 
         # Disconnect from the CLI, UI reacts
         m.execute(f"nmcli device disconnect {iface}")
-        self.wait_onoff(f".pf-v5-c-card__header:contains('{iface}')", val=False)
+        self.wait_onoff("label[for='interface-switch']", val=False)
 
         # Switch it back to "auto" from the command line and bring it
         # up again
@@ -156,6 +296,94 @@ class TestNetworkingBasic(netlib.NetworkCase):
 
         testlib.wait(lambda: "yes" in m.execute(f"nmcli -f ipv4.ignore-auto-dns connection show '{con_id}'"))
 
+        # Validate that IPv6 addresses are properly shortened
+        #
+        def set_and_check_ipv6(expected: str, addr: str, mask: str = "64", gateway: str = "::"):
+            self.configure_iface_setting('IPv6')
+            b.wait_visible("#network-ip-settings-dialog")
+            b.set_input_text("#network-ip-settings-address-0", addr)
+            b.set_input_text("#network-ip-settings-netmask-0", mask)
+            b.set_input_text("#network-ip-settings-gateway", gateway)
+            b.click("button:contains('Save')")
+
+            b.wait_not_present("#network-ip-settings-dialog")
+            self.wait_for_iface_setting("IPv6", f"Address {expected}")
+
+        set_and_check_ipv6("2001:db8::ff00:42:8329/64", "2001:db8:0000:0000:0000:ff00:0042:8329")
+        set_and_check_ipv6("2001::1/48", "2001:0:0:0:0:0:0:1", "48")
+        set_and_check_ipv6("::1/128", "0:0:0:0:0:0:0:1", "128")
+        set_and_check_ipv6("::/64", "0:0:0:0:0:0:0:0")
+        set_and_check_ipv6("2001:db0:0:1::1428:57ab", "2001:0db0:0000:0001:0000:0000:1428:57ab")
+        # first longest sequence is replaced
+        set_and_check_ipv6("2001::aaaa:0:0:aaaa:bbbb/64", "2001:0000:0000:aaaa:0000:0000:aaaa:bbbb")
+        # no compression needed
+        set_and_check_ipv6("2001:db8:100:200:300:4:5000:6/64", "2001:db8:100:200:300:4:5000:6")
+        # no compression for single fields of zero, only drop leading zeros
+        set_and_check_ipv6("2001:0:a:0:a:0:a:0/64", "2001:0000:000a:0000:000a:0000:000a:0000")
+        # left sequence is not the longest
+        set_and_check_ipv6("2001:0:0:ffff::1/64", "2001:0:0:ffff:0:0:0:1")
+        # left sequence is not the longest (full address)
+        set_and_check_ipv6("2001:0:0:aaaa::1/64", "2001:0000:0000:aaaa:0000:0000:0000:0001")
+        # left sequence is the longest
+        set_and_check_ipv6("2001::1000:0:0:1/64", "2001:0000:0000:0000:1000:0000:0000:0001")
+        # same length zeros are at the start and at the end
+        set_and_check_ipv6("::db0:0:1:1:0:0/64", "0:0:db0:0:1:1:0:0")
+        # end is longer
+        set_and_check_ipv6("0:0:db0:0:1::/64", "0:0:db0:0:1:0:0:0")
+        # start is longer
+        set_and_check_ipv6("::db0:0:1:0:0/64", "0:0:0:db0:0:1:0:0")
+        # check that default gateway is also shortened
+        set_and_check_ipv6("2001:db8:cafe::1/64", "2001:db8:cafe:0:0:0:0:1", "64", "2001:0db8:cafe:0000:0000:0000:0000:0010")
+        self.configure_iface_setting('IPv6')
+        b.wait_visible("#network-ip-settings-dialog")
+        b.wait_attr_contains("#network-ip-settings-gateway", "value", "2001:db8:cafe::10")
+
+        b.go("/network")
+        # Create a bridge interface and disable it to test if disabled connections can be modified.
+        # Connection exists, is down and the device itself does not exist as long as the connection is down
+        m.execute("nmcli con add con-name cockpitbr type bridge ifname cockpitbr ipv4.meth disab ipv6.meth disab")
+        self.addCleanup(m.execute, "nmcli con del cockpitbr")
+        self.wait_for_iface("cockpitbr", prefix="No carrier")
+        m.execute("nmcli con down cockpitbr")
+        self.wait_for_iface("cockpitbr", active=False)
+        # check that connection exists but interface does not
+        m.execute("nmcli con sh | grep -q 'cockpitbr'")
+        m.execute("ip link sh | grep -q --invert-match 'cockpitbr'")
+
+        self.select_iface("cockpitbr")
+        b.wait_visible("#network-interface")
+        self.wait_for_iface_setting("Status", "Inactive")
+
+        # Configure IPv4 address
+        self.configure_iface_setting("IPv4")
+        b.wait_visible("#network-ip-settings-dialog")
+        b.select_from_dropdown("#network-ip-settings-select-method", "manual")
+        b.wait_visible("#network-ip-settings-address-0")
+        b.set_input_text("#network-ip-settings-address-0", "10.0.5.10")
+        b.set_input_text("#network-ip-settings-netmask-0", "24")
+        b.set_input_text("#network-ip-settings-gateway", "10.0.5.1")
+        b.click("#network-ip-settings-save")
+        self.wait_for_iface_setting("IPv4", "Address 10.0.5.10/24Gateway 10.0.5.1")
+        self.wait_for_iface_setting("Status", "Inactive")
+
+        # Configure IPv6 address
+        self.configure_iface_setting("IPv6")
+        b.wait_visible("#network-ip-settings-dialog")
+        b.select_from_dropdown("#network-ip-settings-select-method", "manual")
+        b.wait_visible("#network-ip-settings-address-0")
+        b.set_input_text("#network-ip-settings-address-0", "2001:db8::10")
+        b.set_input_text("#network-ip-settings-netmask-0", "64")
+        b.set_input_text("#network-ip-settings-gateway", "2001:db8::1")
+        b.click("#network-ip-settings-save")
+        self.wait_for_iface_setting("IPv6", "Address 2001:db8::10/64Gateway 2001:db8::1")
+        self.wait_for_iface_setting("Status", "Inactive")
+
+        # Start the interface and verify new address is set
+        b.click("#interface-switch")
+        self.wait_for_iface_setting("Status", "10.0.5.10/24,")
+        m.execute("ip addr sh cockpitbr | grep -q 'inet 10.0.5.10/24'")
+        m.execute("ip addr sh cockpitbr | grep -q 'inet6 2001:db8::10/64'")
+
     def testIpHelper(self):
         b = self.browser
         m = self.machine
@@ -177,32 +405,174 @@ class TestNetworkingBasic(netlib.NetworkCase):
         b.wait_visible("#network-ip-settings-address-0")
         # test class A IP
         b.set_input_text("#network-ip-settings-address-0", "10.0.5.1")
-        b.wait_val("#network-ip-settings-netmask-0", "255.0.0.0")
-        b.wait_val("#network-ip-settings-gateway-0", "10.0.5.254")
+        b.wait_val("#network-ip-settings-netmask-0", "8")
+        b.set_input_text("#network-ip-settings-netmask-0", "")
 
         # test class B IP
         b.set_input_text("#network-ip-settings-address-0", "172.16.44.2")
-        b.wait_val("#network-ip-settings-netmask-0", "255.255.0.0")
-        b.wait_val("#network-ip-settings-gateway-0", "172.16.44.1")
+        b.wait_val("#network-ip-settings-netmask-0", "16")
+        b.set_input_text("#network-ip-settings-netmask-0", "")
         # test class C IP
         b.set_input_text("#network-ip-settings-address-0", "192.168.1.1")
-        b.wait_val("#network-ip-settings-netmask-0", "255.255.255.0")
-        b.wait_val("#network-ip-settings-gateway-0", "192.168.1.254")
+        b.wait_val("#network-ip-settings-netmask-0", "24")
+        b.set_input_text("#network-ip-settings-netmask-0", "")
         # others | Need to manually reset fields
         b.set_input_text("#network-ip-settings-netmask-0", "")
-        b.set_input_text("#network-ip-settings-gateway-0", "")
+        b.set_input_text("#network-ip-settings-gateway", "")
         b.set_input_text("#network-ip-settings-address-0", "225.4.3.2")
         b.wait_val("#network-ip-settings-netmask-0", "")
-        b.wait_val("#network-ip-settings-gateway-0", "")
+        b.wait_val("#network-ip-settings-gateway", "")
         # free manual edit & save
         b.set_input_text("#network-ip-settings-address-0", "192.168.1.1")
-        b.set_input_text("#network-ip-settings-netmask-0", "255.255.255.128")
-        b.set_input_text("#network-ip-settings-gateway-0", "192.168.1.126")
+        b.set_input_text("#network-ip-settings-netmask-0", "25")
+        b.set_input_text("#network-ip-settings-gateway", "192.168.1.126")
         b.click("#network-ip-settings-save")
         b.wait_not_present("#network-ip-settings-dialog")
 
         self.assertIn("192.168.1.1/25", m.execute(f"nmcli -g ipv4.addresses connection show {iface}"))
         self.assertIn("192.168.1.126", m.execute(f"nmcli -g ipv4.gateway connection show {iface}"))
+
+        b.click("#networking-edit-ipv4:contains('edit')")
+        b.wait_visible("#network-ip-settings-dialog")
+        # gateway is not changed after it has been explicitly edited by user
+        b.set_input_text("#network-ip-settings-gateway", "192.168.20.7")
+        b.set_input_text("#network-ip-settings-address-0", "10.0.0.5")
+        b.wait_val("#network-ip-settings-gateway", "192.168.20.7")
+        b.set_input_text("#network-ip-settings-address-0", "192.168.2.5")
+        b.set_input_text("#network-ip-settings-netmask-0", "24")
+        b.wait_val("#network-ip-settings-gateway", "192.168.20.7")
+        b.click("#network-ip-settings-save")
+        b.wait_not_present("#network-ip-settings-dialog")
+        self.wait_for_iface_setting("IPv4", "Address 192.168.2.5/24Gateway 192.168.20.7")
+
+        # Test classless gateway prefilling
+        # the gateway is set to the first usable address in subnet
+        # for subnets with prefix smaller than 30
+        b.click("#networking-edit-ipv4:contains('edit')")
+        b.wait_visible("#network-ip-settings-dialog")
+        b.set_input_text("#network-ip-settings-address-0", "10.11.101.240")
+        b.set_input_text("#network-ip-settings-netmask-0", "8")
+        b.wait_val("#network-ip-settings-gateway", "10.0.0.1")
+        # /13
+        b.set_input_text("#network-ip-settings-netmask-0", "255.248.0.0")
+        b.wait_val("#network-ip-settings-gateway", "10.8.0.1")
+
+        b.set_input_text("#network-ip-settings-netmask-0", "15")
+        b.wait_val("#network-ip-settings-gateway", "10.10.0.1")
+        # /23
+        b.set_input_text("#network-ip-settings-netmask-0", "255.255.254.0")
+        b.wait_val("#network-ip-settings-gateway", "10.11.100.1")
+
+        b.set_input_text("#network-ip-settings-netmask-0", "24")
+        b.wait_val("#network-ip-settings-gateway", "10.11.101.1")
+        # /25
+        # first subnet smaller than 255 addresses, first address no longer ends with ".1"
+        b.set_input_text("#network-ip-settings-netmask-0", "255.255.255.128")
+        b.wait_val("#network-ip-settings-gateway", "10.11.101.129")
+
+        b.set_input_text("#network-ip-settings-netmask-0", "27")
+        b.wait_val("#network-ip-settings-gateway", "10.11.101.225")
+        # /28
+        # host address is the same as network address
+        b.set_input_text("#network-ip-settings-netmask-0", "255.255.255.240")
+        b.wait_val("#network-ip-settings-gateway", "")
+
+        # for prefixes 30-32 gateway is not set
+        b.set_input_text("#network-ip-settings-address-0", "10.11.101.244")
+        b.set_input_text("#network-ip-settings-netmask-0", "28")
+        b.wait_val("#network-ip-settings-gateway", "10.11.101.241")
+        # /30
+        b.set_input_text("#network-ip-settings-netmask-0", "255.255.255.252")
+        b.wait_val("#network-ip-settings-gateway", "")
+        b.set_input_text("#network-ip-settings-netmask-0", "28")
+        b.wait_val("#network-ip-settings-gateway", "10.11.101.241")
+        b.set_input_text("#network-ip-settings-netmask-0", "31")
+        b.wait_val("#network-ip-settings-gateway", "")
+        b.set_input_text("#network-ip-settings-netmask-0", "28")
+        b.wait_val("#network-ip-settings-gateway", "10.11.101.241")
+        # /32
+        b.set_input_text("#network-ip-settings-netmask-0", "255.255.255.255")
+        b.wait_val("#network-ip-settings-gateway", "")
+        # wrong prefixes
+        b.set_input_text("#network-ip-settings-netmask-0", "33")
+        b.wait_val("#network-ip-settings-gateway", "")
+        b.set_input_text("#network-ip-settings-netmask-0", "asd23")
+        b.wait_val("#network-ip-settings-gateway", "")
+
+        # Mask does not change after it's been set
+        b.set_input_text("#network-ip-settings-address-0", "10.11.101.244")
+        b.set_input_text("#network-ip-settings-netmask-0", "255.255.254.0")
+        b.set_input_text("#network-ip-settings-address-0", "192.168.88.13")
+        b.wait_val("#network-ip-settings-netmask-0", "255.255.254.0")
+        # but gateway does as it has not been set explicitly
+        b.wait_val("#network-ip-settings-gateway", "192.168.88.1")
+
+        # set gateway, then change host address to different network
+        b.set_input_text("#network-ip-settings-gateway", "192.168.89.254")
+        b.set_input_text("#network-ip-settings-address-0", "172.16.11.12")
+        # both gateway and masks are unchanged
+        b.wait_val("#network-ip-settings-netmask-0", "255.255.254.0")
+        b.wait_val("#network-ip-settings-gateway", "192.168.89.254")
+
+        b.set_input_text("#network-ip-settings-address-0", "192.168.88.13")
+        b.click("#network-ip-settings-save")
+        b.wait_not_present("#network-ip-settings-dialog")
+        self.wait_for_iface_setting("IPv4", "Address 192.168.88.13/23Gateway 192.168.89.254")
+
+        # IPv6 prefilling
+        b.click("#networking-edit-ipv6:contains('edit')")
+        b.wait_visible("#network-ip-settings-dialog")
+        b.select_from_dropdown("#network-ip-settings-select-method", "manual")
+        b.wait_visible("#network-ip-settings-address-0")
+        # nothing is filled when plain IPv4 is entered
+        b.set_input_text("#network-ip-settings-address-0", "10.11.101.240")
+        b.wait_val("#network-ip-settings-netmask-0", "")
+        b.wait_val("#network-ip-settings-gateway", "")
+        # prefix length does not accept network mask
+        b.set_input_text("#network-ip-settings-netmask-0", "255.255.240.0")
+        b.wait_val("#network-ip-settings-gateway", "")
+        # default prefix is /64
+        b.set_input_text("#network-ip-settings-address-0", "2001:db8:cafe:face:0:0:dcba:a")
+        b.set_input_text("#network-ip-settings-netmask-0", "64")
+        b.wait_val("#network-ip-settings-gateway", "2001:db8:cafe:face::1")
+
+        b.set_input_text("#network-ip-settings-netmask-0", "97")
+        b.wait_val("#network-ip-settings-gateway", "2001:db8:cafe:face::8000:1")
+
+        b.set_input_text("#network-ip-settings-netmask-0", "105")
+        b.wait_val("#network-ip-settings-gateway", "2001:db8:cafe:face::dc80:1")
+        # for prefixes 126-128 gateway is not set
+        b.set_input_text("#network-ip-settings-netmask-0", "126")
+        b.wait_val("#network-ip-settings-gateway", "")
+        b.set_input_text("#network-ip-settings-netmask-0", "105")
+        b.wait_val("#network-ip-settings-gateway", "2001:db8:cafe:face::dc80:1")
+        b.set_input_text("#network-ip-settings-netmask-0", "127")
+        b.wait_val("#network-ip-settings-gateway", "")
+        b.set_input_text("#network-ip-settings-netmask-0", "105")
+        b.wait_val("#network-ip-settings-gateway", "2001:db8:cafe:face::dc80:1")
+        b.set_input_text("#network-ip-settings-netmask-0", "128")
+        b.wait_val("#network-ip-settings-gateway", "")
+        # gateway is not set when host address is network address
+        b.set_input_text("#network-ip-settings-address-0", "2001:db8:0:face:0:0:0:0")
+        b.set_input_text("#network-ip-settings-netmask-0", "66")
+        b.wait_val("#network-ip-settings-gateway", "")
+        # gateway is not set when host address is first address
+        b.set_input_text("#network-ip-settings-address-0", "2001:db8:0:face::1")
+        b.wait_val("#network-ip-settings-gateway", "")
+        # gateway is not changed after it's been set manually
+        b.set_input_text("#network-ip-settings-address-0", "2001:db8:0:face::15")
+        b.set_input_text("#network-ip-settings-netmask-0", "106")
+        b.set_input_text("#network-ip-settings-gateway", "2001:db8:cafe:face::dc80:aaab")
+        b.set_input_text("#network-ip-settings-address-0", "2001:db8:0:face:dead::15")
+        b.wait_val("#network-ip-settings-gateway", "2001:db8:cafe:face::dc80:aaab")
+        # after changing prefix gateway is still unchanged
+        b.set_input_text("#network-ip-settings-netmask-0", "32")
+        b.wait_val("#network-ip-settings-gateway", "2001:db8:cafe:face::dc80:aaab")
+
+        b.set_input_text("#network-ip-settings-address-0", "2001:db8::1")
+        b.click("#network-ip-settings-save")
+        b.wait_not_present("#network-ip-settings-dialog")
+        self.wait_for_iface_setting("IPv6", "Address 2001:db8::1/32Gateway 2001:db8:cafe:face::dc80:aaab")
 
     def testNoService(self):
         b = self.browser
@@ -256,8 +626,8 @@ class TestNetworkingBasic(netlib.NetworkCase):
         b.click("#networking-nm-crashed a")
         b.enter_page("/system/services")
         b.wait_text(".service-name", "Network Manager")
-        b.click(".service-top-panel button.pf-v5-c-menu-toggle")
-        b.click(".service-top-panel .pf-v5-c-menu__list-item:contains('Start') button")
+        b.click(".service-top-panel button.pf-v6-c-menu-toggle")
+        b.click("#services-page > .pf-v6-c-menu button.pf-v6-c-menu__item:contains('Start')")
         b.wait_in_text("#statuses", "Running")
 
         # networking page should notice start from Services page
@@ -301,8 +671,8 @@ class TestNetworkingBasic(netlib.NetworkCase):
         self.select_iface(iface)
         b.wait_visible("#network-interface")
         # On/Off button is disabled, but shows the correct value
-        b.wait_visible(f".pf-v5-c-card__header:contains('{iface}') .pf-v5-c-switch input:disabled")
-        self.wait_onoff(f".pf-v5-c-card__header:contains('{iface}')", val=True)
+        b.wait_visible("#interface-switch:disabled")
+        self.wait_onoff("label[for='interface-switch']", val=True)
 
         # not editable
         b.wait_visible('#autoreconnect:disabled')
@@ -312,19 +682,16 @@ class TestNetworkingBasic(netlib.NetworkCase):
 
         # unpriv UI reacts to system change
         m.execute(f"nmcli device disconnect {iface}")
-        self.wait_onoff(f".pf-v5-c-card__header:contains('{iface}')", val=False)
+        self.wait_onoff("label[for='interface-switch']", val=False)
         m.execute(f"nmcli connection up '{con_id}'")
-        self.wait_onoff(f".pf-v5-c-card__header:contains('{iface}')", val=True)
+        self.wait_onoff("label[for='interface-switch']", val=True)
 
         # UI becomes editable when gaining privileges
         b.become_superuser()
         b.wait_visible('#autoreconnect:not(disabled)')
         b.wait_visible("#networking-edit-ipv4")
         b.wait_visible("#networking-edit-mac")
-        b.wait_visible(f".pf-v5-c-card__header:contains('{iface}') .pf-v5-c-switch input:not(disabled)")
-
-        # FIXME: if pcp is running, cockpit-pcp throws this warning
-        self.allow_journal_messages('received invalid "host" field in kill command')
+        b.wait_visible("#interface-switch:not(disabled)")
 
 
 if __name__ == '__main__':

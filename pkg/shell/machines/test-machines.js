@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 import cockpit from "cockpit";
-import QUnit from "qunit-tests";
+import QUnit, { skipWithPybridge } from "qunit-tests";
 import { machines } from "./machines.js";
 
 const dbus = cockpit.dbus(null, { bus: "internal" });
@@ -15,12 +16,14 @@ QUnit.module("machines.d parsing tests", {
  * Tests for parsing on-disk JSON configuration
  */
 
-async function machinesParseTest(assert, machines_defs, expectedProperty) {
+async function machinesParseTest(assert, machines_defs, expectedProperty, mode = null) {
     for (const fname in machines_defs) {
         let path = fname;
         if (fname.indexOf('/') < 0)
             path = configDir + "/cockpit/machines.d/" + fname;
         await cockpit.file(path).replace(machines_defs[fname]);
+        if (mode !== null)
+            await cockpit.script(`chmod ${mode} ${path}`);
     }
 
     const reply = await dbus.call("/machines", "org.freedesktop.DBus.Properties", "Get",
@@ -54,9 +57,11 @@ QUnit.test("two definitions", async assert => machinesParseTest(
 
 QUnit.test("invalid json", async assert => machinesParseTest(assert, { "01.json": '{"green":' }, {}));
 
-QUnit.test.skipWithPybridge("invalid data types", async assert => machinesParseTest(assert, { "01.json": '{"green": []}' }, {}));
+QUnit.test("no read permissions", async assert => machinesParseTest(assert, { "02.json": '{"green": {} }' }, {}, 0));
 
-QUnit.test.skipWithPybridge("merge several JSON files", async assert => machinesParseTest(
+skipWithPybridge("invalid data types", async assert => machinesParseTest(assert, { "01.json": '{"green": []}' }, {}));
+
+skipWithPybridge("merge several JSON files", async assert => machinesParseTest(
     assert,
     /* 99-webui.json changes a property in green, adds a
      * property to blue, and adds an entire new host yellow */
@@ -83,7 +88,7 @@ QUnit.test.skipWithPybridge("merge several JSON files", async assert => machines
     }
 ));
 
-QUnit.test.skipWithPybridge("merge JSON files with errors", async assert => machinesParseTest(
+skipWithPybridge("merge JSON files with errors", async assert => machinesParseTest(
     assert,
     {
         "01-valid.json": '{"green": {"visible": true, "address": "1.2.3.4"}}',
@@ -198,6 +203,22 @@ QUnit.test("colors.parse()", assert => {
     ];
     assert.expect(colors.length);
     colors.forEach(color => assert.equal(machines.colors.parse(color[0]), color[1], "parsed color " + color[0]));
+});
+
+QUnit.test("no path traversal allowed", async assert => {
+    const filename = configDir + "/cockpit/flag";
+    await cockpit.file(filename)
+            .replace('{"green": {"visible": true, "address": "1.2.3.4"}}');
+
+    const host = "red";
+    const props = { visible: cockpit.variant('b', false), address: cockpit.variant('s', "9.8.7.6") };
+    await assert.rejects(
+        dbus.call("/machines", "cockpit.Machines", "Update",
+                  ["../flag", host, props], { type: "ssa{sv}" }),
+        err => err.message.indexOf("Invalid filename") >= 0,
+        "path traversal is rejected");
+    const content = await cockpit.file(filename, { syntax: JSON }).read();
+    assert.deepEqual(content, { green: { visible: true, address: "1.2.3.4" } }, "flag file was not modified");
 });
 
 /* The test cockpit-bridge gets started with temp $XDG_CONFIG_DIRS instead of defaulting to /etc/.

@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2021 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import React, { useState, useContext } from 'react';
@@ -40,9 +26,9 @@ export const TeamPortDialog = ({ connection, dev, settings }) => {
     let config = settings.team_port.config;
 
     if (!config)
-        config = config = { };
+        config = { };
 
-    const [priority, setPriority] = useState(teamMode == 'activebackup' ? config.prio : config.lacp_prio);
+    const [priority, setPriority] = useState(teamMode === 'activebackup' ? config.prio : config.lacp_prio);
     const [sticky, setSticky] = useState(config.sticky);
     const [key, setKey] = useState(config.lacp_key);
     const [dialogError, setDialogError] = useState(undefined);
@@ -53,8 +39,8 @@ export const TeamPortDialog = ({ connection, dev, settings }) => {
             team_port: {
                 config: {
                     ...config,
-                    ...(teamMode == 'activebackup' && { prio: priority, sticky }),
-                    ...(teamMode == 'lacp' && { lacp_prio: priority, lacp_key: key }),
+                    ...(teamMode === 'activebackup' && { prio: priority, sticky }),
+                    ...(teamMode === 'lacp' && { lacp_prio: priority, lacp_key: key }),
                 }
             }
         });
@@ -69,8 +55,8 @@ export const TeamPortDialog = ({ connection, dev, settings }) => {
         });
 
         // Prevent dialog from closing because of <form> onsubmit event
-        if (event)
-            event.preventDefault();
+        if (ev)
+            ev.preventDefault();
 
         return false;
     };
@@ -84,12 +70,12 @@ export const TeamPortDialog = ({ connection, dev, settings }) => {
             <FormGroup fieldId={idPrefix + "-" + teamMode + "-prio-input"} label={_("Priority")}>
                 <TextInput id={idPrefix + "-" + teamMode + "-prio-input"} value={priority} onChange={(_event, value) => setPriority(value)} />
             </FormGroup>
-            {teamMode == 'activebackup'
+            {teamMode === 'activebackup'
                 ? <FormGroup fieldId={idPrefix + "-activebackup-sticky-input"}>
                     <Checkbox id={idPrefix + "-activebackup-sticky-input"} isChecked={sticky} onChange={(_, s) => setSticky(s)} label={_("Sticky")} />
                 </FormGroup>
                 : null}
-            {teamMode == 'lacp'
+            {teamMode === 'lacp'
                 ? <FormGroup fieldId={idPrefix + "-" + teamMode + "-key-input"} label={_("LACP key")}>
                     <TextInput id={idPrefix + "-" + teamMode + "-key-input"} value={key} onChange={(_event, value) => setKey(value)} />
                 </FormGroup>

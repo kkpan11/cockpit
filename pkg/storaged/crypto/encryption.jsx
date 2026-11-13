@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2023 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -25,7 +11,7 @@ import { DescriptionList } from "@patternfly/react-core/dist/esm/components/Desc
 import { CardBody } from "@patternfly/react-core/dist/esm/components/Card/index.js";
 import { useObject, useEvent } from "hooks";
 import * as python from "python.js";
-import * as timeformat from "timeformat.js";
+import * as timeformat from "timeformat";
 
 import { dialog_open, TextInput, PassInput } from "../dialog.jsx";
 import { block_name, encode_filename, decode_filename, parse_options, unparse_options, extract_option, edit_crypto_config } from "../utils.js";
@@ -60,7 +46,7 @@ function monitor_luks(block) {
     cockpit.event_target(self);
 
     const dev = decode_filename(block.Device);
-    const channel = python.spawn(luksmeta_monitor_hack_py, [dev], { superuser: true });
+    const channel = python.spawn(luksmeta_monitor_hack_py, [dev], { superuser: "require" });
     let buf = "";
 
     channel.stream(output => {
@@ -90,7 +76,7 @@ function monitor_luks(block) {
 }
 
 function parse_tag_mtime(tag) {
-    if (tag && tag.indexOf("1:") == 0) {
+    if (tag && tag.indexOf("1:") === 0) {
         try {
             const parts = tag.split("-")[1].split(".");
             // s:ns → ms
@@ -114,7 +100,7 @@ function monitor_mtime(path) {
 
     let file = null;
     if (path) {
-        file = cockpit.file(path, { superuser: true });
+        file = cockpit.file(path, { superuser: "require" });
         file.watch((_, tag) => { self.mtime = parse_tag_mtime(tag); self.dispatchEvent("changed") },
                    { read: false });
     }
@@ -133,8 +119,9 @@ const EncryptionCard = ({ card, block }) => {
                                 [block]);
     useEvent(luks_info, "changed");
 
-    let old_options, passphrase_path;
-    const old_config = block.Configuration.find(c => c[0] == "crypttab");
+    let old_options;
+    let passphrase_path;
+    const old_config = block.Configuration.find(c => c[0] === "crypttab");
     if (old_config) {
         old_options = (decode_filename(old_config[1].options.v)
                 .split(",")
@@ -180,9 +167,9 @@ const EncryptionCard = ({ card, block }) => {
     }
 
     function edit_options() {
-        const fsys_config = client.blocks_crypto[block.path]?.ChildConfiguration.find(c => c[0] == "fstab");
+        const fsys_config = client.blocks_crypto[block.path]?.ChildConfiguration.find(c => c[0] === "fstab");
         const content_block = client.blocks_cleartext[block.path];
-        const is_fsys = fsys_config || (content_block && content_block.IdUsage == "filesystem");
+        const is_fsys = fsys_config || (content_block && content_block.IdUsage === "filesystem");
 
         edit_crypto_config(block, function (config, commit) {
             dialog_open({

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 # COCKPIT BOOTLOADER
 
 import os
@@ -10,7 +11,7 @@ class Bootloader:
     checksum = None
     source = None
 
-    def start(self, name, version, checksum, size):
+    def start(self, name: str, version: str, checksum: str, size: int) -> None:
         self.version = version
         self.checksum = checksum
 

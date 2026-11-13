@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2020 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -23,7 +9,9 @@ import React, { useState, useRef, useLayoutEffect } from 'react';
 import { useEvent } from "hooks.js";
 
 import { Button } from "@patternfly/react-core/dist/esm/components/Button/index.js";
-import { Dropdown, DropdownItem, DropdownSeparator, DropdownToggle } from '@patternfly/react-core/dist/esm/deprecated/components/Dropdown/index.js';
+import { Dropdown, DropdownItem, DropdownList } from '@patternfly/react-core/dist/esm/components/Dropdown/index.js';
+import { Divider } from '@patternfly/react-core/dist/esm/components/Divider/index.js';
+import { MenuToggle } from '@patternfly/react-core/dist/esm/components/MenuToggle/index.js';
 
 import { AngleLeftIcon, AngleRightIcon, SearchMinusIcon } from '@patternfly/react-icons';
 
@@ -58,7 +46,7 @@ function time_ticks(data) {
 
     let size;
     for (let i = 0; i < sizes_in_seconds.length; i++) {
-        if (((end_ms - start_ms) / 1000) / sizes_in_seconds[i] < 10 || i == sizes_in_seconds.length - 1) {
+        if (((end_ms - start_ms) / 1000) / sizes_in_seconds[i] < 10 || i === sizes_in_seconds.length - 1) {
             size = sizes_in_seconds[i] * 1000;
             break;
         }
@@ -74,9 +62,9 @@ function time_ticks(data) {
     let include_year = true;
     let include_month_and_day = true;
 
-    if (start_date.getFullYear() == now_date.getFullYear()) {
+    if (start_date.getFullYear() === now_date.getFullYear()) {
         include_year = false;
-        if (start_date.getMonth() == now_date.getMonth() && start_date.getDate() == now_date.getDate())
+        if (start_date.getMonth() === now_date.getMonth() && start_date.getDate() === now_date.getDate())
             include_month_and_day = false;
     }
 
@@ -93,7 +81,7 @@ function time_ticks(data) {
 
     function pad(n) {
         let str = n.toFixed();
-        if (str.length == 1)
+        if (str.length === 1)
             str = '0' + str;
         return str;
     }
@@ -254,36 +242,40 @@ export const ZoomControls = ({ plot_state }) => {
     if (!zoom_state)
         return null;
 
+    const dropdownItems = [
+        <DropdownItem key="now" onClick={() => { zoom_state.goto_now(); setIsOpen(false) }}>
+            {_("Go to now")}
+        </DropdownItem>,
+        <Divider key="sep" />,
+        range_item(5 * 60, _("5 minutes")),
+        range_item(60 * 60, _("1 hour")),
+        range_item(6 * 60 * 60, _("6 hours")),
+        range_item(24 * 60 * 60, _("1 day")),
+        range_item(7 * 24 * 60 * 60, _("1 week"))
+    ];
+
     return (
-        <div>
+        <div id="zoom-control">
             <Dropdown
                 isOpen={isOpen}
-                toggle={<DropdownToggle onToggle={(_, isOpen) => setIsOpen(isOpen)}>{format_range(zoom_state.x_range)}</DropdownToggle>}
-                dropdownItems={[
-                    <DropdownItem key="now" onClick={() => { zoom_state.goto_now(); setIsOpen(false) }}>
-                        {_("Go to now")}
-                    </DropdownItem>,
-                    <DropdownSeparator key="sep" />,
-                    range_item(5 * 60, _("5 minutes")),
-                    range_item(60 * 60, _("1 hour")),
-                    range_item(6 * 60 * 60, _("6 hours")),
-                    range_item(24 * 60 * 60, _("1 day")),
-                    range_item(7 * 24 * 60 * 60, _("1 week"))
-                ]} />
+                toggle={(toggleRef) => (
+                    <MenuToggle ref={toggleRef} onClick={() => setIsOpen(!isOpen)} isExpanded={isOpen}>
+                        {format_range(zoom_state.x_range)}
+                    </MenuToggle>
+                )}
+            >
+                <DropdownList>
+                    {dropdownItems}
+                </DropdownList>
+            </Dropdown>
             { "\n" }
-            <Button variant="secondary" onClick={() => zoom_state.zoom_out()}
-                    isDisabled={!zoom_state.enable_zoom_out}>
-                <SearchMinusIcon />
-            </Button>
+            <Button icon={<SearchMinusIcon />} variant="secondary" onClick={() => zoom_state.zoom_out()}
+                isDisabled={!zoom_state.enable_zoom_out} />
             { "\n" }
-            <Button variant="secondary" onClick={() => zoom_state.scroll_left()}
-                    isDisabled={!zoom_state.enable_scroll_left}>
-                <AngleLeftIcon />
-            </Button>
-            <Button variant="secondary" onClick={() => zoom_state.scroll_right()}
-                    isDisabled={!zoom_state.enable_scroll_right}>
-                <AngleRightIcon />
-            </Button>
+            <Button icon={<AngleLeftIcon />} variant="secondary" onClick={() => zoom_state.scroll_left()}
+                isDisabled={!zoom_state.enable_scroll_left} />
+            <Button icon={<AngleRightIcon />} variant="secondary" onClick={() => zoom_state.scroll_right()}
+                isDisabled={!zoom_state.enable_scroll_right} />
         </div>
     );
 };
@@ -295,7 +287,11 @@ const useLayoutSize = (init_width, init_height) => {
     useLayoutEffect(() => {
         if (ref.current) {
             const rect = ref.current.getBoundingClientRect();
-            if (rect.width != size.width || rect.height != size.height)
+            // Some browsers, such as Bromite, add noise to the result
+            // of getBoundingClientRect in order to deter
+            // fingerprinting. Let's allow for that by only reacting
+            // to significant changes.
+            if (Math.abs(rect.width - size.width) > 2 || Math.abs(rect.height - size.height) > 2)
                 setSize({ width: rect.width, height: rect.height });
         }
     });
@@ -314,7 +310,7 @@ export const SvgPlot = ({ title, config, plot_state, plot_id, className }) => {
     const [selection, setSelection] = useState(null);
 
     const chart_data = plot_state.data(plot_id);
-    if (!chart_data || chart_data.length == 0)
+    if (!chart_data || chart_data.length === 0)
         return null;
 
     const t_ticks = time_ticks(chart_data);
@@ -324,7 +320,7 @@ export const SvgPlot = ({ title, config, plot_state, plot_id, className }) => {
         const w = container_size.width;
         const h = container_size.height;
 
-        if (w == 0 || h == 0)
+        if (w === 0 || h === 0)
             return null;
 
         const x_off = t_ticks.start;

@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2023 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hopeg that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -34,7 +20,7 @@ import { StorageCard, StorageDescription, new_card, navigate_to_new_card_locatio
 import { block_name, fmt_size, get_active_usage, teardown_active_usage, reload_systemd } from "../utils.js";
 import {
     dialog_open, TextInput, SelectSpaces, BlockingMessage, TeardownMessage,
-    init_active_usage_processes
+    init_teardown_usage
 } from "../dialog.jsx";
 
 import { lvm2_create_snapshot_action } from "./volume-group.jsx";
@@ -85,7 +71,7 @@ export function lvol_delete(lvol, card) {
             }
         },
         Inits: [
-            init_active_usage_processes(client, usage)
+            init_teardown_usage(client, usage)
         ]
     });
 }
@@ -124,7 +110,7 @@ function repair(lvol) {
 
     dialog_open({
         Title: cockpit.format(_("Repair logical volume $0"), lvol.Name),
-        Body: <div><p>{cockpit.format(_("Select the physical volumes that should be used to repair the logical volume. At leat $0 are needed."),
+        Body: <div><p>{cockpit.format(_("Select the physical volumes that should be used to repair the logical volume. At least $0 are needed."),
                                       fmt_size(missing))}</p><br /></div>,
         Fields: [
             SelectSpaces("pvs", _("Physical Volumes"),
@@ -156,7 +142,7 @@ function deactivate(lvol, block) {
 
     dialog_open({
         Title: cockpit.format(_("Deactivate logical volume $0/$1?"), vgroup.Name, lvol.Name),
-        Teardown: TeardownMessage(usage),
+        Teardown: TeardownMessage(usage, true),
         Action: {
             Title: _("Deactivate"),
             action: async function () {
@@ -166,7 +152,7 @@ function deactivate(lvol, block) {
             }
         },
         Inits: [
-            init_active_usage_processes(client, usage)
+            init_teardown_usage(client, usage, true)
         ]
     });
 }
@@ -179,12 +165,12 @@ export function make_block_logical_volume_card(next, vgroup, lvol, block) {
 
     let { info, shrink_excuse, grow_excuse } = get_resize_info(client, block, unused_space);
 
-    if (!unused_space && !grow_excuse && !pool && vgroup.FreeSize == 0) {
+    if (!unused_space && !grow_excuse && !pool && vgroup.FreeSize === 0) {
         grow_excuse = _("Not enough space to grow");
     }
 
     let repair_action = null;
-    if (status_code == "degraded" || status_code == "degraded-maybe-partial")
+    if (status_code === "degraded" || status_code === "degraded-maybe-partial")
         repair_action = { title: _("Repair"), action: () => repair(lvol) };
 
     const card = new_card({
@@ -195,7 +181,7 @@ export function make_block_logical_volume_card(next, vgroup, lvol, block) {
         page_size: block.Size,
         for_summary: true,
         has_warning: !!unused_space_warning || !!repair_action,
-        has_danger: status_code == "partial",
+        has_danger: status_code === "partial",
         job_path: lvol.path,
         component: LVM2LogicalVolumeCard,
         props: { vgroup, lvol, block, unused_space_warning, resize_info: info },
@@ -290,7 +276,7 @@ const LVM2LogicalVolumeCard = ({ card, vgroup, lvol, block, unused_space_warning
                     { !unused_space &&
                     <StorageDescription title={_("Size")} value={fmt_size(lvol.Size)} />
                     }
-                    { (layout && layout != "linear") &&
+                    { (layout && layout !== "linear") &&
                     <StorageDescription title={_("Layout")} value={layout_desc[layout] || layout} />
                     }
                     <StructureDescription client={client} lvol={lvol} />
@@ -308,11 +294,11 @@ export const StructureDescription = ({ client, lvol }) => {
 
     let status = null;
     const status_code = client.lvols_status[lvol.path];
-    if (status_code == "partial") {
+    if (status_code === "partial") {
         status = _("This logical volume has lost some of its physical volumes and can no longer be used. You need to delete it and create a new one to take its place.");
-    } else if (status_code == "degraded") {
+    } else if (status_code === "degraded") {
         status = _("This logical volume has lost some of its physical volumes but has not lost any data yet. You should repair it to restore its original redundancy.");
-    } else if (status_code == "degraded-maybe-partial") {
+    } else if (status_code === "degraded-maybe-partial") {
         status = _("This logical volume has lost some of its physical volumes but might not have lost any data yet. You might be able to repair it.");
     }
 
@@ -321,7 +307,7 @@ export const StructureDescription = ({ client, lvol }) => {
     }
 
     function pvs_box(used, block_path) {
-        if (block_path != "/") {
+        if (block_path !== "/") {
             const block = client.blocks[block_path];
             return <div key={block_path} className="storage-pvs-pv-box">
                 <div className="storage-stripe-pv-box-dev">
@@ -332,7 +318,7 @@ export const StructureDescription = ({ client, lvol }) => {
         } else {
             return <div key={block_path} className="storage-pvs-pv-box">
                 <div className="storage-pvs-pv-box-dev">
-                    { status_code == "degraded"
+                    { status_code === "degraded"
                         ? <ExclamationTriangleIcon className="ct-icon-exclamation-triangle" />
                         : <ExclamationCircleIcon className="ct-icon-times-circle" />
                     }
@@ -342,7 +328,7 @@ export const StructureDescription = ({ client, lvol }) => {
         }
     }
 
-    if (lvol.Layout == "linear") {
+    if (lvol.Layout === "linear") {
         const pvs = client.lvols_stripe_summary[lvol.path];
         if (!pvs)
             return null;
@@ -363,7 +349,7 @@ export const StructureDescription = ({ client, lvol }) => {
     }
 
     function stripe_box(used, block_path) {
-        if (block_path != "/") {
+        if (block_path !== "/") {
             const block = client.blocks[block_path];
             return <div key={block_path} className="storage-stripe-pv-box">
                 <div className="storage-stripe-pv-box-dev">
@@ -374,7 +360,7 @@ export const StructureDescription = ({ client, lvol }) => {
         } else {
             return <div key={block_path} className="storage-stripe-pv-box">
                 <div className="storage-stripe-pv-box-dev">
-                    { status_code == "degraded"
+                    { status_code === "degraded"
                         ? <ExclamationTriangleIcon className="ct-icon-exclamation-triangle" />
                         : <ExclamationCircleIcon className="ct-icon-times-circle" />
                     }
@@ -384,7 +370,7 @@ export const StructureDescription = ({ client, lvol }) => {
         }
     }
 
-    if (lvol.Layout == "mirror" || lvol.Layout.indexOf("raid") == 0) {
+    if (lvol.Layout === "mirror" || lvol.Layout.indexOf("raid") === 0) {
         const summary = client.lvols_stripe_summary[lvol.path];
         if (!summary)
             return null;
@@ -395,15 +381,13 @@ export const StructureDescription = ({ client, lvol }) => {
             </FlexItem>);
 
         return (
-            <>
-                <StorageDescription title={_("Stripes")}>
-                    <Flex alignItems={{ default: "alignItemsStretch" }}>{stripes}</Flex>
-                    {status}
-                    {lvol.SyncRatio != 1.0
-                        ? <div>{cockpit.format(_("$0 synchronized"), lvol.SyncRatio * 100 + "%")}</div>
-                        : null}
-                </StorageDescription>
-            </>);
+            <StorageDescription title={_("Stripes")}>
+                <Flex alignItems={{ default: "alignItemsStretch" }}>{stripes}</Flex>
+                {status}
+                {lvol.SyncRatio !== 1.0
+                    ? <div>{cockpit.format(_("$0 synchronized"), lvol.SyncRatio * 100 + "%")}</div>
+                    : null}
+            </StorageDescription>);
     }
 
     return null;

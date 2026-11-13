@@ -1,19 +1,7 @@
-# This file is part of Cockpit.
 #
 # Copyright (C) 2022 Red Hat, Inc.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 
 """Bi-directional asyncio.Transport implementations based on file descriptors."""
 
@@ -29,15 +17,16 @@ import signal
 import struct
 import subprocess
 import termios
+from threading import Thread
 from typing import Any, ClassVar, Sequence
 
 from .jsonutil import JsonObject, get_int
 
-libc6 = ctypes.cdll.LoadLibrary('libc.so.6')
+sys_prctl = ctypes.CDLL(None).prctl
 
 
 def prctl(*args: int) -> None:
-    if libc6.prctl(*args) != 0:
+    if sys_prctl(*args) != 0:
         raise OSError('prctl() failed')
 
 
@@ -45,6 +34,8 @@ SET_PDEATHSIG = 1
 
 
 logger = logging.getLogger(__name__)
+
+
 IOV_MAX = 1024  # man 2 writev
 
 
@@ -142,7 +133,7 @@ class _Transport(asyncio.Transport):
         self._closing = True
         self._close_reader()
         self._remove_write_queue()
-        self._protocol.connection_lost(exc)
+        self._loop.call_soon(self._protocol.connection_lost, exc)
         self._close()
 
     def can_write_eof(self) -> bool:
@@ -305,33 +296,10 @@ class SubprocessTransport(_Transport, asyncio.SubprocessTransport):
     data from it, making it available via the .get_stderr() method.
     """
 
-    _returncode: 'int | None' = None
-
     _pty_fd: 'int | None' = None
     _process: 'subprocess.Popen[bytes] | None' = None
+    _returncode: 'int | None' = None
     _stderr: 'Spooler | None'
-
-    @staticmethod
-    def _create_watcher() -> asyncio.AbstractChildWatcher:
-        try:
-            os.close(os.pidfd_open(os.getpid(), 0))  # check for kernel support
-            return asyncio.PidfdChildWatcher()
-        except (AttributeError, OSError):
-            pass
-
-        return asyncio.SafeChildWatcher()
-
-    @staticmethod
-    def _get_watcher(loop: asyncio.AbstractEventLoop) -> asyncio.AbstractChildWatcher:
-        quark = '_cockpit_transports_child_watcher'
-        watcher = getattr(loop, quark, None)
-
-        if watcher is None:
-            watcher = SubprocessTransport._create_watcher()
-            watcher.attach_loop(loop)
-            setattr(loop, quark, watcher)
-
-        return watcher
 
     def get_stderr(self, *, reset: bool = False) -> str:
         if self._stderr is not None:
@@ -339,23 +307,37 @@ class SubprocessTransport(_Transport, asyncio.SubprocessTransport):
         else:
             return ''
 
-    def _exited(self, pid: int, code: int) -> None:
-        # NB: per AbstractChildWatcher API, this handler should be thread-safe,
-        # but we only ever use non-threaded child watcher implementations, so
-        # we can assume we'll always be called in the main thread.
+    def watch_exit(self, process: 'subprocess.Popen[bytes]') -> None:
+        def child_exited(pid: int, status: int) -> None:
+            assert pid == process.pid
+            assert isinstance(self._protocol, SubprocessProtocol)
 
-        # NB: the subprocess is going to want to waitpid() itself as well, but
-        # will get ECHILD since we already reaped it.  Fortunately, since
-        # Python 3.2 this is supported, and process gets a return status of
-        # zero.  For that reason, we need to store our own copy of the return
-        # status.  See https://github.com/python/cpython/issues/59960
-        assert isinstance(self._protocol, SubprocessProtocol)
-        assert self._process is not None
-        assert self._process.pid == pid
-        self._returncode = code
-        logger.debug('Process exited with status %d', self._returncode)
-        if not self._closing:
-            self._protocol.process_exited()
+            try:
+                self._returncode = os.waitstatus_to_exitcode(status)
+            except ValueError:
+                self._returncode = status
+
+            logger.debug('Process exited with status %d', self._returncode)
+            if not self._closing:
+                self._protocol.process_exited()
+
+        def pidfd_ready() -> None:
+            pid, status = os.waitpid(process.pid, 0)  # should never block
+            self._loop.remove_reader(pidfd)
+            os.close(pidfd)
+            child_exited(pid, status)
+
+        def waitpid_thread() -> None:
+            pid, status = os.waitpid(process.pid, 0)  # will block
+            self._loop.call_soon_threadsafe(child_exited, pid, status)
+
+        # We first try to create a pidfd to track the process.  If that doesn't
+        # work, we spawn a thread to do a blocking waitpid().
+        try:
+            pidfd = os.pidfd_open(process.pid)
+            self._loop.add_reader(pidfd, pidfd_ready)
+        except (AttributeError, OSError):
+            Thread(name=f'cockpit-waitpid-{process.pid}', target=waitpid_thread, daemon=True).start()
 
     def __init__(self,
                  loop: asyncio.AbstractEventLoop,
@@ -401,12 +383,13 @@ class SubprocessTransport(_Transport, asyncio.SubprocessTransport):
             self._stderr = None
 
         super().__init__(loop, protocol, in_fd, out_fd)
-
-        self._get_watcher(loop).add_child_handler(self._process.pid, self._exited)
+        self.watch_exit(self._process)
 
     def set_window_size(self, size: WindowSize) -> None:
         assert self._pty_fd is not None
-        fcntl.ioctl(self._pty_fd, termios.TIOCSWINSZ, struct.pack('2H4x', size.rows, size.cols))
+        rows = max(0, min(size.rows, 2**16 - 1))
+        cols = max(0, min(size.cols, 2**16 - 1))
+        fcntl.ioctl(self._pty_fd, termios.TIOCSWINSZ, struct.pack('2H4x', rows, cols))
 
     def can_write_eof(self) -> bool:
         assert self._process is not None
@@ -434,10 +417,10 @@ class SubprocessTransport(_Transport, asyncio.SubprocessTransport):
         # to waitpid() internally to avoid signalling the wrong process (if a
         # PID gets reused), but:
         #
-        #  - we already detect the process exiting via our PidfdChildWatcher
+        #  - we already detect the process exiting via our pidfd
         #
         #  - the check is actually harmful since collecting the process via
-        #    waitpid() prevents the PidfdChildWatcher from doing the same,
+        #    waitpid() prevents our pidfd-based watcher from doing the same,
         #    resulting in an error.
         #
         # It's on us now to check it, but that's easy:

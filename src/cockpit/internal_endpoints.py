@@ -1,19 +1,7 @@
-# This file is part of Cockpit.
 #
 # Copyright (C) 2022 Red Hat, Inc.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 
 import asyncio
 import glob
@@ -35,7 +23,7 @@ logger = logging.getLogger(__name__)
 class cockpit_LoginMessages(bus.Object):
     messages: Optional[str] = None
 
-    def __init__(self):
+    def __init__(self) -> None:
         fdstr = os.environ.pop('COCKPIT_LOGIN_MESSAGES_MEMFD', None)
         if fdstr is None:
             logger.debug("COCKPIT_LOGIN_MESSAGES_MEMFD wasn't set.  No login messages today.")
@@ -60,7 +48,7 @@ class cockpit_LoginMessages(bus.Object):
         return self.messages or '{}'
 
     @bus.Interface.Method(out_types=[])
-    def dismiss(self):
+    def dismiss(self) -> None:
         self.messages = None
 
 
@@ -77,20 +65,26 @@ class cockpit_Machines(bus.Object):
         results: Dict[str, Dict[str, Variant]] = {}
 
         for filename in glob.glob(f'{self.path}/*.json'):
-            with open(filename) as fp:
-                try:
-                    contents = json.load(fp)
-                except json.JSONDecodeError:
-                    logger.warning('Invalid JSON in file %s.  Ignoring.', filename)
-                    continue
-                # merge
-                for hostname, attrs in contents.items():
-                    results[hostname] = {key: Variant(value) for key, value in attrs.items()}
+            try:
+                with open(filename) as fp:
+                    try:
+                        contents = json.load(fp)
+                    except json.JSONDecodeError:
+                        logger.warning('Invalid JSON in file %s.  Ignoring.', filename)
+                        continue
+                    # merge
+                    for hostname, attrs in contents.items():
+                        results[hostname] = {key: Variant(value) for key, value in attrs.items()}
+            except OSError as exc:
+                logger.error('Unreadable machines.d file %s: %s.  Ignoring.', filename, exc)
 
         return results
 
     @bus.Interface.Method(in_types=['s', 's', 'a{sv}'])
     def update(self, filename: str, hostname: str, attrs: Dict[str, Variant]) -> None:
+        if filename.startswith('.') or '/' in filename:
+            raise bus.BusError('cockpit.Machines.Error', f'Invalid filename: {filename}')
+
         try:
             with self.path.joinpath(filename).open() as fp:
                 contents = json.load(fp)
@@ -107,8 +101,8 @@ class cockpit_Machines(bus.Object):
         with open(self.path.joinpath(filename), 'w') as fp:
             json.dump(contents, fp, indent=2)
 
-    def notify(self):
-        def _notify_now():
+    def notify(self) -> None:
+        def _notify_now() -> None:
             self.properties_changed('cockpit.Machines', {}, ['Machines'])
             self.pending_notify = None
 
@@ -136,18 +130,27 @@ class cockpit_User(bus.Object):
     name = bus.Interface.Property('s', value='')
     full = bus.Interface.Property('s', value='')
     id = bus.Interface.Property('i', value=0)
+    gid = bus.Interface.Property('i', value=0)
     home = bus.Interface.Property('s', value='')
     shell = bus.Interface.Property('s', value='')
     groups = bus.Interface.Property('as', value=[])
 
-    def __init__(self):
+    def __init__(self) -> None:
         user = pwd.getpwuid(os.getuid())
         self.name = user.pw_name
         self.full = user.pw_gecos
         self.id = user.pw_uid
+        self.gid = user.pw_gid
         self.home = user.pw_dir
         self.shell = user.pw_shell
-        self.groups = [gr.gr_name for gr in grp.getgrall() if user.pw_name in gr.gr_mem]
+
+        # We want the primary group first in the list, without duplicates.
+        # This is a bit awkward because `set()` is unordered...
+        groups = [grp.getgrgid(user.pw_gid).gr_name]
+        for gr in grp.getgrall():
+            if user.pw_name in gr.gr_mem and gr.gr_name not in groups:
+                groups.append(gr.gr_name)
+        self.groups = groups
 
 
 EXPORTS = [

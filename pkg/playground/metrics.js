@@ -1,6 +1,7 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 import cockpit from "cockpit";
 
-import '../lib/patternfly/patternfly-5-cockpit.scss';
+import '../lib/patternfly/patternfly-6-cockpit.scss';
 
 const metrics = [{ name: "block.device.read" }];
 

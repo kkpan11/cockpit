@@ -5,6 +5,7 @@ man_MANS =
 noinst_DATA =
 noinst_LIBRARIES =
 noinst_PROGRAMS =
+PYTHON3 ?= python3
 
 # See https://www.gnu.org/software/make/manual/html_node/Force-Targets.html
 FORCE:
@@ -23,7 +24,7 @@ $(srcdir)/package-lock.json: FORCE
 # -----------------------------------------------------------------------------
 #  make dist
 
-EXTRA_DIST = README.md
+EXTRA_DIST = README.md LICENSES/BSD-3-Clause.txt LICENSES/GPL-3.0.txt LICENSES/LGPL-2.1.txt LICENSES/MIT.txt
 CLEANFILES += cockpit-*.tar.xz
 
 # We override distdir as we want to dist some git-tracked files and dist/ without explicitly listing.
@@ -31,23 +32,21 @@ CLEANFILES += cockpit-*.tar.xz
 EXTRA_DIST += $(EXTRA_FILES)
 distdir: $(DISTFILES)
 	@if [ -e '$(srcdir)/.git' ]; then \
-		git -C '$(srcdir)' ls-files -x test/reference .fmf plans pkg test tools > .extra_dist.tmp && \
+		git -C '$(srcdir)' ls-files -x test/reference .fmf .cockpit-ci plans pkg test tools > .extra_dist.tmp && \
 		mv .extra_dist.tmp '$(srcdir)/.extra_dist'; fi
 	$(MAKE) $(AM_MAKEFLAGS) distdir-am EXTRA_FILES="$$(tr '\n' ' ' < $(srcdir)/.extra_dist) .extra_dist"
 	sed -i "s/[@]VERSION@/$(VERSION)/" "$(distdir)/src/client/org.cockpit_project.CockpitClient.metainfo.xml"
 	$(srcdir)/tools/fix-spec $(distdir)/tools/cockpit.spec $(VERSION)
-	test -z '$(HACK_SPEC_FOR_PYTHON)' || \
-		sed -i 's/\(define enable_old_bridge\) 1/\1 0/' $(distdir)/tools/cockpit.spec
 	sed -i "/^pkgver=/ s/0/$(VERSION)/" "$(distdir)/tools/arch/PKGBUILD"
 	sed -i "1 s/0/$(VERSION)/" "$(distdir)/tools/debian/changelog"
-	cp -r "$(srcdir)/dist" "$(distdir)"
+	cp -r "$(srcdir)/dist" "$(srcdir)/runtime-npm-modules.txt" "$(distdir)"
 	$(srcdir)/tools/adjust-distdir-timestamps "$(distdir)"
 	@echo '  DIST     $(DIST_ARCHIVES)'
 
 # Needed to ensure the tarball is correct for $(VERSION) override
 dist-hook: $(distdir)/src/cockpit/_version.py
 $(distdir)/src/cockpit/_version.py: FORCE
-	python3 '$(srcdir)'/src/build_backend.py --copy '$(srcdir)' '$(distdir)'
+	$(PYTHON3) '$(srcdir)'/src/build_backend.py --copy '$(srcdir)' '$(distdir)'
 	@rm -f $(distdir)/src/cockpit/_version.py
 	$(AM_V_GEN) echo "__version__ = '$(VERSION)'" > $@
 
@@ -63,9 +62,24 @@ $(distdir)/configure: $(distdir)/version.m4
 	@rm -r $(distdir)/autom4te.cache
 
 # Various downstream packaging assets
+
+NODE_CACHE = $(CURDIR)/cockpit-node-$(VERSION).tar.xz
+
+$(NODE_CACHE): $(srcdir)/package-lock.json
+	$(AM_V_GEN) '$(srcdir)/tools/node-archive' -C '$(srcdir)' --package-lock \
+		| XZ_OPT=$${XZ_OPT--e} xz -c \
+		> $(NODE_CACHE)
+
 dist-hook: $(distdir)/tools/debian/copyright
-$(distdir)/tools/debian/copyright: $(DIST_STAMP)
-	$(AM_V_GEN) NODE_ENV=$(NODE_ENV) $(srcdir)/tools/build-debian-copyright > $@
+# when building from a git checkout, we need to generate the copyright file
+# when building from tarball (also separate build tree, dist-git), we can't
+# rely on node_modules, so just copy the existing file
+$(distdir)/tools/debian/copyright: $(srcdir)/tools/debian/copyright.template $(DIST_STAMP) $(if $(wildcard $(srcdir)/node_modules/.package-lock.json),$(NODE_CACHE))
+	$(AM_V_GEN) if [ -e "$(srcdir)/node_modules/.package-lock.json" ]; then \
+		$(srcdir)/tools/build-debian-copyright $< $(NODE_CACHE) > $@; \
+	else \
+		cp "$(srcdir)/tools/debian/copyright" $@; \
+	fi
 
 DISTCHECK_CONFIGURE_FLAGS = --enable-prefix-only $(EXTRA_DISTCHECK_CONFIGURE_FLAGS)
 
@@ -80,28 +94,20 @@ distcheck-hook::
 # -----------------------------------------------------------------------------
 
 TESTS = \
-	test/static-code \
+	test/common/static-code \
 	$(NULL)
 
 clean-local::
 	find $(builddir) -name '*.gc??' -delete
 	find $(srcdir) -name '*.pyc' -delete
 
-# required for running unit and integration tests; commander and ws are deps of chrome-remote-interface
+# required for running integration tests
 node_modules/%: $(srcdir)/package-lock.json
 	@true
 
-EXTRA_DIST += \
-	node_modules/chrome-remote-interface \
-	node_modules/commander \
-	node_modules/sizzle \
-	node_modules/ws \
-	$(NULL)
-
 check: export VERBOSE=1
 
-TEST_EXTENSIONS = .html .sh
-HTML_LOG_COMPILER = $(top_srcdir)/test/common/tap-cdp --strip=$(abs_top_srcdir)/ $(HTML_TEST_WRAPPER) ./test-server $(COCKPIT_BRIDGE)
+TEST_EXTENSIONS = .sh
 
 VALGRIND = valgrind --trace-children=yes --quiet --error-exitcode=33 --gen-suppressions=all \
 	$(foreach file,$(wildcard $(srcdir)/tools/*.supp),--suppressions=$(file)) \
@@ -110,12 +116,10 @@ VALGRIND = valgrind --trace-children=yes --quiet --error-exitcode=33 --gen-suppr
 
 check-memory:
 	$(MAKE) LOG_FLAGS="$(VALGRIND)" \
-	        HTML_TEST_WRAPPER="$(VALGRIND)" \
 		COCKPIT_SKIP_SLOW_TESTS=1 \
 		$(AM_MAKEFLAGS) check TESTS="$(filter-out test/% bots/%,$(TESTS))"
 recheck-memory:
 	$(MAKE) LOG_FLAGS="$(VALGRIND_ARGS)" \
-	        HTML_TEST_WRAPPER="$(VALGRIND)" \
 		$(AM_MAKEFLAGS) recheck
 
 # checkout Cockpit's bots for standard test VM images and API to launch them
@@ -162,8 +166,8 @@ include src/testlib/Makefile.am
 include containers/Makefile.am
 include containers/flatpak/Makefile.am
 include doc/Makefile-doc.am
-include doc/guide/Makefile-guide.am
-include doc/man/Makefile-man.am
+include doc/Makefile-guide.am
+include doc/Makefile-man.am
 include pkg/Makefile.am
 include po/Makefile.am
 include selinux/Makefile.am
@@ -173,20 +177,15 @@ include src/branding/centos/Makefile.am
 include src/branding/debian/Makefile.am
 include src/branding/default/Makefile.am
 include src/branding/fedora/Makefile.am
-include src/branding/kubernetes/Makefile.am
+include src/branding/fedora-45/Makefile.am
 include src/branding/opensuse/Makefile.am
-include src/branding/registry/Makefile.am
 include src/branding/rhel/Makefile.am
-include src/branding/scientific/Makefile.am
 include src/branding/ubuntu/Makefile.am
-include src/bridge/Makefile.am
 include src/client/Makefile.am
 include src/common/Makefile-common.am
 include src/pam-ssh-add/Makefile.am
 include src/session/Makefile-session.am
-include src/ssh/Makefile-ssh.am
 include src/systemd/Makefile.am
 include src/tls/Makefile-tls.am
-include src/websocket/Makefile-websocket.am
 include src/ws/Makefile-ws.am
 include tools/Makefile-tools.am

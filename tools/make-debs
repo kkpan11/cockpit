@@ -1,24 +1,12 @@
 #!/bin/bash
-# This file is part of Cockpit.
 #
 # Copyright (C) 2021 Red Hat, Inc.
-#
-# Cockpit is free software; you can redistribute it and/or modify it
-# under the terms of the GNU Lesser General Public License as published by
-# the Free Software Foundation; either version 2.1 of the License, or
-# (at your option) any later version.
-#
-# Cockpit is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-# Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
 
 set -euf
 
-mydir=$(dirname $(realpath "$0"))
+mydir=$(dirname "$(realpath "$0")")
 
 usage()
 {
@@ -50,7 +38,8 @@ if [ $# -gt 1 ]; then
 fi
 
 if [ -z "${1:-}" ]; then
-    source="$("$mydir/../tools/make-dist")"
+    # only use the main release tarball for now
+    source="$("$mydir/../tools/make-dist" | head -n1)"
 else
     source="$(realpath "$1")"
 fi
@@ -69,7 +58,7 @@ tar --strip-components=1 -xf "$source"
 cp -r tools/debian .
 # plug in our version
 sed -i "1 s/(0-/(${version}-/" debian/changelog
-dpkg-buildpackage -us -uc -b -j$(nproc)
+dpkg-buildpackage -us -uc -b -j"$(nproc)"
 cd -
 
 find "$builddir"/.. -name '*.deb' -printf '%f\n' -exec mv {} . \;

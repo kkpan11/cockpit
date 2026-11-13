@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2023 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -24,14 +10,53 @@ import { dialog_open, TextInput, CheckBoxes, PassInput, SelectSpaces } from "../
 import { decode_filename, get_available_spaces, prepare_available_spaces } from "../utils.js";
 
 import { validate_pool_name, std_reply, get_unused_keydesc, with_stored_passphrase, confirm_tang_trust } from "./utils.jsx";
+import { remember_passphrase } from "../anaconda.jsx";
 import { validate_url, get_tang_adv } from "../crypto/tang.jsx";
 
 const _ = cockpit.gettext;
 
+function manager_create_pool(name, devs, key_desc, clevis_info) {
+    // "clevis_info" is either falsy or an array with two elements:
+    //
+    //   [ pin, pin_config ]
+    //
+    // This array can be used directly with the (b(ss)) signature of
+    // the r6 CreatePool call, but needs to be taken apart for the
+    // a((bu)ss) signature of the r8 CreatePool call.
+
+    if (client.stratis_interface_revision < 8) {
+        let key_desc_arg = [false, ""];
+        if (key_desc)
+            key_desc_arg = [true, key_desc];
+        let clevis_info_arg = [false, ["", ""]];
+        if (clevis_info)
+            clevis_info_arg = [true, clevis_info];
+        return client.stratis_manager.CreatePool(name,
+                                                 devs,
+                                                 key_desc_arg,
+                                                 clevis_info_arg);
+    } else {
+        const any_slot = [false, 0];
+        const key_descs_arg = [];
+        if (key_desc)
+            key_descs_arg.push([any_slot, key_desc]);
+        const clevis_infos_arg = [];
+        if (clevis_info)
+            clevis_infos_arg.push([any_slot, clevis_info[0], clevis_info[1]]);
+        return client.stratis_manager.CreatePool(name,
+                                                 devs,
+                                                 key_descs_arg,
+                                                 clevis_infos_arg,
+                                                 [false, 0], // journal_size
+                                                 [false, ""], // tag_spec
+                                                 [false, false]); // allocate_superblock
+    }
+}
+
 export function create_stratis_pool() {
     function find_pool(name) {
         for (const p in client.stratis_pools) {
-            if (client.stratis_pools[p].Name == name)
+            if (client.stratis_pools[p].Name === name)
                 return client.stratis_pools[p];
         }
         return null;
@@ -59,16 +84,14 @@ export function create_stratis_pool() {
                                  if (disks.length === 0)
                                      return _("At least one block device is needed.");
                              },
-                             spaces: get_available_spaces(client)
+                             spaces: get_available_spaces()
                          }),
-            CheckBoxes("encrypt_pass", client.features.stratis_crypto_binding ? _("Options") : "",
+            CheckBoxes("encrypt_pass", _("Options"),
                        {
                            fields: [
                                {
                                    tag: "on",
-                                   title: (client.features.stratis_crypto_binding
-                                       ? _("Encrypt data with a passphrase")
-                                       : _("Encrypt data"))
+                                   title: _("Encrypt data with a passphrase"),
                                }
                            ],
                            nested_fields: [
@@ -84,7 +107,7 @@ export function create_stratis_pool() {
                                PassInput("passphrase2", _("Confirm"),
                                          {
                                              validate: function (phrase2, vals) {
-                                                 if (phrase2 != vals.passphrase)
+                                                 if (phrase2 !== vals.passphrase)
                                                      return _("Passphrases do not match");
                                              },
                                              visible: vals => vals.encrypt_pass.on,
@@ -94,7 +117,7 @@ export function create_stratis_pool() {
                        }),
             CheckBoxes("encrypt_tang", "",
                        {
-                           visible: () => client.features.stratis_crypto_binding,
+                           visible: () => !client.in_anaconda_mode(),
                            fields: [
                                { tag: "on", title: _("Encrypt data with a Tang keyserver") }
                            ],
@@ -106,14 +129,13 @@ export function create_stratis_pool() {
                                          }),
                            ]
                        }),
-            CheckBoxes("managed", "",
+            CheckBoxes("overprov", "",
                        {
-                           visible: () => client.features.stratis_managed_fsys_sizes,
+                           value: { on: true },
                            fields: [
                                {
                                    tag: "on",
-                                   title: _("Manage filesystem sizes"),
-                                   tooltip: _("When this option is checked, the new pool will not allow overprovisioning. You need to specify a maximum size for each filesystem that is created in the pool. Filesystems can not be made larger after creation. Snapshots are fully allocated on creation. The sum of all maximum sizes can not exceed the size of the pool. The advantage of this is that filesystems in this pool can not run out of space in a surprising way. The disadvantage is that you need to know the maximum size for each filesystem in advance and creation of snapshots is limited.")
+                                   title: _("Overprovisioning"),
                                }
                            ]
                        })
@@ -128,14 +150,23 @@ export function create_stratis_pool() {
                         let clevis_info = null;
                         if (adv)
                             clevis_info = ["tang", JSON.stringify({ url: vals.tang_url, adv })];
-                        return client.stratis_create_pool(vals.name, devs, key_desc, clevis_info)
+                        return manager_create_pool(vals.name, devs, key_desc, clevis_info)
                                 .then(std_reply)
                                 .then(result => {
-                                    if (vals.managed && vals.managed.on && result[0]) {
+                                    if (key_desc && vals.passphrase) {
+                                        for (const p of paths) {
+                                            const block = client.blocks[p];
+                                            if (block)
+                                                remember_passphrase(block, vals.passphrase);
+                                        }
+                                    }
+                                    if (vals.overprov && !vals.overprov.on && result[0]) {
                                         const path = result[1][0];
                                         return client.wait_for(() => client.stratis_pools[path])
                                                 .then(pool => {
-                                                    return client.stratis_set_overprovisioning(pool, false);
+                                                    return client.stratis_set_property(pool,
+                                                                                       "Overprovisioning",
+                                                                                       "b", false);
                                                 });
                                     }
                                 });

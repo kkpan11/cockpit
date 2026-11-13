@@ -1,19 +1,7 @@
-# This file is part of Cockpit.
 #
 # Copyright (C) 2022 Red Hat, Inc.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 
 import collections
 import contextlib
@@ -33,6 +21,7 @@ from typing import (
     Callable,
     ClassVar,
     Dict,
+    Generator,
     Iterable,
     List,
     NamedTuple,
@@ -53,6 +42,7 @@ from .jsonutil import (
     JsonValue,
     get_bool,
     get_dict,
+    get_enum,
     get_int,
     get_objv,
     get_str,
@@ -172,12 +162,18 @@ class PackagesListener:
         """Called when the packages have been reloaded"""
 
 
-class BridgeConfig(dict, JsonObject):
+# This wants to be 'dict[str, JsonValue]', but that does not work in Python 3.6 yet
+class BridgeConfig(dict, JsonObject):  # type: ignore[type-arg]
     def __init__(self, value: JsonObject):
         super().__init__(value)
 
+        # NB: You almost definitely don't want to access the filesystem here to
+        # check for (for example) if a bridge exists or not.  This code might
+        # be running on the client side of a beiboot setup.
+
         self.label = get_str(self, 'label', None)
 
+        self.method = get_enum(self, 'method', ['spawn', 'StartTransientUnit'], 'spawn')
         self.privileged = get_bool(self, 'privileged', default=False)
         self.match = get_dict(self, 'match', {})
         if not self.privileged and not self.match:
@@ -187,19 +183,65 @@ class BridgeConfig(dict, JsonObject):
         self.spawn = get_strv(self, 'spawn')
         if not self.spawn:
             raise JsonError(value, 'spawn vector must be non-empty')
+        self.polkit = get_bool(self, 'polkit', 'pkexec' in self.spawn)
 
         self.name = self.label or self.spawn[0]
 
 
 class Condition:
-    def __init__(self, value: JsonObject):
-        try:
-            (self.name, self.value), = value.items()
-        except ValueError as exc:
-            raise JsonError(value, 'must contain exactly one key/value pair') from exc
+    def get_condition_files(self) -> Iterable[str]:
+        raise NotImplementedError
+
+    def check(self, path_exists: Callable[[str], bool]) -> bool:
+        raise NotImplementedError
 
 
-class Manifest(dict, JsonObject):
+class ConstantCondition(Condition):
+    def __init__(self, *, value: bool) -> None:
+        self.value = value
+
+    def __str__(self) -> str:
+        return f'ConstantCondition({self.value})'
+
+    def get_condition_files(self) -> Iterable[str]:
+        return []
+
+    def check(self, path_exists: Callable[[str], bool]) -> bool:
+        return self.value
+
+
+class PathExistsCondition(Condition):
+    def __init__(self, path: str, *, exists: bool) -> None:
+        self.path = path
+        self.exists = exists
+
+    def __str__(self) -> str:
+        return f'PathExistsCondition({self.path!r}, exists={self.exists})'
+
+    def get_condition_files(self) -> Iterable[str]:
+        yield self.path
+
+    def check(self, path_exists: Callable[[str], bool]) -> bool:
+        return self.exists == path_exists(self.path)
+
+
+class DisjunctiveCondition(Condition):
+    def __init__(self, conditions: Iterable[Condition]) -> None:
+        self.conditions = conditions
+
+    def __str__(self) -> str:
+        return f'DisjunctiveCondition({", ".join(str(c) for c in self.conditions)})'
+
+    def get_condition_files(self) -> Iterable[str]:
+        for condition in self.conditions:
+            yield from condition.get_condition_files()
+
+    def check(self, path_exists: Callable[[str], bool]) -> bool:
+        return any(c.check(path_exists) for c in self.conditions)
+
+
+# This wants to be 'dict[str, JsonValue]', but that does not work in Python 3.6 yet
+class Manifest(dict, JsonObject):  # type: ignore[type-arg]
     # Skip version check when running out of the git checkout (__version__ is None)
     COCKPIT_VERSION = __version__ and sortify_version(__version__)
 
@@ -210,7 +252,7 @@ class Manifest(dict, JsonObject):
         self.bridges = get_objv(self, 'bridges', BridgeConfig)
         self.priority = get_int(self, 'priority', 1)
         self.csp = get_str(self, 'content-security-policy', '')
-        self.conditions = get_objv(self, 'conditions', Condition)
+        self.conditions = get_objv(self, 'conditions', self.parse_condition)
 
         # Skip version check when running out of the git checkout (COCKPIT_VERSION is None)
         if self.COCKPIT_VERSION is not None:
@@ -221,10 +263,32 @@ class Manifest(dict, JsonObject):
                 if sortify_version(typechecked(version, str)) > self.COCKPIT_VERSION:
                     raise JsonError(version, f'required cockpit version ({version}) not met')
 
+    def parse_condition(self, value: JsonObject) -> Condition:
+        if len(value) != 1:
+            raise JsonError(value, 'must contain exactly one key/value pair')
+
+        if "path-exists" in value:
+            return PathExistsCondition(get_str(value, "path-exists"), exists=True)
+
+        elif "path-not-exists" in value:
+            return PathExistsCondition(get_str(value, "path-not-exists"), exists=False)
+
+        elif "any" in value:
+            return DisjunctiveCondition(get_objv(value, "any", self.parse_condition))
+
+        else:
+            # do *not* ignore manifests with unknown predicates, for forward compatibility
+            logger.warning('  %s: ignoring unknown predicate in manifest: %s', self.path, value)
+            return ConstantCondition(value=True)
+
+    def get_condition_files(self) -> Iterable[str]:
+        for condition in self.conditions:
+            yield from condition.get_condition_files()
+
 
 class Package:
     # For po{,.manifest}.js files, the interesting part is the locale name
-    PO_JS_RE: ClassVar[Pattern] = re.compile(r'(po|po\.manifest)\.([^.]+)\.js(\.gz)?')
+    PO_JS_RE: ClassVar[Pattern[str]] = re.compile(r'(po|po\.manifest)\.([^.]+)\.js(\.gz)?')
 
     # immutable after __init__
     manifest: Manifest
@@ -271,7 +335,7 @@ class Package:
                 self.translations[f'{basename}.js'][lower_locale] = name
             else:
                 # strip out trailing '.gz' components
-                basename = re.sub('.gz$', '', name)
+                basename = re.sub(r'\.gz$', '', name)
                 logger.debug('Adding content %r -> %r', basename, name)
                 self.files[basename] = name
 
@@ -346,10 +410,8 @@ class Package:
 
 
 class PackagesLoader:
-    CONDITIONS: ClassVar[Dict[str, Callable[[str], bool]]] = {
-        'path-exists': os.path.exists,
-        'path-not-exists': lambda p: not os.path.exists(p),
-    }
+    def path_exists(self, path: str) -> bool:
+        return os.path.exists(path)
 
     @classmethod
     def get_xdg_data_dirs(cls) -> Iterable[str]:
@@ -377,8 +439,9 @@ class PackagesLoader:
             except FileNotFoundError:
                 continue
             except json.JSONDecodeError as exc:
-                # User input error: report a warning
+                # User input error: report a warning and ignore this file.
                 logger.warning('%s: %s', override_file, exc)
+                continue
 
             if not isinstance(override, dict):
                 logger.warning('%s: override file is not a dictionary', override_file)
@@ -410,25 +473,14 @@ class PackagesLoader:
                 except JsonError as exc:
                     logger.warning('%s %s', file, exc)
 
-    def check_condition(self, condition: str, value: object) -> bool:
-        check_fn = self.CONDITIONS[condition]
-
-        # All known predicates currently only work on strings
-        if not isinstance(value, str):
-            return False
-
-        return check_fn(value)
+    @classmethod
+    def get_condition_files(cls) -> Iterable[str]:
+        for manifest in cls.load_manifests():
+            yield from manifest.get_condition_files()
 
     def check_conditions(self, manifest: Manifest) -> bool:
         for condition in manifest.conditions:
-            try:
-                okay = self.check_condition(condition.name, condition.value)
-            except KeyError:
-                # do *not* ignore manifests with unknown predicates, for forward compatibility
-                logger.warning('  %s: ignoring unknown predicate in manifest: %s', manifest.path, condition.name)
-                continue
-
-            if not okay:
+            if not condition.check(self.path_exists):
                 logger.debug('  hiding package %s as its %s condition is not met', manifest.path, condition)
                 return False
 
@@ -484,19 +536,21 @@ class Packages(bus.Object, interface='cockpit.Packages'):
         self.manifests = json.dumps({name: dict(package.manifest) for name, package in self.packages.items()})
         logger.debug('Packages loaded: %s', list(self.packages))
 
-    def show(self):
+    def show(self) -> None:
         for name in sorted(self.packages):
             package = self.packages[name]
             menuitems = []
             for entry in itertools.chain(
-                    package.manifest.get('menu', {}).values(),
-                    package.manifest.get('tools', {}).values()):
-                with contextlib.suppress(KeyError):
-                    menuitems.append(entry['label'])
+                    get_dict(package.manifest, 'menu', {}).values(),
+                    get_dict(package.manifest, 'tools', {}).values()):
+                if isinstance(entry, dict):
+                    label = get_str(entry, 'label', None)
+                    if label is not None:
+                        menuitems.append(label)
             print(f'{name:20} {", ".join(menuitems):40} {package.path}')
 
     def get_bridge_configs(self) -> Sequence[BridgeConfig]:
-        def yield_configs():
+        def yield_configs() -> Generator[BridgeConfig, None, None]:
             for package in sorted(self.packages.values(), key=lambda package: -package.priority):
                 yield from package.manifest.bridges
         return tuple(yield_configs())
@@ -504,38 +558,39 @@ class Packages(bus.Object, interface='cockpit.Packages'):
     # D-Bus Interface
     manifests = bus.Interface.Property('s', value="{}")
 
-    @bus.Interface.Method()
-    def reload(self):
+    @bus.Interface.Method()  # type: ignore[misc]
+    def reload(self) -> None:
         self.load()
         if self.listener is not None:
             self.listener.packages_loaded()
 
-    @bus.Interface.Method()
-    def reload_hint(self):
+    @bus.Interface.Method()  # type: ignore[misc]
+    def reload_hint(self) -> None:
         if self.saw_first_reload_hint:
             self.reload()
         self.saw_first_reload_hint = True
 
-    def load_manifests_js(self, headers: JsonObject) -> Document:
+    def load_manifests_js(self, headers: JsonObject, *, i18n: bool) -> Document:
         logger.debug('Serving /manifests.js')
 
         chunks: List[bytes] = []
 
         # Send the translations required for the manifest files, from each package
-        locales = parse_accept_language(get_str(headers, 'Accept-Language', ''))
-        for name, package in self.packages.items():
-            if name in ['static', 'base1']:
-                continue
+        if i18n:
+            locales = parse_accept_language(get_str(headers, 'Accept-Language', ''))
+            for name, package in self.packages.items():
+                if name in ['static', 'base1']:
+                    continue
 
-            # find_translation will always find at least 'en'
-            translation = package.load_translation('po.manifest.js', locales)
-            with translation.data:
-                if translation.content_encoding == 'gzip':
-                    data = gzip.decompress(translation.data.read())
-                else:
-                    data = translation.data.read()
+                # find_translation will always find at least 'en'
+                translation = package.load_translation('po.manifest.js', locales)
+                with translation.data:
+                    if translation.content_encoding == 'gzip':
+                        data = gzip.decompress(translation.data.read())
+                    else:
+                        data = translation.data.read()
 
-            chunks.append(data)
+                chunks.append(data)
 
         chunks.append(b"""
             (function (root, data) {
@@ -573,7 +628,9 @@ class Packages(bus.Object, interface='cockpit.Packages'):
         if packagename is not None:
             return self.packages[packagename].load_path(filename, headers)
         elif filename == 'manifests.js':
-            return self.load_manifests_js(headers)
+            return self.load_manifests_js(headers, i18n=False)
+        elif filename == 'manifests-i18n.js':
+            return self.load_manifests_js(headers, i18n=True)
         elif filename == 'manifests.json':
             return self.load_manifests_json()
         else:

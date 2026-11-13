@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2023 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -26,7 +12,7 @@ import { DescriptionList } from "@patternfly/react-core/dist/esm/components/Desc
 import { useEvent } from "hooks";
 
 import { StorageCard, StorageDescription, new_card } from "../pages.jsx";
-import { format_dialog } from "../block/format-dialog.jsx";
+import { std_format_action } from "../block/actions.jsx";
 import {
     fmt_size, decode_filename, encode_filename,
     parse_options, unparse_options, extract_option,
@@ -37,13 +23,13 @@ const _ = cockpit.gettext;
 
 async function set_swap_noauto(block, noauto) {
     for (const conf of block.Configuration) {
-        if (conf[0] == "fstab") {
+        if (conf[0] === "fstab") {
             const options = parse_options(decode_filename(conf[1].opts.v));
             extract_option(options, "defaults");
             extract_option(options, "noauto");
             if (noauto)
                 options.push("noauto");
-            if (options.length == 0)
+            if (options.length === 0)
                 options.push("defaults");
             const new_conf = [
                 "fstab",
@@ -97,7 +83,7 @@ export function make_swap_card(next, backing_block, content_block) {
             (block_swap && !block_swap.Active
                 ? { title: _("Start"), action: start }
                 : null),
-            { title: _("Format"), action: () => format_dialog(client, backing_block.path), danger: true },
+            std_format_action(backing_block, content_block),
         ]
     });
 }

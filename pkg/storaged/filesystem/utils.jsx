@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2016 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import React from "react";
@@ -60,26 +46,26 @@ function find_blocks_for_mount_point(client, mount_point, self_block, self_subvo
     function same_btrfs_volume(a, b) {
         return (client.blocks_fsys_btrfs[a.path] &&
                 client.blocks_fsys_btrfs[b.path] &&
-                client.blocks_fsys_btrfs[a.path].data.uuid == client.blocks_fsys_btrfs[b.path].data.uuid);
+                client.blocks_fsys_btrfs[a.path].data.uuid === client.blocks_fsys_btrfs[b.path].data.uuid);
     }
 
     function same_btrfs_subvol(a, b) {
         return (a && b &&
-                ((a.pathname && a.pathname == b.pathname) ||
-                 (a.id && a.id == b.id)));
+                ((a.pathname && a.pathname === b.pathname) ||
+                 (a.id && a.id === b.id)));
     }
 
     function is_self(b, subvol) {
-        if (self_subvol)
+        if (client.blocks_fsys_btrfs[self_block.path])
             return same_btrfs_volume(b, self_block) && same_btrfs_subvol(subvol, self_subvol);
         else
-            return self_block && (b == self_block || client.blocks[b.CryptoBackingDevice] == self_block);
+            return self_block && (b === self_block || client.blocks[b.CryptoBackingDevice] === self_block);
     }
 
     function fmt_block_and_subvol(block, subvol) {
         if (subvol)
             return cockpit.format(_("btrfs subvolume $0 of $1"),
-                                  subvol.pathname || subvol.id,
+                                  (subvol.pathname === "/" || subvol.id === 5) ? "top-level" : subvol.pathname || subvol.id,
                                   block.IdLabel || block.IdUUID);
         else
             return nice_block_name(block);
@@ -91,12 +77,12 @@ function find_blocks_for_mount_point(client, mount_point, self_block, self_subvo
     for (const p in client.blocks) {
         const b = client.blocks[p];
         for (const c of b.Configuration) {
-            if (c[0] == "fstab") {
+            if (c[0] === "fstab") {
                 let dir = decode_filename(c[1].dir.v);
-                if (dir[0] != "/")
+                if (dir[0] !== "/")
                     dir = "/" + dir;
                 const subvol = parse_subvol_from_options(decode_filename(c[1].opts.v));
-                if (dir == mount_point && !is_self(b, subvol)) {
+                if (dir === mount_point && !is_self(b, subvol)) {
                     if (!seen_uuids[b.IdUUID]) {
                         seen_uuids[b.IdUUID] = true;
                         blocks.push(fmt_block_and_subvol(b, subvol));
@@ -121,7 +107,7 @@ export function is_valid_mount_point(client, block, val, will_not_mount, allow_e
         return cockpit.format(_("Mount point is already used for $0"), other_blocks.join(", "));
 
     if (!will_not_mount) {
-        const children = find_children_for_mount_point(client, val, block);
+        const children = find_children_for_mount_point(client, val, block, subvol);
         if (Object.keys(children).length > 0)
             return <>
                 {_("Filesystems are already mounted below this mountpoint.")}
@@ -135,11 +121,11 @@ export function is_valid_mount_point(client, block, val, will_not_mount, allow_e
 }
 
 export function get_cryptobacking_noauto(client, block) {
-    const crypto_backing = block.IdUsage == "crypto" ? block : client.blocks[block.CryptoBackingDevice];
+    const crypto_backing = block.IdUsage === "crypto" ? block : client.blocks[block.CryptoBackingDevice];
     if (!crypto_backing)
         return false;
 
-    const crypto_config = crypto_backing.Configuration.find(c => c[0] == "crypttab");
+    const crypto_config = crypto_backing.Configuration.find(c => c[0] === "crypttab");
     if (!crypto_config)
         return false;
 
@@ -156,13 +142,14 @@ export const MountPoint = ({ fstab_config, forced_options, backing_block, conten
     const is_filesystem_mounted = content_block && is_mounted(client, content_block, subvol);
     const [, old_dir, old_opts] = fstab_config;
     const split_options = parse_options(old_opts);
+    const foptions = forced_options && forced_options(split_options);
     extract_option(split_options, "noauto");
     const opt_ro = extract_option(split_options, "ro");
     const opt_never_auto = extract_option(split_options, "x-cockpit-never-auto");
     const opt_nofail = extract_option(split_options, "nofail");
     const opt_netdev = extract_option(split_options, "_netdev");
-    if (forced_options)
-        for (const opt of forced_options)
+    if (foptions)
+        for (const opt of foptions)
             extract_option(split_options, opt);
 
     let mount_point_text = null;
@@ -195,7 +182,7 @@ export const MountPoint = ({ fstab_config, forced_options, backing_block, conten
                 extra_text = _("The filesystem has no permanent mount point.");
             else
                 extra_text = _("The filesystem is not mounted.");
-        } else if (backing_block != content_block) {
+        } else if (backing_block !== content_block) {
             if (!opt_never_auto)
                 extra_text = _("The filesystem will be unlocked and mounted on the next boot. This might require inputting a passphrase.");
         }
@@ -230,7 +217,7 @@ export const mount_point_text = (mount_point, mounted) => {
     let mp_text;
     if (mount_point) {
         mp_text = client.strip_mount_point_prefix(mount_point);
-        if (mp_text == false)
+        if (mp_text === false)
             return null;
         if (!mounted && !client.in_anaconda_mode())
             mp_text = mp_text + " " + _("(not mounted)");

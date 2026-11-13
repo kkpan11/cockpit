@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2022 SUSE LLC
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import { ConfigFile } from './config-client.js';
@@ -51,7 +37,7 @@ export class ConfigFileSUSE extends ConfigFile {
         }
 
         // if nothing changed, don't bother parsing the content
-        if (rawContent == this._rawContent)
+        if (rawContent === this._rawContent)
             return;
 
         this._rawContent = rawContent;
@@ -61,6 +47,7 @@ export class ConfigFileSUSE extends ConfigFile {
             _internal: {},
             targets: {},
             compression: { enabled: false, allowed: true },
+            nfs_supports_directory: false,
         };
 
         this._lines = rawContent.split(/\r?\n/);
@@ -219,7 +206,7 @@ export class ConfigFileSUSE extends ConfigFile {
             this._updateSetting(settings, "KDUMP_SAVEDIR", savedir);
         }
         // compression
-        if (this.settings.compression.enabled != settings.compression.enabled) {
+        if (this.settings.compression.enabled !== settings.compression.enabled) {
             if (settings.compression.enabled) {
                 this._updateSetting(settings, "KDUMP_DUMPFORMAT", "compressed");
             } else {

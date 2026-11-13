@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2023 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -24,6 +10,7 @@ import { useEvent } from "hooks.js";
 
 import { AlertGroup } from "@patternfly/react-core/dist/esm/components/Alert/index.js";
 import { Card, CardHeader, CardTitle, CardBody } from "@patternfly/react-core/dist/esm/components/Card/index.js";
+import { Divider } from '@patternfly/react-core/dist/esm/components/Divider/index.js';
 import { DropdownGroup, DropdownList } from '@patternfly/react-core/dist/esm/components/Dropdown/index.js';
 import { Stack, StackItem } from "@patternfly/react-core/dist/esm/layouts/Stack/index.js";
 import { Split, SplitItem } from "@patternfly/react-core/dist/esm/layouts/Split/index.js";
@@ -31,14 +18,19 @@ import { Bullseye } from "@patternfly/react-core/dist/esm/layouts/Bullseye/index
 import { Button } from "@patternfly/react-core/dist/esm/components/Button/index.js";
 import { Table, Thead, Tbody, Tr, Th, Td } from '@patternfly/react-table';
 import { EmptyState, EmptyStateBody } from "@patternfly/react-core/dist/esm/components/EmptyState/index.js";
-import { ExclamationTriangleIcon, ExclamationCircleIcon } from "@patternfly/react-icons";
+import { ExclamationTriangleIcon, ExclamationCircleIcon, HelpIcon } from "@patternfly/react-icons";
 import { Page, PageBreadcrumb, PageSection } from "@patternfly/react-core/dist/esm/components/Page/index.js";
 import { Breadcrumb, BreadcrumbItem } from "@patternfly/react-core/dist/esm/components/Breadcrumb/index.js";
 import { Spinner } from "@patternfly/react-core/dist/esm/components/Spinner/index.js";
 import { DescriptionListDescription, DescriptionListGroup, DescriptionListTerm } from "@patternfly/react-core/dist/esm/components/DescriptionList/index.js";
 import { Flex, FlexItem } from "@patternfly/react-core/dist/esm/layouts/Flex/index.js";
+import { Icon } from "@patternfly/react-core/dist/esm/components/Icon";
+import { Popover } from "@patternfly/react-core/dist/esm/components/Popover";
 
-import { decode_filename, block_short_name, fmt_size } from "./utils.js";
+import {
+    decode_filename, block_short_name, fmt_size,
+    reset_available_spaces
+} from "./utils.js";
 import { StorageButton, StorageBarMenu, StorageMenuItem, StorageSize } from "./storage-controls.jsx";
 import { MultipathAlert } from "./multipath.jsx";
 import { JobsPanel } from "./jobs-panel.jsx";
@@ -61,7 +53,7 @@ const _ = cockpit.gettext;
    The tree of pages starts with "make_overview_page" in
    overview/overview.jsx. That function creates the data structures
    that represent the overview page (using functions exported from
-   this file), and is also responsible for kicking of the creation of
+   this file), and is also responsible for kicking off the creation of
    its child pages. (And each page construction function of course
    also creates the cards and actions for that page).
 
@@ -69,7 +61,7 @@ const _ = cockpit.gettext;
    other pages. For example, each row in the table in the overview
    page represents another page, and clicking on it will navigate to
    that page. (In fact, the overview table shows the whole tree. Other
-   apges show subsets of the tree in their tables.)
+   pages show subsets of the tree in their tables.)
 
    Most of the complications with pages and cards are there to support
    putting pages into tables. Without having to do that, we wouldn't
@@ -127,7 +119,7 @@ const _ = cockpit.gettext;
 
    When a page appears in such a crossref table, it has dedicated
    actions, a dedicated size, and generally looks different from when
-   it appears in a "normal" childrens table. This is another source of
+   it appears in a "normal" children's table. This is another source of
    complication of how cards and pages interact.
 */
 
@@ -141,6 +133,7 @@ export const PAGE_CATEGORY_NETWORK = 3;
 export function reset_pages() {
     pages = new Map();
     crossrefs = new Map();
+    reset_available_spaces();
 }
 
 function name_from_card(card) {
@@ -206,7 +199,7 @@ export function new_page(parent, card, options) {
     }
     if (page.location) {
         pages.set(JSON.stringify(page.location), page);
-        if (page.location.length == 0) {
+        if (page.location.length === 0) {
             // This is the Overview page. Make it the parent of the
             // special "not found" page (but don't make the "not
             // found" page a child of the Overview...)
@@ -295,7 +288,7 @@ export function navigate_away_from_card(card) {
 
     const loc = cockpit.location;
     const page = card.page;
-    if (page.parent && JSON.stringify(loc.path) == JSON.stringify(page.location))
+    if (page.parent && JSON.stringify(loc.path) === JSON.stringify(page.location))
         loc.go(page.parent.location);
 }
 
@@ -305,7 +298,7 @@ export function navigate_to_new_card_location(card, location) {
 
     const loc = cockpit.location;
     const page = card.page;
-    if (JSON.stringify(loc.path) == JSON.stringify(page.location))
+    if (JSON.stringify(loc.path) === JSON.stringify(page.location))
         loc.go(location);
 }
 
@@ -336,33 +329,36 @@ function make_page_kebab(page) {
     let c = page.card;
     while (c) {
         const g = card_item_group(c);
-        if (g)
+        if (g) {
+            if (items.length > 0)
+                items.push(<Divider key={"div" + items.length} />);
             items.push(g);
+        }
         c = c.next;
     }
 
-    if (items.length == 0)
+    if (items.length === 0)
         return null;
 
     return <StorageBarMenu menuItems={items} isKebab />;
 }
 
 function make_actions_kebab(actions) {
-    if (!actions || actions.length == 0)
+    if (!actions || actions.length === 0)
         return null;
 
     return <StorageBarMenu menuItems={actions.map(make_menu_item)} isKebab />;
 }
 
-const ActionButtons = ({ card }) => {
+export const Actions = ({ actions, onlyMenu }) => {
     const narrow = useIsNarrow();
 
     function for_menu(action) {
         // Determine whether a action should get a button or be in the
         // menu
 
-        // In a narrow layout, everything goes to the menu
-        if (narrow)
+        // When requested or when in a narrow layout, put everything into the menu
+        if (onlyMenu || narrow)
             return true;
 
         // Everything that is dangerous goes to the menu
@@ -375,17 +371,18 @@ const ActionButtons = ({ card }) => {
     const buttons = [];
     const items = [];
 
-    if (!card.actions)
+    if (!actions)
         return null;
 
-    for (const a of card.actions) {
-        if (for_menu(a))
-            items.push(make_menu_item(a));
+    for (const action of actions) {
+        if (for_menu(action))
+            items.push(make_menu_item(action));
         else
             buttons.push(
-                <StorageButton key={a.title} onClick={() => a.action(false)}
-                               kind={a.danger ? "danger" : null} excuse={a.excuse}>
-                    {a.title}
+                <StorageButton key={action.title} onClick={() => action.action(false)}
+                               kind={action.danger ? "danger" : null} excuse={action.excuse}
+                               spinner={action.spinner}>
+                    {action.title}
                 </StorageButton>);
     }
 
@@ -464,7 +461,7 @@ let narrow_query = null;
 
 export const useIsNarrow = (onChange) => {
     if (!narrow_query) {
-        const val = window.getComputedStyle(window.document.body).getPropertyValue("--pf-v5-global--breakpoint--md");
+        const val = window.getComputedStyle(window.document.body).getPropertyValue("--pf-t--global--breakpoint--md");
         narrow_query = window.matchMedia(`(max-width: ${val})`);
     }
     useEvent(narrow_query, "change", onChange);
@@ -524,111 +521,111 @@ export const PageTable = ({ emptyCaption, aria_label, pages, crossrefs, sorted, 
                 size = <StorageSize size={size} />;
         }
 
-        function onClick(event) {
-            if (!event || event.button !== 0)
-                return;
-
-            if (page.location)
-                cockpit.location.go(page.location);
-        }
-
-        function is_clickable(element) {
-            return element.classList.contains("pf-m-clickable");
-        }
-
-        function next_clickable_sibling(element) {
-            do {
-                const next = element.nextElementSibling;
-                if (next && is_clickable(next))
-                    return next;
-                element = next;
-            } while (element);
-
-            return null;
-        }
-
-        function previous_clickable_sibling(element) {
-            do {
-                const prev = element.previousElementSibling;
-                if (prev && is_clickable(prev))
-                    return prev;
-                element = prev;
-            } while (element);
-
+        function find_button(element, parent_node_name, field) {
+            let column = 0;
+            while (element && element.nodeName !== parent_node_name) {
+                if (element.nodeName === "TD") {
+                    let td = element;
+                    while (td) {
+                        column++;
+                        td = td.previousElementSibling;
+                    }
+                }
+                element = element.parentElement;
+            }
+            if (!element)
+                return null;
+            const selector = column > 0 ? `td:nth-child(${column}) button` : "button";
+            while ((element = element[field])) {
+                const button = element.querySelector(selector);
+                if (button)
+                    return button;
+            }
             return null;
         }
 
         function onRowKeyDown(event) {
             const { code, target } = event;
 
-            if (target.nodeName == "TR") {
-                if (code == "Space" || code == "Enter") {
-                    if (page.location)
-                        cockpit.location.go(page.location);
-                    event.preventDefault();
-                }
-                if (code == "ArrowDown") {
-                    const next = next_clickable_sibling(target);
-                    if (next)
-                        next.focus();
-                    event.preventDefault();
-                }
-                if (code == "ArrowUp") {
-                    const prev = previous_clickable_sibling(target);
-                    if (prev)
-                        prev.focus();
-                    event.preventDefault();
-                }
+            function step(parent_node_name, field) {
+                find_button(target, parent_node_name, field)?.focus();
+                event.preventDefault();
             }
+
+            if (code === "ArrowDown")
+                step("TR", "nextElementSibling");
+            else if (code === "ArrowUp")
+                step("TR", "previousElementSibling");
+            else if (code === "ArrowRight")
+                step("TD", "nextElementSibling");
+            else if (code === "ArrowLeft")
+                step("TD", "previousElementSibling");
         }
 
-        const is_new = firstKeys.current != false && !firstKeys.current.has(key);
+        function location_link(id, location) {
+            if (!location)
+                return null;
+            if (typeof location == "string")
+                return location;
+            if (!location.to)
+                return location.label;
+
+            return (
+                <Button ouiaId={id} isInline variant="link" onClick={() => cockpit.location.go(location.to)}>
+                    <Truncate content={location.label} />
+                </Button>
+            );
+        }
+
+        const is_new = firstKeys.current !== false && !firstKeys.current.has(key);
         row_keys.add(key);
 
         if (narrow) {
             rows.push(
-                <Card key={key} onClick={onClick}
+                <Card isPlain key={key}
                       className={"ct-small-table-card" +
-                                 (page.location ? " ct-clickable-card" : null) +
                                  (is_new ? " ct-new-item" : "")}
                       data-test-row-name={page.name}
-                      data-test-row-location={page.columns[1]}>
+                      data-test-row-location={location?.label || location}>
                     <CardBody>
                         <Split hasGutter>
                             { icon && <SplitItem>{icon}</SplitItem> }
-                            <SplitItem isFilled><strong><Truncate content={name} /></strong>{info}</SplitItem>
+                            <SplitItem isFilled>
+                                {location_link("id-link", { to: page.location, label: <strong>{name}</strong> })}
+                                {info}
+                            </SplitItem>
                             <SplitItem>{actions}</SplitItem>
                         </Split>
                         <Split hasGutter isWrappable>
                             <SplitItem>{type}</SplitItem>
-                            <SplitItem isFilled>{location}</SplitItem>
-                            <SplitItem isFilled className="pf-v5-u-text-align-right">{size}</SplitItem>
+                            <SplitItem isFilled>{location_link("location-link", location)}</SplitItem>
+                            <SplitItem isFilled className="pf-v6-u-text-align-end">{size}</SplitItem>
                         </Split>
                     </CardBody>
                 </Card>);
         } else {
             const cols = [
-                <Td key="1" onClick={onClick}>
+                <Td key="1">
                     <div className="indent" style={ { "--level": level } }>
-                        <Truncate content={name} />
+                        {location_link("id-link", { to: page.location, label: name })}
                         {info}
                     </div>
                 </Td>,
-                <Td key="2" onClick={onClick} modifier="nowrap">{type}</Td>,
-                <Td key="3" onClick={onClick} modifier="nowrap">{location}</Td>,
-                <Td key="4" onClick={onClick} className="storage-size-column">{size}</Td>,
-                <Td key="5" className="pf-v5-c-table__action">{actions || <div /> }</Td>,
+                <Td key="2" modifier="nowrap">{type}</Td>,
+                <Td key="3" modifier="nowrap">{location_link("location-link", location)}</Td>,
+                <Td key="4" className="storage-size-column">{size}</Td>,
+                <Td key="5" className="pf-v6-c-table__action">{actions || <div /> }</Td>,
             ];
             if (show_icons)
-                cols.unshift(<Td key="0" onClick={onClick} className="storage-device-icon">{icon}</Td>);
+                cols.unshift(<Td key="0" className="storage-device-icon">{icon}</Td>);
 
             rows.push(
                 <Tr key={key}
                     className={(border ? "" : " remove-border") +
                                (is_new ? " ct-new-item" : "")}
-                    data-test-row-name={page.name} data-test-row-location={page.columns[1]}
-                    isClickable={!!page.location}
-                    onKeyDown={onRowKeyDown}>
+                    onKeyDown={onRowKeyDown}
+                    data-test-row-name={page.name} data-test-row-location={location?.label || location}
+                >
                     {cols}
                 </Tr>);
         }
@@ -654,9 +651,9 @@ export const PageTable = ({ emptyCaption, aria_label, pages, crossrefs, sorted, 
     function make_page_rows(pages, level, last_has_border, key, sorted) {
         const sorted_pages = sort(pages, p => p, sorted);
         for (const p of sorted_pages) {
-            const is_last = (level == 0 || p == sorted_pages[pages.length - 1]);
+            const is_last = (level === 0 || p === sorted_pages[pages.length - 1]);
             const p_key = key + ":" + (p.key || p.name);
-            make_row(p, null, level, is_last && p.children.length == 0 && last_has_border, p_key);
+            make_row(p, null, level, is_last && p.children.length === 0 && last_has_border, p_key);
             make_page_rows(p.children, level + 1, is_last && last_has_border, p_key, p.options.sorted);
         }
     }
@@ -680,7 +677,7 @@ export const PageTable = ({ emptyCaption, aria_label, pages, crossrefs, sorted, 
         });
     }
 
-    if (rows.length == 0) {
+    if (rows.length === 0) {
         return <EmptyState>
             <EmptyStateBody>
                 {emptyCaption}
@@ -702,20 +699,21 @@ export const PageTable = ({ emptyCaption, aria_label, pages, crossrefs, sorted, 
     }
 
     return (
-        <div>
+        <>
             { narrow
                 ? rows
                 : <Table aria-label={aria_label}
-                       variant="compact">
+                      className="page-table"
+                      variant="compact">
                     { pages &&
                     <Thead>
                         <Tr>
-                            { show_icons && <Th /> }
+                            { show_icons && <Th aria-label={_("Category")} />}
                             <Th>{_("ID")}</Th>
                             <Th>{_("Type")}</Th>
                             <Th>{_("Location")}</Th>
                             <Th className="storage-size-column-header">{_("Size")}</Th>
-                            <Th />
+                            <Th aria-label={_("Actions")} />
                         </Tr>
                     </Thead>
                     }
@@ -725,7 +723,7 @@ export const PageTable = ({ emptyCaption, aria_label, pages, crossrefs, sorted, 
                 </Table>
             }
             {show_all_button}
-        </div>);
+        </>);
 };
 
 export const ChildrenTable = ({ emptyCaption, aria_label, page, show_icons }) => {
@@ -778,11 +776,13 @@ const StorageBreadcrumb = ({ page }) => {
     const parent_crumbs = [];
     let pp = page.parent;
     while (pp) {
-        parent_crumbs.unshift(
-            <BreadcrumbItem key={pp.name} to={"#" + cockpit.location.encode(pp.location)}>
-                {page_display_name(pp)}
-            </BreadcrumbItem>
-        );
+        if (pp.location) {
+            parent_crumbs.unshift(
+                <BreadcrumbItem key={pp.name} to={"#" + cockpit.location.encode(pp.location)}>
+                    {page_display_name(pp)}
+                </BreadcrumbItem>
+            );
+        }
         pp = pp.parent;
     }
 
@@ -795,13 +795,13 @@ const StorageBreadcrumb = ({ page }) => {
 
 export const StorageCard = ({ card, alert, alerts, actions, children }) => {
     return (
-        <Card data-test-card-title={card.title}>
+        <Card isPlain={card.page_location && card.page_location.length === 0} data-test-card-title={card.title}>
             { (client.in_anaconda_mode() && card.page.parent && !card.next) &&
             <CardBody>
                 <StorageBreadcrumb page={card.page} />
             </CardBody>
             }
-            <CardHeader actions={{ actions: actions || <ActionButtons card={card} /> }}>
+            <CardHeader actions={{ actions: actions || <Actions actions={card.actions} /> }}>
                 <CardTitle>{card.title}</CardTitle>
             </CardHeader>
             {(alert || (alerts && alerts.length > 0)) && <CardBody><AlertGroup>{alert}{alerts}</AlertGroup></CardBody>}
@@ -810,7 +810,7 @@ export const StorageCard = ({ card, alert, alerts, actions, children }) => {
         </Card>);
 };
 
-export const StorageDescription = ({ title, value, action, children }) => {
+export const StorageDescription = ({ title, value, action, help, children }) => {
     if (!value && !action && !children)
         return null;
 
@@ -825,9 +825,22 @@ export const StorageDescription = ({ title, value, action, children }) => {
         content = value || action;
     }
 
+    let help_popover;
+    if (help) {
+        help_popover = (
+            <Popover headerContent={help}>
+                <Button component="span" isInline variant="link" aria-label={_("more info")}>
+                    <Icon status="info">
+                        <HelpIcon />
+                    </Icon>
+                </Button>
+            </Popover>
+        );
+    }
+
     return (
         <DescriptionListGroup data-test-desc-title={title}>
-            <DescriptionListTerm>{title}</DescriptionListTerm>
+            <DescriptionListTerm>{title} {help_popover}</DescriptionListTerm>
             <DescriptionListDescription data-test-value={!(action && value)}>
                 {content}{children}
             </DescriptionListDescription>
@@ -838,13 +851,13 @@ export const StoragePage = ({ location, plot_state }) => {
     const page = get_page_from_location(location);
 
     return (
-        <Page id="storage">
+        <Page id="storage" className={"pf-m-no-sidebar" + (client.in_anaconda_mode() ? " anaconda" : "")}>
             { (!client.in_anaconda_mode() && page.parent) &&
-            <PageBreadcrumb stickyOnBreakpoint={{ default: "top" }}>
+            <PageBreadcrumb hasBodyWrapper={false} stickyOnBreakpoint={{ default: "top" }}>
                 <StorageBreadcrumb page={page} />
             </PageBreadcrumb>
             }
-            <PageSection isFilled={false} padding={client.in_anaconda_mode() ? { default: "noPadding" } : {}}>
+            <PageSection hasBodyWrapper={false} isFilled={false}>
                 <Stack hasGutter>
                     <MultipathAlert client={client} />
                     <PageCardStackItems page={page} plot_state={plot_state} noarrow />

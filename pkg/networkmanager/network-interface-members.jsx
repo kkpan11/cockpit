@@ -1,26 +1,13 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2021 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 import cockpit from "cockpit";
 import React, { useState, useContext } from "react";
 import { Button } from "@patternfly/react-core/dist/esm/components/Button/index.js";
 import { Card, CardHeader, CardTitle } from '@patternfly/react-core/dist/esm/components/Card/index.js';
-import { Dropdown, DropdownItem, DropdownToggle } from '@patternfly/react-core/dist/esm/deprecated/components/Dropdown/index.js';
+import { Dropdown, DropdownItem, DropdownList } from '@patternfly/react-core/dist/esm/components/Dropdown/index.js';
+import { MenuToggle } from "@patternfly/react-core/dist/esm/components/MenuToggle";
 import { Switch } from "@patternfly/react-core/dist/esm/components/Switch/index.js";
 import { MinusIcon } from '@patternfly/react-icons';
 
@@ -61,10 +48,10 @@ export const NetworkInterfaceMembers = ({
         members.forEach(iface => {
             const member_con = iface.MainConnection;
             const dev = iface.Device;
-            const isActive = (dev && dev.State == 100 && dev.Carrier === true);
+            const isActive = (dev && dev.State === 100 && dev.Carrier === true);
             const onoff = (
                 <Switch
-                    aria-label={cockpit.format(_("Switch of $0"), iface.Name)}
+                    aria-label={cockpit.format(_("Switch off $0"), iface.Name)}
                     isDisabled={!privileged}
                     isChecked={!!(dev && dev.ActiveConnection)}
                     onChange={(_event, val) => {
@@ -98,7 +85,7 @@ export const NetworkInterfaceMembers = ({
                         title: (
                             <div className="btn-group">
                                 {onoff}
-                                {privileged && <Button variant="secondary"
+                                {privileged && <Button icon={<MinusIcon />} variant="secondary"
                                     size="sm"
                                     onClick={syn_click(model, () => {
                                         with_checkpoint(
@@ -111,12 +98,10 @@ export const NetworkInterfaceMembers = ({
                                                 hack_does_add_or_remove: true
                                             });
                                         return false;
-                                    })}>
-                                    <MinusIcon />
-                                </Button>}
+                                    })} />}
                             </div>
                         ),
-                        props: { className: "pf-v5-c-table__action" }
+                        props: { className: "pf-v6-c-table__action" }
                     },
                 ],
                 props: {
@@ -132,7 +117,7 @@ export const NetworkInterfaceMembers = ({
                 row.columns.splice(1, 0, { title: samples ? cockpit.format_bits_per_sec(samples[1][0] * 8) : "" });
                 row.columns.splice(2, 0, { title: samples ? cockpit.format_bits_per_sec(samples[0][0] * 8) : "" });
             } else {
-                row.columns.splice(1, 0, { title: device_state_text() });
+                row.columns.splice(1, 0, { title: device_state_text(dev) });
                 row.columns.splice(1, 0, { title: "" });
             }
 
@@ -143,56 +128,65 @@ export const NetworkInterfaceMembers = ({
 
     const main_connection = iface.MainConnection;
     const cs = iface.MainConnection && connection_settings(iface.MainConnection);
+    const dropdownItems = [];
 
-    const dropdownItems = (
-        interfaces
-                .filter(i => {
-                    return (is_interesting_interface(i) &&
-                        !memberIfaces[i.Name] &&
-                        i != iface);
-                })
-                .map(iface => {
-                    const onClick = () => {
-                        with_checkpoint(
-                            model,
-                            () => {
-                                return set_member(model, main_connection, main_connection.Settings,
-                                                  cs.type, iface.Name, true)
-                                        .catch(show_unexpected_error);
-                            },
-                            {
-                                devices: iface.Device ? [iface.Device] : [],
-                                fail_text: fmt_to_fragments(_("Adding $0 will break the connection to the server, and will make the administration UI unavailable."), <b>{iface.Name}</b>),
-                                anyway_text: cockpit.format(_("Add $0"), iface.Name),
-                                hack_does_add_or_remove: true
-                            }
-                        );
-                    };
+    interfaces.forEach(i => {
+        if (is_interesting_interface(i) && !memberIfaces[i.Name] && i !== iface) {
+            const onClick = () => {
+                with_checkpoint(
+                    model,
+                    () => {
+                        return set_member(model, main_connection, main_connection.Settings,
+                                          cs.type, i.Name, true)
+                                .catch(show_unexpected_error);
+                    },
+                    {
+                        devices: i.Device ? [i.Device] : [],
+                        fail_text: fmt_to_fragments(_("Adding $0 will break the connection to the server, and will make the administration UI unavailable."), <b>{i.Name}</b>),
+                        anyway_text: cockpit.format(_("Add $0"), i.Name),
+                        hack_does_add_or_remove: true
+                    }
+                );
+            };
 
-                    return (
-                        <DropdownItem onClick={syn_click(model, onClick)}
-                                  key={"add-member-" + iface.Name}
-                                  component="button">
-                            {iface.Name}
-                        </DropdownItem>
-                    );
-                })
-    );
+            dropdownItems.push(
+                <DropdownItem onClick={syn_click(model, onClick)}
+                              key={"add-member-" + i.Name}
+                              component="button">
+                    {i.Name}
+                </DropdownItem>
+            );
+        }
+    });
+
+    // We want to show a Tooltip but that isn't supported by PatternFly.
+    // https://github.com/patternfly/patternfly-react/issues/12500
+    if (dropdownItems.length === 0) {
+        dropdownItems.push(
+            <DropdownItem isDisabled isAriaDisabled>
+                {_("No interfaces available")}
+            </DropdownItem>
+        );
+    }
 
     const add_btn = (
         <Dropdown onSelect={() => setIsOpen(false)}
-                  toggle={
-                      <DropdownToggle id="add-member" onToggle={(_, isOpen) => setIsOpen(isOpen)}>
+                  toggle={(toggleRef) => (
+                      <MenuToggle id="add-member" ref={toggleRef} onClick={() => setIsOpen(!isOpen)}>
                           {_("Add member")}
-                      </DropdownToggle>
-                  }
+                      </MenuToggle>
+                  )}
                   isOpen={isOpen}
-                  position="right"
-                  dropdownItems={dropdownItems} />
+                  popperProps={{ position: "right" }}
+        >
+            <DropdownList>
+                {dropdownItems}
+            </DropdownList>
+        </Dropdown>
     );
 
     return (
-        <Card id="network-interface-members" className="network-interface-members">
+        <Card isPlain id="network-interface-members" className="network-interface-members">
             <CardHeader actions={{ actions: add_btn }}>
                 <CardTitle component="h2">{_("Interface members")}</CardTitle>
             </CardHeader>
@@ -200,7 +194,7 @@ export const NetworkInterfaceMembers = ({
                           className="networking-interface-members"
                           variant='compact'
                           columns={[
-                              { title: (cs && cs.type == "bond") ? _("Interfaces") : _("Ports"), props: { width: 25 } },
+                              { title: (cs && cs.type === "bond") ? _("Interfaces") : _("Ports"), props: { width: 25 } },
                               { title: _("Sending"), props: { width: 25 } },
                               { title: _("Receiving"), props: { width: 25 } },
                               { title: "" },

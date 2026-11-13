@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2019 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
@@ -30,6 +16,7 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 
@@ -94,7 +81,8 @@ get_remaining_timeout (struct timespec *start,
   return true;
 }
 
-static int
+/* Return true if IO on fd is pending, false on timeout */
+static bool
 wait_for_io (struct timespec *start,
              int              fd,
              short            events,
@@ -107,17 +95,20 @@ wait_for_io (struct timespec *start,
   debug (SOCKET_IO, "wait_for_io(%d, %u, %ju):", fd, (unsigned) events, (uintmax_t) timeout_us);
 
   if (!get_remaining_timeout (start, &remaining, timeout_us))
-    return 0;
+    return false;
 
   debug (SOCKET_IO, "  -> waiting for %jd", (uintmax_t) remaining);
 
   do
     r = poll (&pfd, 1, (remaining + 999) / 1000);
-  while (r == -1 && errno == ENOENT);
+  while (r == -1 && errno == EINTR);
 
-  debug (SOCKET_IO, "  -> result is %d/%s", r, r < 0 ? strerror (errno) : "-");
+  if (r < 0)
+    err (EXIT_FAILURE, "poll() failed");
 
-  return r;
+  debug (SOCKET_IO, "  -> result is %d", r);
+
+  return r == 1;
 }
 
 /**
@@ -156,7 +147,7 @@ recv_all (int     fd,
    * extra byte, we'd need to have a separate throwaway variable and a
    * separately-coded function call.
    */
-  while (count < size && wait_for_io (&start, fd, POLLIN, timeout) == 1)
+  while (count < size && wait_for_io (&start, fd, POLLIN, timeout))
     {
       ssize_t s = recv (fd, buffer + count, size - count, MSG_DONTWAIT);
       debug (SOCKET_IO, "  -> recv returned %zd/%m", s);
@@ -182,7 +173,10 @@ recv_all (int     fd,
     }
 
   /* either the buffer overflowed or we timed out */
-  warnx ("recv_all() failed: buffer is full and no EOF received");
+  if (count >= size)
+    warnx ("recv_all() failed: buffer is full and no EOF received");
+  else
+    warnx ("recv_all() failed: timeout; got %zu bytes, size == %zu", count, size);
   return -1;
 }
 
@@ -247,7 +241,7 @@ send_all (int         fd,
   struct timespec start = { 0, 0 };
   size_t count = 0;
 
-  while (count < size && wait_for_io (&start, fd, POLLOUT, timeout) == 1)
+  while (count < size && wait_for_io (&start, fd, POLLOUT, timeout))
     {
       ssize_t s = send (fd, buffer + count, size - count, MSG_DONTWAIT | MSG_NOSIGNAL);
 

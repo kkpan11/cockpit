@@ -1,42 +1,13 @@
 /*
+ * SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2014 Red Hat Inc.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- *     * Redistributions of source code must retain the above
- *       copyright notice, this list of conditions and the
- *       following disclaimer.
- *     * Redistributions in binary form must reproduce the
- *       above copyright notice, this list of conditions and
- *       the following disclaimer in the documentation and/or
- *       other materials provided with the distribution.
- *     * The names of contributors to this software may not be
- *       used to endorse or promote products derived from this
- *       software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
- * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- * COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT,
- * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING,
- * BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS
- * OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED
- * AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF
- * THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
- * DAMAGE.
- *
  * Author: Stef Walter <stefw@redhat.com>
  */
 
 #include "config.h"
 
-#include "testlib/retest.h"
-
 #include "cockpitauthorize.h"
+#include "testlib/cockpittest.h"
 
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -55,11 +26,11 @@ static char *user;
 static void
 test_logger (const char *msg)
 {
-  assert (msg != NULL);
+  g_assert_nonnull (msg);
 
   if (expect_message)
     {
-      assert_str_contains (msg, expect_message);
+      g_assert_nonnull (strstr (msg, expect_message));
       expect_message = NULL;
     }
   else
@@ -69,24 +40,26 @@ test_logger (const char *msg)
 }
 
 static void
-setup (void *arg)
+setup (char **user_ptr,
+       gconstpointer data)
 {
   struct passwd *pw;
 
   expect_message = NULL;
 
   pw = getpwuid (getuid ());
-  assert (pw != NULL);
-  user = strdup (pw->pw_name);
-  assert (user != NULL);
+  g_assert_nonnull (pw);
+  *user_ptr = g_strdup (pw->pw_name);
+  user = *user_ptr;
 }
 
 static void
-teardown (void *arg)
+teardown (char **user_ptr,
+          gconstpointer data)
 {
   if (expect_message)
-    assert_fail ("message didn't get logged", expect_message);
-  free (user);
+    g_assert_not_reached ();
+  g_free (*user_ptr);
   user = NULL;
 }
 
@@ -109,24 +82,24 @@ static ChallengeFixture type_fixtures[] = {
 };
 
 static void
-test_type (void *data)
+test_type (char **user_ptr,
+           gconstpointer data)
 {
-  ChallengeFixture *fix = data;
+  const ChallengeFixture *fix = data;
   const char *result;
-  char *type;
+  g_autofree char *type = NULL;
 
   result = cockpit_authorize_type (fix->input, &type);
   if (fix->errn != 0)
-    assert_num_eq (errno, fix->errn);
+    g_assert_cmpint (errno, ==, fix->errn);
   if (fix->ret)
     {
-      assert_str_eq (result, fix->ret);
-      assert_str_eq (type, fix->expected);
-      free (type);
+      g_assert_cmpstr (result, ==, fix->ret);
+      g_assert_cmpstr (type, ==, fix->expected);
     }
   else
     {
-      assert (result == NULL);
+      g_assert_null (result);
     }
 }
 
@@ -142,27 +115,27 @@ static ChallengeFixture subject_fixtures[] = {
 };
 
 static void
-test_subject (void *data)
+test_subject (char **user_ptr,
+              gconstpointer data)
 {
-  ChallengeFixture *fix = data;
+  const ChallengeFixture *fix = data;
   const char *result;
-  char *subject = NULL;
+  g_autofree char *subject = NULL;
 
   if (fix->ret == NULL)
     expect_message = "\"authorize\" message";
 
   result = cockpit_authorize_subject (fix->input, &subject);
   if (fix->errn != 0)
-    assert_num_eq (errno, fix->errn);
+    g_assert_cmpint (errno, ==, fix->errn);
   if (fix->ret)
     {
-      assert_str_eq (result, fix->ret);
-      assert_str_eq (subject, fix->expected);
-      free (subject);
+      g_assert_cmpstr (result, ==, fix->ret);
+      g_assert_cmpstr (subject, ==, fix->expected);
     }
   else
     {
-      assert (result == NULL);
+      g_assert_null (result);
     }
 }
 
@@ -171,54 +144,56 @@ static ChallengeFixture basic_fixtures[] = {
   { "Basic!c2NydWZmeTp6ZXJvZw==", NULL, NULL, EINVAL },
   { "Basic c2NydWZ!!eXplcm9n", NULL, NULL, EINVAL },
   { "Basic c2NydWZmeXplcm9n", NULL, NULL, EINVAL },
-  { "Basic!c2NydWZmeTp6ZXJvZw==", NULL, NULL, EINVAL },
   { "Basic", NULL, "", 0 },
   { NULL },
 };
 
 static void
-test_parse_basic (void *data)
+test_parse_basic (char **user_ptr,
+                  gconstpointer data)
 {
-  ChallengeFixture *fix = data;
-  char *user = "blah";
-  char *password = NULL;
+  const ChallengeFixture *fix = data;
+  const char *original = "blah";
+  char *user = (char *)original;
+  g_autofree char *password = NULL;
 
   if (fix->ret == NULL)
     expect_message = "invalid";
 
   password = cockpit_authorize_parse_basic (fix->input, &user);
   if (fix->errn != 0)
-    assert_num_eq (errno, fix->errn);
+    g_assert_cmpint (errno, ==, fix->errn);
   if (fix->ret)
     {
-      assert_str_eq (password, fix->ret);
+      g_assert_cmpstr (password, ==, fix->ret);
       if (fix->expected)
-        assert_str_eq (user, fix->expected);
+        g_assert_cmpstr (user, ==, fix->expected);
       else
-        assert (user == NULL);
-      free (password);
-      free (user);
+        g_assert_null (user);
     }
   else
     {
-      assert (password == NULL);
-      assert_str_eq (user, "blah"); /* not reassigned */
+      g_assert_null (password);
+      g_assert_cmpstr (user, ==, "blah"); /* not reassigned */
     }
+
+  if (user != original)
+    g_free (user);
+  g_clear_pointer (&password, g_free);
 
   if (fix->ret == NULL)
     expect_message = "invalid";
 
   password = cockpit_authorize_parse_basic (fix->input, NULL);
   if (fix->errn != 0)
-    assert_num_eq (errno, fix->errn);
+    g_assert_cmpint (errno, ==, fix->errn);
   if (fix->ret)
     {
-      assert_str_eq (password, fix->ret);
-      free (password);
+      g_assert_cmpstr (password, ==, fix->ret);
     }
   else
     {
-      assert (password == NULL);
+      g_assert_null (password);
     }
 }
 
@@ -233,50 +208,50 @@ static NegotiateFixture parse_negotiate_fixtures[] = {
   { "Negotiate c2NydWZmeTp6ZXJvZw==", 13, "scruffy:zerog", 0 },
   { "Negotiate!c2NydWZmeTp6ZXJvZw==", 0, NULL, EINVAL },
   { "Negotiate c2Nyd!!ZmeTp6ZXJvZw==", 0, NULL, EINVAL },
-  { "Negotiate!c2NydWZmeTp6ZXJvZw==", 0, NULL, EINVAL },
   { "Negotiate", 0, "", 0 },
   { NULL },
 };
 
 static void
-test_parse_negotiate (void *data)
+test_parse_negotiate (char **user_ptr,
+                      gconstpointer data)
 {
-  NegotiateFixture *fix = data;
+  const NegotiateFixture *fix = data;
   size_t length = 0xFFFFDD;
-  void *result = NULL;
+  g_autofree void *result = NULL;
 
   if (fix->ret == NULL)
     expect_message = "invalid";
 
   result = cockpit_authorize_parse_negotiate (fix->input, &length);
   if (fix->errn != 0)
-    assert_num_eq (errno, fix->errn);
+    g_assert_cmpint (errno, ==, fix->errn);
   if (fix->ret)
     {
-      assert_num_eq (fix->length, length);
-      assert (memcmp (result, fix->ret, length) == 0);
-      free (result);
+      g_assert_cmpuint (fix->length, ==, length);
+      g_assert_cmpint (memcmp (result, fix->ret, length), ==, 0);
     }
   else
     {
-      assert (result == NULL);
-      assert_num_eq (length, 0xFFFFDD); /* not reassigned */
+      g_assert_null (result);
+      g_assert_cmpuint (length, ==, 0xFFFFDD); /* not reassigned */
     }
+
+  g_clear_pointer (&result, g_free);
 
   if (fix->ret == NULL)
     expect_message = "invalid";
 
   result = cockpit_authorize_parse_negotiate (fix->input, NULL);
   if (fix->errn != 0)
-    assert_num_eq (errno, fix->errn);
+    g_assert_cmpint (errno, ==, fix->errn);
   if (fix->ret)
     {
-      assert (memcmp (result, fix->ret, length) == 0);
-      free (result);
+      g_assert_cmpint (memcmp (result, fix->ret, fix->length), ==, 0);
     }
   else
     {
-      assert (result == NULL);
+      g_assert_null (result);
     }
 }
 
@@ -287,25 +262,25 @@ static NegotiateFixture build_negotiate_fixtures[] = {
 };
 
 static void
-test_build_negotiate (void *data)
+test_build_negotiate (char **user_ptr,
+                      gconstpointer data)
 {
-  NegotiateFixture *fix = data;
-  char *result = NULL;
+  const NegotiateFixture *fix = data;
+  g_autofree char *result = NULL;
 
   if (fix->ret == NULL)
     expect_message = "invalid";
 
   result = cockpit_authorize_build_negotiate (fix->input, fix->length);
   if (fix->errn != 0)
-    assert_num_eq (errno, fix->errn);
+    g_assert_cmpint (errno, ==, fix->errn);
   if (fix->ret)
     {
-      assert_str_eq (result, fix->ret);
-      free (result);
+      g_assert_cmpstr (result, ==, fix->ret);
     }
   else
     {
-      assert (result == NULL);
+      g_assert_null (result);
     }
 }
 
@@ -324,25 +299,25 @@ static XConversationFixture parse_x_conversation_fixtures[] = {
 };
 
 static void
-test_parse_x_conversation (void *data)
+test_parse_x_conversation (char **user_ptr,
+                           gconstpointer data)
 {
-  XConversationFixture *fix = data;
-  char *result = NULL;
+  const XConversationFixture *fix = data;
+  g_autofree char *result = NULL;
 
   if (fix->ret == NULL)
     expect_message = "invalid";
 
   result = cockpit_authorize_parse_x_conversation (fix->input, NULL);
   if (fix->errn != 0)
-    assert_num_eq (errno, fix->errn);
+    g_assert_cmpint (errno, ==, fix->errn);
   if (fix->ret)
     {
-      assert_str_eq (result, fix->ret);
-      free (result);
+      g_assert_cmpstr (result, ==, fix->ret);
     }
   else
     {
-      assert (result == NULL);
+      g_assert_null (result);
     }
 }
 
@@ -355,35 +330,33 @@ static XConversationFixture build_x_conversation_fixtures[] = {
 };
 
 static void
-test_build_x_conversation (void *data)
+test_build_x_conversation (char **user_ptr,
+                           gconstpointer data)
 {
-  XConversationFixture *fix = data;
-  char *conversation = NULL;
-  char *result = NULL;
+  const XConversationFixture *fix = data;
+  g_autofree char *conversation = NULL;
+  g_autofree char *result = NULL;
 
   if (fix->ret == NULL)
     expect_message = "invalid";
 
   if (fix->conversation)
-    conversation = strdup (fix->conversation);
+    conversation = g_strdup (fix->conversation);
 
   result = cockpit_authorize_build_x_conversation (fix->input, &conversation);
   if (fix->errn != 0)
-    assert_num_eq (errno, fix->errn);
+    g_assert_cmpint (errno, ==, fix->errn);
   if (fix->ret)
     {
       if (strstr (fix->ret, "X-Conversation"))
-        assert_str_eq (result, fix->ret);
+        g_assert_cmpstr (result, ==, fix->ret);
       else
-        assert (strstr (result, fix->ret));
-      free (result);
+        g_assert_nonnull (strstr (result, fix->ret));
     }
   else
     {
-      assert (result == NULL);
+      g_assert_null (result);
     }
-
-  free (conversation);
 }
 
 int
@@ -396,43 +369,50 @@ main (int argc,
   signal (SIGPIPE, SIG_IGN);
   cockpit_authorize_logger (test_logger, 0);
 
-  re_fixture (setup, teardown);
+  cockpit_test_init (&argc, &argv);
 
   for (i = 0; type_fixtures[i].input != NULL; i++)
     {
-      re_testx (test_type, type_fixtures + i,
-                "/authorize/type/%s", type_fixtures[i].input);
+      g_autofree gchar *name = g_strdup_printf ("/authorize/type/%s", type_fixtures[i].input);
+      g_test_add (name, char *, type_fixtures + i,
+                  setup, test_type, teardown);
     }
   for (i = 0; subject_fixtures[i].input != NULL; i++)
     {
-      re_testx (test_subject, subject_fixtures + i,
-                "/authorize/subject/%s", subject_fixtures[i].input);
+      g_autofree gchar *name = g_strdup_printf ("/authorize/subject/%s", subject_fixtures[i].input);
+      g_test_add (name, char *, subject_fixtures + i,
+                  setup, test_subject, teardown);
     }
   for (i = 0; basic_fixtures[i].input != NULL; i++)
     {
-      re_testx (test_parse_basic, basic_fixtures + i,
-                "/authorize/basic/%s", basic_fixtures[i].input);
+      g_autofree gchar *name = g_strdup_printf ("/authorize/basic/%s", basic_fixtures[i].input);
+      g_test_add (name, char *, basic_fixtures + i,
+                  setup, test_parse_basic, teardown);
     }
   for (i = 0; parse_negotiate_fixtures[i].input != NULL; i++)
     {
-      re_testx (test_parse_negotiate, parse_negotiate_fixtures + i,
-                "/authorize/negotiate/parse/%s", parse_negotiate_fixtures[i].input);
+      g_autofree gchar *name = g_strdup_printf ("/authorize/negotiate/parse/%s", parse_negotiate_fixtures[i].input);
+      g_test_add (name, char *, parse_negotiate_fixtures + i,
+                  setup, test_parse_negotiate, teardown);
     }
   for (i = 0; build_negotiate_fixtures[i].ret != NULL; i++)
     {
-      re_testx (test_build_negotiate, build_negotiate_fixtures + i,
-                "/authorize/negotiate/build/%s", build_negotiate_fixtures[i].ret);
+      g_autofree gchar *name = g_strdup_printf ("/authorize/negotiate/build/%s", build_negotiate_fixtures[i].ret);
+      g_test_add (name, char *, build_negotiate_fixtures + i,
+                  setup, test_build_negotiate, teardown);
     }
   for (i = 0; parse_x_conversation_fixtures[i].input != NULL; i++)
     {
-      re_testx (test_parse_x_conversation, parse_x_conversation_fixtures + i,
-                "/authorize/x-conversation/parse/%s", parse_x_conversation_fixtures[i].input);
+      g_autofree gchar *name = g_strdup_printf ("/authorize/x-conversation/parse/%s", parse_x_conversation_fixtures[i].input);
+      g_test_add (name, char *, parse_x_conversation_fixtures + i,
+                  setup, test_parse_x_conversation, teardown);
     }
   for (i = 0; build_x_conversation_fixtures[i].input || build_x_conversation_fixtures[i].ret; i++)
     {
-      re_testx (test_build_x_conversation, build_x_conversation_fixtures + i,
-                "/authorize/x-conversation/build/%s", build_x_conversation_fixtures[i].input);
+      g_autofree gchar *name = g_strdup_printf ("/authorize/x-conversation/build/%d", i);
+      g_test_add (name, char *, build_x_conversation_fixtures + i,
+                  setup, test_build_x_conversation, teardown);
     }
 
-  return re_test_run (argc, argv);
+  return g_test_run ();
 }

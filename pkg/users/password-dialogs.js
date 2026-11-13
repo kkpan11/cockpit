@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2020 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from 'cockpit';
@@ -67,7 +53,7 @@ function passwd_self(old_pass, new_pass) {
                     resolve();
                 })
                 .fail(function(ex) {
-                    if (ex.exit_status || ex.problem == "timeout")
+                    if (ex.exit_status || ex.problem === "timeout")
                         ex = new Error(failure);
                     reject(ex);
                 })
@@ -157,7 +143,7 @@ function SetPasswordDialogBody({ state, errors, change }) {
 export function set_password_dialog(account, current_user) {
     let dlg = null;
 
-    const change_self = (account.name == current_user && !superuser.allowed);
+    const change_self = (account.name === current_user && !superuser.allowed);
 
     const state = {
         need_old: change_self,
@@ -175,7 +161,7 @@ export function set_password_dialog(account, current_user) {
     function change(field, value) {
         state[field] = value;
 
-        if (state.password != old_password) {
+        if (state.password !== old_password) {
             state.confirm_weak = false;
             old_password = state.password;
             errors = { };
@@ -187,7 +173,7 @@ export function set_password_dialog(account, current_user) {
     function validate(force, password, password_confirm) {
         const errs = { };
 
-        if (password != password_confirm)
+        if (password !== password_confirm)
             errs.password_confirm = _("The passwords do not match");
 
         if (password.length > 256)
@@ -279,7 +265,7 @@ export function reset_password_dialog(account) {
                 style: "primary",
                 clicked: () => {
                     return cockpit.spawn(["passwd", "-e", account.name],
-                                         { superuser: true, err: "message" });
+                                         { superuser: "require", err: "message" });
                 }
             }
         ]

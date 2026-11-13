@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2023 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import client from "./client.js";
@@ -31,12 +17,12 @@ function parse_parent_from_options(options) {
 }
 
 function uuid_equal(a, b) {
-    return a.replace("-", "").toUpperCase() == b.replace("-", "").toUpperCase();
+    return a.replace("-", "").toUpperCase() === b.replace("-", "").toUpperCase();
 }
 
 function device_name(block) {
     // Prefer symlinks in /dev/stratis/.
-    return (block.Symlinks.map(decode_filename).find(n => n.indexOf("/dev/stratis/") == 0) ||
+    return (block.Symlinks.map(decode_filename).find(n => n.indexOf("/dev/stratis/") === 0) ||
             decode_filename(block.PreferredDevice));
 }
 
@@ -65,7 +51,7 @@ export function export_mount_point_mapping() {
         let subvols;
 
         for (const c of config) {
-            if (c[0] == "fstab") {
+            if (c[0] === "fstab") {
                 const o = decode_filename(c[1].opts.v);
                 if (for_parent && !uuid_equal(parse_parent_from_options(o), for_parent))
                     continue;
@@ -94,7 +80,7 @@ export function export_mount_point_mapping() {
             };
 
         for (const c of config) {
-            if (c[0] == "crypttab") {
+            if (c[0] === "crypttab") {
                 const o = decode_filename(c[1].options.v);
                 if (for_parent && !uuid_equal(parse_parent_from_options(o), for_parent))
                     continue;
@@ -102,7 +88,7 @@ export function export_mount_point_mapping() {
                 const device = decode_filename(c[1].device.v);
                 let content_info;
                 if (device.startsWith("UUID=")) {
-                    content_info = tab_info(config, device.substr(5));
+                    content_info = tab_info(config, device.substring(5));
                 }
 
                 return {
@@ -114,13 +100,13 @@ export function export_mount_point_mapping() {
     }
 
     function block_info(block) {
-        if (block.IdUsage == "filesystem") {
+        if (block.IdUsage === "filesystem") {
             return tab_info(block.Configuration);
-        } else if (block.IdUsage == "other" && block.IdType == "swap") {
+        } else if (block.IdUsage === "other" && block.IdType === "swap") {
             return {
                 type: "swap",
             };
-        } else if (block.IdUsage == "crypto") {
+        } else if (block.IdUsage === "crypto") {
             const cleartext_block = client.blocks_cleartext[block.path];
 
             let content_info;

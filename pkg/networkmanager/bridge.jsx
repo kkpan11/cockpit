@@ -1,21 +1,6 @@
 /*
-
- * This file is part of Cockpit.
- *
  * Copyright (C) 2021 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import React, { useState, useContext } from 'react';
@@ -83,8 +68,8 @@ export const BridgeDialog = ({ connection, dev, settings }) => {
         });
 
         // Prevent dialog from closing because of <form> onsubmit event
-        if (event)
-            event.preventDefault();
+        if (ev)
+            ev.preventDefault();
 
         return false;
     };
@@ -105,16 +90,16 @@ export const BridgeDialog = ({ connection, dev, settings }) => {
                     <Checkbox id={idPrefix + "-stp-enabled-input"} isChecked={stp} onChange={(_, s) => setStp(s)} label={_("Spanning tree protocol (STP)")} />
                     {stp && <>
                         <FormGroup fieldId="network-bridge-stp-settings-priority-input" label={_("STP priority")}>
-                            <TextInput id="network-bridge-stp-settings-priority-input" className="network-number-field" value={priority} onChange={(_event, value) => setPriority(value)} />
+                            <TextInput id="network-bridge-stp-settings-priority-input" className="network-number-field" value={priority} onChange={(_event, value) => setPriority(Number.parseInt(value))} />
                         </FormGroup>
                         <FormGroup fieldId="network-bridge-stp-settings-forward-delay-input" label={_("STP forward delay")}>
-                            <TextInput id="network-bridge-stp-settings-forward-delay-input" className="network-number-field" value={forwardDelay} onChange={(_event, value) => setForwardDelay(value)} />
+                            <TextInput id="network-bridge-stp-settings-forward-delay-input" className="network-number-field" value={forwardDelay} onChange={(_event, value) => setForwardDelay(Number.parseInt(value))} />
                         </FormGroup>
                         <FormGroup fieldId="network-bridge-stp-settings-hello-time-input" label={_("STP hello time")}>
-                            <TextInput id="network-bridge-stp-settings-hello-time-input" className="network-number-field" value={helloTime} onChange={(_event, value) => setHelloTime(value)} />
+                            <TextInput id="network-bridge-stp-settings-hello-time-input" className="network-number-field" value={helloTime} onChange={(_event, value) => setHelloTime(Number.parseInt(value))} />
                         </FormGroup>
                         <FormGroup fieldId="network-bridge-stp-settings-max-age-input" label={_("STP maximum message age")}>
-                            <TextInput id="network-bridge-stp-settings-max-age-input" className="network-number-field" value={maxAge} onChange={(_event, value) => setMaxAge(value)} />
+                            <TextInput id="network-bridge-stp-settings-max-age-input" className="network-number-field" value={maxAge} onChange={(_event, value) => setMaxAge(Number.parseInt(value))} />
                         </FormGroup>
                     </>}
                 </FormGroup>

@@ -1,23 +1,12 @@
-# This file is part of Cockpit.
 #
 # Copyright (C) 2022 Red Hat, Inc.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 
 import argparse
 import asyncio
 import contextlib
+import grp
 import json
 import logging
 import os
@@ -26,7 +15,8 @@ import shlex
 import socket
 import stat
 import subprocess
-from typing import Iterable, List, Optional, Sequence, Tuple, Type
+import sys
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Type
 
 from cockpit._vendor.ferny import interaction_client
 from cockpit._vendor.systemd_ctypes import bus, run_async
@@ -37,7 +27,7 @@ from .channel import ChannelRoutingRule
 from .channels import CHANNEL_TYPES
 from .config import Config, Environment
 from .internal_endpoints import EXPORTS
-from .jsonutil import JsonError, JsonObject, get_dict
+from .jsonutil import JsonError, JsonObject, JsonValue, get_dict
 from .packages import BridgeConfig, Packages, PackagesListener
 from .peer import PeersRoutingRule
 from .remote import HostRoutingRule
@@ -62,6 +52,7 @@ class InternalBus:
 
 
 class Bridge(Router, PackagesListener):
+    channels: ChannelRoutingRule
     internal_bus: InternalBus
     packages: Optional[Packages]
     bridge_configs: Sequence[BridgeConfig]
@@ -75,7 +66,8 @@ class Bridge(Router, PackagesListener):
         self.superuser_rule = SuperuserRoutingRule(self, privileged=args.privileged)
         self.internal_bus.export('/superuser', self.superuser_rule)
 
-        self.internal_bus.export('/config', Config())
+        config = Config()
+        self.internal_bus.export('/config', config)
         self.internal_bus.export('/environment', Environment())
 
         self.peers_rule = PeersRoutingRule(self)
@@ -88,6 +80,12 @@ class Bridge(Router, PackagesListener):
                     "spawn": ["sudo", "-k", "-A", "python3", "-ic", "# cockpit-bridge", "--privileged"],
                     "environ": ["SUDO_ASKPASS=ferny-askpass"],
                 }),
+                BridgeConfig({
+                    "privileged": True,
+                    "polkit": True,
+                    "method": "StartTransientUnit",
+                    "spawn": [sys.executable, "-ic", "# cockpit-bridge", "--privileged"],
+                }),
             ))
             self.packages = None
         elif args.privileged:
@@ -97,15 +95,47 @@ class Bridge(Router, PackagesListener):
             self.internal_bus.export('/packages', self.packages)
             self.packages_loaded()
 
+        self.channels = ChannelRoutingRule(self, CHANNEL_TYPES)
+
+        session_timeout = 0
+        if not args.privileged:
+            session_timeout = config.get_u_int("Session", "IdleTimeout", 0, 240, 0) * 60
+
         super().__init__([
             HostRoutingRule(self),
             self.superuser_rule,
-            ChannelRoutingRule(self, CHANNEL_TYPES),
+            self.channels,
             self.peers_rule,
-        ])
+        ], session_timeout=session_timeout)
+
+    def info(self) -> JsonObject:
+        pw = pwd.getpwuid(os.getuid())
+
+        # We want the primary group first in the list, without duplicates.
+        # This is a bit awkward because `set()` is unordered...
+        group = grp.getgrgid(pw.pw_gid).gr_name
+        groups = [group]
+        for gr in grp.getgrall():
+            if pw.pw_name in gr.gr_mem and gr.gr_name not in groups:
+                groups.append(gr.gr_name)
+
+        return {
+            'channels': self.channels.capabilities(),
+            'os_release': self.get_os_release(),
+            'user': {
+                'fullname': pw.pw_gecos,
+                'gid': pw.pw_gid,
+                'group': group,
+                'groups': groups,
+                'home': pw.pw_dir,
+                'name': pw.pw_name,
+                'shell': pw.pw_shell,
+                'uid': pw.pw_uid,
+            },
+        }
 
     @staticmethod
-    def get_os_release():
+    def get_os_release() -> JsonObject:
         try:
             file = open('/etc/os-release', encoding='utf-8')
         except FileNotFoundError:
@@ -115,19 +145,8 @@ class Bridge(Router, PackagesListener):
                 logger.warning("Neither /etc/os-release nor /usr/lib/os-release exists")
                 return {}
 
-        os_release = {}
-        for line in file.readlines():
-            line = line.strip()
-            if not line or line.startswith('#'):
-                continue
-            try:
-                k, v = line.split('=')
-                (v_parsed, ) = shlex.split(v)  # expect exactly one token
-            except ValueError:
-                logger.warning('Ignoring invalid line in os-release: %r', line)
-                continue
-            os_release[k] = v_parsed
-        return os_release
+        with file:
+            return parse_os_release(file.read())
 
     def do_init(self, message: JsonObject) -> None:
         # we're only interested in the case where this is a dict, but
@@ -137,7 +156,7 @@ class Bridge(Router, PackagesListener):
             self.superuser_rule.init(superuser)
 
     def do_send_init(self) -> None:
-        init_args = {
+        init_args: 'dict[str, JsonValue]' = {
             'capabilities': {'explicit-superuser': True},
             'command': 'init',
             'os-release': self.get_os_release(),
@@ -145,7 +164,7 @@ class Bridge(Router, PackagesListener):
         }
 
         if self.packages is not None:
-            init_args['packages'] = {p: None for p in self.packages.packages}
+            init_args['packages'] = dict.fromkeys(self.packages.packages)
 
         self.write_control(init_args)
 
@@ -181,7 +200,7 @@ async def run(args) -> None:
         pass
 
 
-def try_to_receive_stderr():
+def try_to_receive_stderr() -> None:
     try:
         ours, theirs = socket.socketpair()
         with ours:
@@ -240,6 +259,22 @@ def setup_logging(*, debug: bool) -> None:
                 continue
 
             logging.getLogger(module).setLevel(logging.DEBUG)
+
+
+def parse_os_release(text: str) -> Dict[str, str]:
+    os_release = {}
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        try:
+            k, v = line.split('=')
+            (v_parsed, ) = shlex.split(v)  # expect exactly one token
+        except ValueError:
+            logger.warning('Ignoring invalid line in os-release: %r', line)
+            continue
+        os_release[k] = v_parsed
+    return os_release
 
 
 def start_ssh_agent() -> None:

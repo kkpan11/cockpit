@@ -1,32 +1,19 @@
 #!/usr/bin/python3 -cimport os, sys; os.execv(os.path.dirname(sys.argv[1]) + "/../common/pywrap", sys.argv)
 
-# This file is part of Cockpit.
 #
 # Copyright (C) 2013 Red Hat, Inc.
-#
-# Cockpit is free software; you can redistribute it and/or modify it
-# under the terms of the GNU Lesser General Public License as published by
-# the Free Software Foundation; either version 2.1 of the License, or
-# (at your option) any later version.
-#
-# Cockpit is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-# Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
 
 import netlib
 import testlib
 from lib.constants import TEST_OS_DEFAULT
 
 
-@testlib.skipDistroPackage()
 class TestNetworkingSettings(netlib.NetworkCase):
     provision = {
-        "machine1": {"memory_mb": 512},
-        "machine2": {"image": TEST_OS_DEFAULT, "address": "10.111.113.2/20", "dhcp": True, "memory_mb": 256}
+        "machine1": {},
+        "machine2": {"image": TEST_OS_DEFAULT, "address": "10.111.113.2/20", "dhcp": True}
     }
 
     def testNoConnectionSettings(self):
@@ -57,6 +44,7 @@ class TestNetworkingSettings(netlib.NetworkCase):
         b.click("#network-ip-settings-save")
         b.wait_not_present("#network-ip-settings-dialog")
         self.wait_for_iface_setting('IPv4', 'Address 1.2.3.4/24')
+        self.toggle_onoff("label[for='interface-switch']")
 
         def assert_connection_setting(con_id, field, value):
             self.assertEqual(m.execute(f'nmcli -m tabular -t -f {field} con show "{con_id}"').strip(),
@@ -68,7 +56,7 @@ class TestNetworkingSettings(netlib.NetworkCase):
 
         # The interface will be activated. Deactivate it.
         self.wait_for_iface_setting('Status', '1.2.3.4/24')
-        self.toggle_onoff(f".pf-v5-c-card__header:contains('{iface}')")
+        self.toggle_onoff("label[for='interface-switch']")
         self.wait_for_iface_setting('Status', 'Inactive')
 
         # Delete the connection settings again and wait for the ghost
@@ -77,14 +65,14 @@ class TestNetworkingSettings(netlib.NetworkCase):
         self.wait_for_iface_setting('IPv4', 'Automatic')
 
         # Activate with ghost settings
-        self.toggle_onoff(f".pf-v5-c-card__header:contains('{iface}')")
+        self.toggle_onoff("label[for='interface-switch']")
         self.wait_for_iface_setting('Status', '10.111.')
 
         # Check again that we now have connection settings
         con_id = testlib.wait(lambda: self.iface_con_id(iface))
         assert_connection_setting(con_id, "ipv4.method", "auto")
 
-        # Change some more settins and check that the actual config
+        # Change some more settings and check that the actual config
         # and dialog reflects the change
 
         self.configure_iface_setting('IPv4')
@@ -129,13 +117,13 @@ class TestNetworkingSettings(netlib.NetworkCase):
 
         # Check that IPv4/IPv6 settings dialogs only show the supported IP methods for wireguard
         # Skip images without the wireguard-tools package
-        if m.image not in ["rhel4edge", "centos-8-stream"] and not m.image.startswith("rhel-8"):
+        if not m.image.startswith("rhel-8"):
             b.go("/network")
             b.click("#networking-add-wg")
             b.set_input_text("#network-wireguard-settings-addresses-input", "1.2.3.4/24")
             wg_iface = b.val("#network-wireguard-settings-interface-name-input")
             b.click("#network-wireguard-settings-save")
-            self.select_iface(wg_iface)
+            b.wait_text("#network-interface-name", wg_iface)
             self.configure_iface_setting("IPv4")
             b._wait_present("#network-ip-settings-select-method option[value='manual']")
             b._wait_present("#network-ip-settings-select-method option[value='disabled']")
@@ -209,12 +197,94 @@ class TestNetworkingSettings(netlib.NetworkCase):
         self.configure_iface_setting('IPv6')
         b.wait_visible("#network-ip-settings-dialog")
 
-        b.wait_val('#network-ip-settings-route-address-0', "fe80:2:0:0:0:0:0:0")
+        b.wait_val('#network-ip-settings-route-address-0', "fe80:2::")
         b.wait_val('#network-ip-settings-route-netmask-0', "60")
-        b.wait_val('#network-ip-settings-route-gateway-0', "fe80:2:0:0:0:0:0:3")
+        b.wait_val('#network-ip-settings-route-gateway-0', "fe80:2::3")
         b.wait_val('#network-ip-settings-route-metric-0', "42")
         b.click('#network-ip-settings-cancel')
         b.wait_not_present("#network-ip-settings-dialog")
+
+        # Test editing connection without a hardcoded interface
+        iface = self.add_iface(activate=False)
+        con_name = "cockpit-test-con"
+        b.go("/network")
+        b.wait_visible("#networking")
+
+        m.execute(f"""
+            nmcli con add con-name {con_name} connection.type 802-3-ethernet connection.autoconnect no \
+                ipv4.meth auto ipv6.meth auto ipv6.addr-gen-mode eui64
+            nmcli con sh | grep -q '{con_name}'
+            nmcli con up {con_name} ifname {iface}
+            # check that no connection.interface-name is configured
+            [ -z "$(nmcli --get connection.interface-name con sh {con_name})" ]
+        """)
+        self.addCleanup(m.execute, f"nmcli con del {con_name}")
+
+        self.select_iface(iface)
+        b.wait_visible("#network-interface")
+        self.configure_iface_setting('IPv4')
+        b.click("#network-ip-settings-dns-add")
+        b.set_input_text('#network-ip-settings-dns-server-0', "8.8.8.8")
+        b.click("#network-ip-settings-save")
+        # page should still display interface detail page after saving
+        b.wait_visible("#network-interface")
+        self.wait_for_iface_setting("IPv4", "AutomaticAdditional DNS 8.8.8.8")
+
+        # Test multiconnect connection
+        b.go("/network")
+        b.wait_visible("#networking")
+        iface1 = self.add_iface(activate=False)
+        iface2 = self.add_iface(activate=False)
+        # add temporary connections with multiconnect enabled
+        m.execute(f"""
+            nmcli con add con-name 'Wired Connection' save no connection.type 802-3-ethernet \
+                connection.autoconnect no connection.multi-connect multiple \
+                ipv4.meth auto ipv6.meth auto ipv6.addr-gen-mode eui64
+            nmcli con sh | grep -q 'Wired Connection'
+
+            for IFACE in {iface1} {iface2}; do
+                nmcli con up 'Wired Connection' ifname ${{IFACE}}
+            done
+        """)
+
+        # Edit interface with nonpersistent Wired Connection active
+        self.select_iface(iface1)
+        b.wait_visible("#network-interface")
+        self.configure_iface_setting('IPv4')
+        b.select_from_dropdown("#network-ip-settings-select-method", "manual")
+        b.set_input_text('#network-ip-settings-address-0', "10.11.12.13")
+        b.set_input_text('#network-ip-settings-netmask-0', "24")
+        b.click("#network-ip-settings-dns-add")
+        b.set_input_text('#network-ip-settings-dns-server-0', "8.8.8.8")
+        b.click("#network-ip-settings-save")
+        b.wait_not_present("#network-ip-settings-dialog")
+        self.wait_for_iface_setting("IPv4", "Address 10.11.12.13/24Gateway 10.11.12.1DNS 8.8.8.8")
+        # Check that new connection exists and is applied to the interface
+        self.assertEqual(m.execute(f"nmcli --get connection.interface-name,connection.multi-connect,ipv4.addresses,ipv4.dns con sh {iface1}"),
+                         f"{iface1}\n0\n10.11.12.13/24\n8.8.8.8\n")
+        # Wired Connection is unmodified
+        self.assertEqual(m.execute("nmcli --get ipv4.method con sh 'Wired Connection'"), "auto\n")
+
+        # Further edits will edit the new connection
+        self.configure_iface_setting('IPv4')
+        b.set_input_text('#network-ip-settings-dns-server-0', "1.1.1.1")
+        b.click("#network-ip-settings-save")
+        b.wait_not_present("#network-ip-settings-dialog")
+        self.wait_for_iface_setting("IPv4", "Address 10.11.12.13/24Gateway 10.11.12.1DNS 1.1.1.1")
+        m.execute(f'[ $(nmcli --get ipv4.dns con sh {iface1}) == "1.1.1.1" ]')
+
+        # Editing auto-connect also creates new connection when necessary
+        b.go("/network")
+        b.wait_visible("#networking")
+        self.select_iface(iface2)
+        b.wait_visible("#network-interface")
+        b.wait_visible('#autoreconnect:not(:checked)')
+        b.set_checked('#autoreconnect', val=True)
+        b.wait_visible('#autoreconnect:checked')
+        # Check that new connection exists and autoconnect is enabled
+        self.assertEqual(
+            m.execute(f"nmcli --get connection.interface-name,connection.autoconnect,connection.multi-connect con sh {iface2}"),
+                        f"{iface2}\nyes\n0\n")
 
 
 if __name__ == '__main__':

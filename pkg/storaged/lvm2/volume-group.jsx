@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2023 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -24,8 +10,6 @@ import client from "../client";
 import { Alert } from "@patternfly/react-core/dist/esm/components/Alert/index.js";
 import { CardHeader, CardBody } from "@patternfly/react-core/dist/esm/components/Card/index.js";
 import { DescriptionList } from "@patternfly/react-core/dist/esm/components/DescriptionList/index.js";
-
-import { useObject } from "hooks";
 
 import { VolumeIcon } from "../icons/gnome-icons.jsx";
 import { StorageButton, StorageLink } from "../storage-controls.jsx";
@@ -39,12 +23,13 @@ import {
     validate_lvm2_name,
     get_available_spaces, prepare_available_spaces,
     reload_systemd, should_ignore,
+    contains_rootfs,
 } from "../utils.js";
 
 import {
     dialog_open, SelectSpaces, TextInput,
     BlockingMessage, TeardownMessage,
-    init_active_usage_processes
+    init_teardown_usage
 } from "../dialog.jsx";
 
 import { create_logical_volume } from "./create-logical-volume-dialog.jsx";
@@ -69,6 +54,9 @@ function vgroup_rename(client, vgroup, card) {
         ],
         Action: {
             Title: _("Rename"),
+            Danger: contains_rootfs(client, vgroup.path)
+                ? _("This volume group contains the root filesystem. Renaming it might require further changes to the bootloader configuration or kernel command line.")
+                : null,
             action: async function (vals) {
                 await vgroup.Rename(vals.name, { });
                 navigate_to_new_card_location(card, ["vg", vals.name]);
@@ -104,7 +92,7 @@ function vgroup_delete(client, vgroup, card) {
             }
         },
         Inits: [
-            init_active_usage_processes(client, usage)
+            init_teardown_usage(client, usage)
         ]
     });
 }
@@ -142,7 +130,7 @@ function make_generic_logical_volume_card(next, vgroup, lvol) {
 export function make_lvm2_logical_volume_page(parent, vgroup, lvol) {
     const generic_card = make_generic_logical_volume_card(null, vgroup, lvol);
 
-    if (lvol.Type == "pool") {
+    if (lvol.Type === "pool") {
         make_thin_pool_logical_volume_page(parent, vgroup, lvol);
     } else {
         const block = client.lvols_block[lvol.path];
@@ -163,7 +151,7 @@ export function make_lvm2_logical_volume_page(parent, vgroup, lvol) {
 }
 
 function make_logical_volume_pages(parent, vgroup) {
-    const isVDOPool = lvol => Object.keys(client.vdo_vols).some(v => client.vdo_vols[v].VDOPool == lvol.path);
+    const isVDOPool = lvol => Object.keys(client.vdo_vols).some(v => client.vdo_vols[v].VDOPool === lvol.path);
 
     (client.vgroups_lvols[vgroup.path] || []).forEach(lvol => {
         // We ignore volumes in a thin pool; they appear as children
@@ -176,7 +164,7 @@ function make_logical_volume_pages(parent, vgroup) {
         // We ignore vdo pools; they appear as a card for their
         // single contained logical volume.
         //
-        if (lvol.ThinPool == "/" && lvol.Origin == "/" && !isVDOPool(lvol))
+        if (lvol.ThinPool === "/" && lvol.Origin === "/" && !isVDOPool(lvol))
             make_lvm2_logical_volume_page(parent, vgroup, lvol);
     });
 }
@@ -189,7 +177,7 @@ function add_disk(vgroup) {
         const lvol = (block &&
                       client.blocks_lvm2[block.path] &&
                       client.lvols[client.blocks_lvm2[block.path].LogicalVolume]);
-        return !lvol || lvol.VolumeGroup != vgroup.path;
+        return !lvol || lvol.VolumeGroup !== vgroup.path;
     }
 
     dialog_open({
@@ -202,7 +190,7 @@ function add_disk(vgroup) {
                                  if (disks.length === 0)
                                      return _("At least one disk is needed.");
                              },
-                             spaces: get_available_spaces(client).filter(filter_inside_vgroup)
+                             spaces: get_available_spaces().filter(filter_inside_vgroup)
                          })
         ],
         Action: {
@@ -221,7 +209,7 @@ export function make_lvm2_volume_group_page(parent, vgroup) {
     let lvol_excuse = null;
     if (has_missing_pvs)
         lvol_excuse = _("Volume group is missing physical volumes");
-    else if (vgroup.FreeSize == 0)
+    else if (vgroup.FreeSize === 0)
         lvol_excuse = _("No free space");
 
     if (should_ignore(client, vgroup.path))
@@ -273,31 +261,13 @@ export function make_lvm2_volume_group_page(parent, vgroup) {
     make_logical_volume_pages(vgroup_page, vgroup);
 }
 
-function vgroup_poller(vgroup) {
-    let timer = null;
-
-    if (vgroup.NeedsPolling) {
-        timer = window.setInterval(() => { vgroup.Poll() }, 2000);
-    }
-
-    function stop() {
-        if (timer)
-            window.clearInterval(timer);
-    }
-
-    return {
-        stop
-    };
-}
-
 const LVM2LogicalVolumesCard = ({ card, vgroup }) => {
     return (
         <StorageCard card={card}>
-            <CardBody className="contains-list">
-                <ChildrenTable emptyCaption={_("No logical volumes")}
-                               aria-label={_("LVM2 logical volumes")}
-                               page={card.page} />
-            </CardBody>
+            <ChildrenTable
+                emptyCaption={_("No logical volumes")}
+                aria-label={_("LVM2 logical volumes")}
+                page={card.page} />
         </StorageCard>
     );
 };
@@ -305,14 +275,10 @@ const LVM2LogicalVolumesCard = ({ card, vgroup }) => {
 const LVM2VolumeGroupCard = ({ card, vgroup }) => {
     const has_missing_pvs = vgroup.MissingPhysicalVolumes && vgroup.MissingPhysicalVolumes.length > 0;
 
-    useObject(() => vgroup_poller(vgroup),
-              poller => poller.stop(),
-              [vgroup]);
-
     function is_partial_linear_lvol(block) {
         const lvm2 = client.blocks_lvm2[block.path];
         const lvol = lvm2 && client.lvols[lvm2.LogicalVolume];
-        return lvol && lvol.Layout == "linear" && client.lvols_status[lvol.path] == "partial";
+        return lvol && lvol.Layout === "linear" && client.lvols_status[lvol.path] === "partial";
     }
 
     function remove_missing() {
@@ -328,8 +294,10 @@ const LVM2VolumeGroupCard = ({ card, vgroup }) => {
            a bit inconsistent, but *shrug*.
         */
 
-        let usage = get_active_usage(client, vgroup.path, _("delete"));
-        usage = usage.filter(u => u.block && is_partial_linear_lvol(u.block));
+        const all_usage = get_active_usage(client, vgroup.path, _("delete"));
+        const usage = all_usage.filter(u => u.block && is_partial_linear_lvol(u.block));
+        usage.Blocking = all_usage.Blocking;
+        usage.Teardown = all_usage.Teardown;
 
         if (usage.Blocking) {
             dialog_open({
@@ -359,7 +327,7 @@ const LVM2VolumeGroupCard = ({ card, vgroup }) => {
                 }
             },
             Inits: [
-                init_active_usage_processes(client, usage)
+                init_teardown_usage(client, usage)
             ]
         });
     }
@@ -388,11 +356,10 @@ const LVM2VolumeGroupCard = ({ card, vgroup }) => {
                 </DescriptionList>
             </CardBody>
             <CardHeader><strong>{_("Physical volumes")}</strong></CardHeader>
-            <CardBody className="contains-list">
-                <PageTable emptyCaption={_("No physical volumes found")}
-                           aria-label={_("LVM2 physical volumes")}
-                           crossrefs={get_crossrefs(vgroup)} />
-            </CardBody>
+            <PageTable
+                emptyCaption={_("No physical volumes found")}
+                aria-label={_("LVM2 physical volumes")}
+                crossrefs={get_crossrefs(vgroup)} />
         </StorageCard>
     );
 };

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 import cockpit from "cockpit";
 import QUnit from "qunit-tests";
 
@@ -25,8 +26,13 @@ function parent_window(assert) {
             done();
         } else if (message.indexOf && message.indexOf('"init"') !== -1) {
             initialized = true;
-            frame.postMessage('\n{ "command": "init", "version": 1, "a": "b", "host" : "frame_host"  }',
-                              cockpit.transport.origin);
+            frame.postMessage("\n" + JSON.stringify({
+                command: "init",
+                version: 1,
+                a: "b",
+                host: "frame_host",
+                "channel-seed": cockpit.transport.options["channel-seed"] + "1!",
+            }), cockpit.transport.origin);
         } else {
             const ret = cockpit.transport.inject(message);
             if (!ret) console.error("inject failed");

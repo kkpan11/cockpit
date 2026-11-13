@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2023 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import React from "react";
@@ -31,7 +17,7 @@ import {
 } from "../crypto/keyslots.jsx";
 import {
     dialog_open, SizeSlider, BlockingMessage, TeardownMessage, SelectSpaces,
-    init_active_usage_processes
+    init_teardown_usage
 } from "../dialog.jsx";
 import { std_reply } from "../stratis/utils.jsx";
 import { pvs_to_spaces } from "../lvm2/utils.jsx";
@@ -44,7 +30,8 @@ export function check_unused_space(path) {
     const lvol = lvm2 && client.lvols[lvm2.LogicalVolume];
     const part = client.blocks_part[path];
 
-    let size, min_change;
+    let size;
+    let min_change;
 
     if (lvol) {
         size = lvol.Size;
@@ -56,7 +43,7 @@ export function check_unused_space(path) {
         return null;
     }
 
-    if (size != block.Size) {
+    if (size !== block.Size) {
         // Let's ignore inconsistent lvol,part/block combinations.
         // These happen during a resize and the inconsistency will
         // eventually go away.
@@ -114,7 +101,7 @@ function lvol_or_part_and_fsys_resize(client, lvol_or_part, size, offline, passp
     let orig_size;
     let block;
 
-    if (lvol_or_part.iface == "org.freedesktop.UDisks2.LogicalVolume") {
+    if (lvol_or_part.iface === "org.freedesktop.UDisks2.LogicalVolume") {
         orig_size = lvol_or_part.Size;
         block = client.lvols_block[lvol_or_part.path];
         if (!block)
@@ -187,7 +174,7 @@ function lvol_or_part_and_fsys_resize(client, lvol_or_part, size, offline, passp
                 return Promise.reject(_("Stratis blockdevs can not be made smaller")); // not-covered: safety check
             else
                 return Promise.resolve();
-        } else if (client.blocks_available[block.path]) {
+        } else if (!block.IdUsage) {
             // Growing or shrinking unformatted data, nothing to do
             return Promise.resolve();
         } else if (size < orig_size) {
@@ -217,7 +204,7 @@ function lvol_or_part_and_fsys_resize(client, lvol_or_part, size, offline, passp
     }
 
     function lvol_or_part_resize() {
-        if (size != orig_size) {
+        if (size !== orig_size) {
             // Both LogicalVolume and Partition have a Resize method
             // with the same signature, so this will work on both.
             return lvol_or_part.Resize(size, { pvs: pvs ? { t: 'ao', v: pvs } : undefined });
@@ -235,10 +222,12 @@ function lvol_or_part_and_fsys_resize(client, lvol_or_part, size, offline, passp
 }
 
 export function get_resize_info(client, block, to_fit) {
-    let info, shrink_excuse, grow_excuse;
+    let info;
+    let shrink_excuse;
+    let grow_excuse;
 
     if (block) {
-        if (block.IdUsage == 'crypto' && client.blocks_crypto[block.path]) {
+        if (block.IdUsage === 'crypto' && client.blocks_crypto[block.path]) {
             const cleartext = client.blocks_cleartext[block.path];
 
             if (!cleartext) {
@@ -247,7 +236,7 @@ export function get_resize_info(client, block, to_fit) {
             } else {
                 return get_resize_info(client, cleartext, to_fit);
             }
-        } else if (block.IdUsage == 'filesystem') {
+        } else if (block.IdUsage === 'filesystem') {
             info = client.fsys_info && client.fsys_info[block.IdType];
 
             if (!info) {
@@ -267,14 +256,14 @@ export function get_resize_info(client, block, to_fit) {
                                                      block.IdType);
                 }
             }
-        } else if (client.blocks_stratis_blockdev[block.path] && client.features.stratis_grow_blockdevs) {
+        } else if (client.blocks_stratis_blockdev[block.path]) {
             info = {
                 can_shrink: false,
                 can_grow: true,
                 grow_needs_unmount: false
             };
             shrink_excuse = _("Stratis blockdevs can not be made smaller");
-        } else if (block.IdUsage == 'raid') {
+        } else if (block.IdUsage === 'raid') {
             info = { };
             shrink_excuse = grow_excuse = _("Physical volumes can not be resized here");
         } else if (client.legacy_vdo_overlay.find_by_backing_block(block)) {
@@ -290,7 +279,7 @@ export function get_resize_info(client, block, to_fit) {
                 can_grow: false,
             };
             shrink_excuse = grow_excuse = _("Swap can not be resized here");
-        } else if (client.blocks_available[block.path]) {
+        } else if (!block.IdUsage) {
             info = {
                 can_shrink: true,
                 can_grow: true,
@@ -322,9 +311,9 @@ export function free_space_after_part(client, part) {
 
     function find_it(parts) {
         for (const p of parts) {
-            if (p.type == "free" && p.start == part.Offset + part.Size)
+            if (p.type === "free" && p.start === part.Offset + part.Size)
                 return p.size;
-            if (p.type == "container") {
+            if (p.type === "container") {
                 const s = find_it(p.partitions);
                 if (s)
                     return s;
@@ -337,8 +326,17 @@ export function free_space_after_part(client, part) {
 }
 
 export function grow_dialog(client, lvol_or_part, info, to_fit) {
-    let title, block, name, orig_size, max_size, allow_infinite, round_size;
-    let has_subvols, subvols, pvs_as_spaces, initial_pvs;
+    let title;
+    let block;
+    let name;
+    let orig_size;
+    let max_size;
+    let allow_infinite;
+    let round_size;
+    let has_subvols;
+    let subvols;
+    let pvs_as_spaces;
+    let initial_pvs;
 
     function compute_max_size(spaces) {
         const layout = lvol_or_part.Layout;
@@ -349,27 +347,27 @@ export function grow_dialog(client, lvol_or_part, info, to_fit) {
 
         if (!has_subvols) {
             return sum;
-        } else if (layout == "raid0") {
+        } else if (layout === "raid0") {
             return n_pvs * min;
-        } else if (layout == "raid1") {
+        } else if (layout === "raid1") {
             return min;
-        } else if (layout == "raid10") {
+        } else if (layout === "raid10") {
             return (n_pvs / 2) * min;
-        } else if ((layout == "raid4" || layout == "raid5")) {
+        } else if ((layout === "raid4" || layout === "raid5")) {
             return (n_pvs - 1) * min;
-        } else if (layout == "raid6") {
+        } else if (layout === "raid6") {
             return (n_pvs - 2) * min;
         } else
             return 0; // not-covered: internal error
     }
 
-    if (lvol_or_part.iface == "org.freedesktop.UDisks2.LogicalVolume") {
+    if (lvol_or_part.iface === "org.freedesktop.UDisks2.LogicalVolume") {
         const vgroup = client.vgroups[lvol_or_part.VolumeGroup];
         const pool = client.lvols[lvol_or_part.ThinPool];
 
         pvs_as_spaces = pvs_to_spaces(client, client.vgroups_pvols[vgroup.path].filter(pvol => pvol.FreeSize > 0));
         subvols = client.lvols_stripe_summary[lvol_or_part.path];
-        has_subvols = subvols && (lvol_or_part.Layout == "mirror" || lvol_or_part.Layout.indexOf("raid") == 0);
+        has_subvols = subvols && (lvol_or_part.Layout === "mirror" || lvol_or_part.Layout.indexOf("raid") === 0);
 
         if (!has_subvols)
             initial_pvs = pvs_as_spaces;
@@ -383,7 +381,7 @@ export function grow_dialog(client, lvol_or_part, info, to_fit) {
                 let sel = null;
                 for (const p in sv) {
                     for (const spc of pvs_as_spaces)
-                        if (spc.block.path == p && (!sel || sel.size < spc.size))
+                        if (spc.block.path === p && (!sel || sel.size < spc.size))
                             sel = spc;
                 }
                 if (sel)
@@ -392,7 +390,7 @@ export function grow_dialog(client, lvol_or_part, info, to_fit) {
 
             // Step 2: Select missing one randomly.
             for (const pv of pvs_as_spaces) {
-                if (initial_pvs.indexOf(pv) == -1 && initial_pvs.length < subvols.length)
+                if (initial_pvs.indexOf(pv) === -1 && initial_pvs.length < subvols.length)
                     initial_pvs.push(pv);
             }
         }
@@ -431,7 +429,7 @@ export function grow_dialog(client, lvol_or_part, info, to_fit) {
     let grow_size;
     const size_fields = [];
     if (!to_fit) {
-        if ((has_subvols || lvol_or_part.Layout == "linear") && pvs_as_spaces.length > 1)
+        if ((has_subvols || lvol_or_part.Layout === "linear") && pvs_as_spaces.length > 1)
             size_fields.push(
                 SelectSpaces("pvs", _("Physical Volumes"),
                              {
@@ -439,7 +437,7 @@ export function grow_dialog(client, lvol_or_part, info, to_fit) {
                                  value: initial_pvs,
                                  min_selected: subvols.length,
                                  validate: val => {
-                                     if (has_subvols && subvols.length != val.length)
+                                     if (has_subvols && subvols.length !== val.length)
                                          return cockpit.format(_("Exactly $0 physical volumes must be selected"),
                                                                subvols.length);
                                  }
@@ -459,7 +457,7 @@ export function grow_dialog(client, lvol_or_part, info, to_fit) {
 
     let recovered_passphrase;
     let passphrase_fields = [];
-    if (block && block.IdType == "crypto_LUKS" && block.IdVersion == 2)
+    if (block && block.IdType === "crypto_LUKS" && block.IdVersion === "2")
         passphrase_fields = existing_passphrase_fields(_("Resizing an encrypted filesystem requires unlocking the disk. Please provide a current disk passphrase."));
 
     function prepare_pvs(pvs) {
@@ -477,7 +475,7 @@ export function grow_dialog(client, lvol_or_part, info, to_fit) {
         subvols.forEach((sv, idx) => {
             subvol_pvs[idx] = null;
             for (const pv in sv) {
-                if (pvs.indexOf(pv) >= 0 && subvol_pvs.indexOf(pv) == -1) {
+                if (pvs.indexOf(pv) >= 0 && subvol_pvs.indexOf(pv) === -1) {
                     subvol_pvs[idx] = pv;
                     break;
                 }
@@ -488,7 +486,7 @@ export function grow_dialog(client, lvol_or_part, info, to_fit) {
         subvols.forEach((sv, idx) => {
             if (!subvol_pvs[idx]) {
                 for (const pv of pvs) {
-                    if (subvol_pvs.indexOf(pv) == -1) {
+                    if (subvol_pvs.indexOf(pv) === -1) {
                         subvol_pvs[idx] = pv;
                         break;
                     }
@@ -534,7 +532,7 @@ export function grow_dialog(client, lvol_or_part, info, to_fit) {
             }
         },
         Inits: [
-            init_active_usage_processes(client, usage),
+            init_teardown_usage(client, usage),
             passphrase_fields.length
                 ? init_existing_passphrase(block, false, pp => { recovered_passphrase = pp })
                 : null
@@ -543,9 +541,13 @@ export function grow_dialog(client, lvol_or_part, info, to_fit) {
 }
 
 export function shrink_dialog(client, lvol_or_part, info, to_fit) {
-    let title, block, name, orig_size, round_size;
+    let title;
+    let block;
+    let name;
+    let orig_size;
+    let round_size;
 
-    if (lvol_or_part.iface == "org.freedesktop.UDisks2.LogicalVolume") {
+    if (lvol_or_part.iface === "org.freedesktop.UDisks2.LogicalVolume") {
         const vgroup = client.vgroups[lvol_or_part.VolumeGroup];
 
         title = _("Shrink logical volume");
@@ -620,10 +622,10 @@ export function shrink_dialog(client, lvol_or_part, info, to_fit) {
 
     let recovered_passphrase;
     let passphrase_fields = [];
-    if (block && block.IdType == "crypto_LUKS" && block.IdVersion == 2)
+    if (block && block.IdType === "crypto_LUKS" && block.IdVersion === "2")
         passphrase_fields = existing_passphrase_fields(_("Resizing an encrypted filesystem requires unlocking the disk. Please provide a current disk passphrase."));
 
-    if (usage.length == 0 && size_fields.length + passphrase_fields.length === 0) {
+    if (usage.length === 0 && size_fields.length + passphrase_fields.length === 0) {
         return lvol_or_part_and_fsys_resize(client, lvol_or_part, shrink_size, false, null);
     }
 
@@ -647,7 +649,7 @@ export function shrink_dialog(client, lvol_or_part, info, to_fit) {
             }
         },
         Inits: [
-            init_active_usage_processes(client, usage),
+            init_teardown_usage(client, usage),
             passphrase_fields.length
                 ? init_existing_passphrase(block, false, pp => { recovered_passphrase = pp })
                 : null

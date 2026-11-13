@@ -5,27 +5,9 @@
         <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
         <style>
 /*
-MIT License
+SPDX-License-Identifier: MIT
 
 Copyright (c) 2018 Diamant Haxhimusa
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 */
 .pixelcompare-wrapper {
   background: red;
@@ -218,7 +200,7 @@ img.pixelcompare-before, img.pixelcompare-after {
   background: none;
   position: absolute;
   z-index: 999;
-  border-right: 1px dashed rgba(255, 255, 255, 0.5);
+  border-right: 1px dashed rgba(0, 0, 0, 0.5);
 }
 
 .pixelcompare-horizontal .pixelcompare-handle:after {
@@ -229,7 +211,7 @@ img.pixelcompare-before, img.pixelcompare-after {
   background: none;
   position: absolute;
   z-index: 999;
-  border-right: 1px dashed rgba(255, 255, 255, 0.5);
+  border-right: 1px dashed rgba(0, 0, 0, 0.5);
 }
 
 
@@ -240,7 +222,7 @@ img.pixelcompare-before, img.pixelcompare-after {
   background: none;
   position: absolute;
   z-index: 999;
-  border-top: 1px dashed rgba(255, 255, 255, 0.5);
+  border-top: 1px dashed rgba(0, 0, 0, 0.5);
   right: 50%;
   margin-right: 33px;
 }
@@ -251,7 +233,7 @@ img.pixelcompare-before, img.pixelcompare-after {
   background: none;
   position: absolute;
   z-index: 999;
-  border-top: 1px dashed rgba(255, 255, 255, 0.5);
+  border-top: 1px dashed rgba(0, 0, 0, 0.5);
   left: 50%;
   margin-left: 33px;
 }
@@ -287,28 +269,9 @@ img.pixelcompare-before, img.pixelcompare-after {
  * Javascript image comparison
  * @author diamanthaxhimusa@gmail.com
 
-MIT License
+SPDX-License-Identifier: MIT
 
 Copyright (c) 2018 Diamant Haxhimusa
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
  */
 window.setup_pixelcompare = function() {
   var _extend = function(defaults, options) {
@@ -616,7 +579,7 @@ document.addEventListener("DOMContentLoaded", () => {
       <p>New <a id="new"></a> on the left, reference on the right.</p>
       <div id="diff">
       </div>
-      <h2>Changed pixels in red, ignored changes in green</h2>
+      <h2>Changed pixels in red, ignored changes in green, ignored anti-aliasing changes is in yellow/orange</h2>
       <div id="delta">
       </div>
     </body>

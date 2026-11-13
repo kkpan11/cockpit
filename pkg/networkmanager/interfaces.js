@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2013 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 import React from "react";
 import cockpit from 'cockpit';
@@ -31,7 +17,7 @@ import { show_modal_dialog } from "cockpit-components-dialog.jsx";
 
 const _ = cockpit.gettext;
 
-function show_error_dialog(title, message) {
+export function show_error_dialog(title, message) {
     const props = {
         id: "error-popup",
         title,
@@ -80,8 +66,6 @@ export function connection_settings(c) {
         // object that doesn't have it's settings yet, and we expect
         // each Connection object to have "connection" settings.
         console.warn("Incomplete 'Connection' object accessed", c);
-        // HACK - phantomjs console.trace() prints nothing
-        try { throw new Error() } catch (e) { console.log(e.stack) }
         return { };
     }
 }
@@ -129,8 +113,8 @@ export function connection_settings(c) {
 
 /* HACK
  *
- * NetworkManager doesn't implement the standard o.fd.DBus.Properties
- * interface.
+ * NetworkManager used to not implement the standard o.fd.DBus.Properties
+ * interface and our code still operates under the assumptions stated below.
  *
  * 1) NM does not emit the PropertiesChanged signal on the
  *    o.fd.DBus.Properties interface but rather on its own interfaces
@@ -148,6 +132,7 @@ export function connection_settings(c) {
  * for a given object path.  This is appropriate and nice for
  * NetworkManager, and we should probably keep it that way even if
  * NetworkManager would use a standard o.fd.DBus.Properties API.
+ * In the future this could be rewritten to use DBusProxies.
  */
 
 export function NetworkManagerModel() {
@@ -166,12 +151,34 @@ export function NetworkManagerModel() {
     const client = cockpit.dbus("org.freedesktop.NetworkManager", { superuser: "try" });
     self.client = client;
 
+    // set to false by default as newer API is backwards compatible
+    // and supports both "dns" and "dns-data" properties
+    // dns-data property was added in version 1.42.0
+    self.supports_dns_data = false;
+
+    function check_version_dns_data_support(version) {
+        if (version.length < 2) {
+            return false;
+        }
+
+        if (version[0] > 1) {
+            return true;
+        } else if (version[0] === 1 && version[1] >= 42) {
+            return true;
+        }
+
+        return false;
+    }
+
     /* resolved once first stage of initialization is done */
     self.preinit = new Promise((resolve, reject) => {
         client.call("/org/freedesktop/NetworkManager",
                     "org.freedesktop.DBus.Properties", "Get",
-                    ["org.freedesktop.NetworkManager", "State"], { flags: "" })
+                    ["org.freedesktop.NetworkManager", "Version"], { flags: "" })
                 .then((reply, options) => {
+                    const nm_version = reply[0].v.split(".").map(n => Number.parseInt(n));
+                    self.supports_dns_data = check_version_dns_data_support(nm_version);
+
                     if (options.flags) {
                         if (options.flags.indexOf(">") !== -1)
                             utils.set_byteorder("be");
@@ -232,7 +239,7 @@ export function NetworkManagerModel() {
     }
 
     function get_object(path, type) {
-        if (path == "/")
+        if (path === "/")
             return null;
         function Constructor() {
             this[' priv'] = { };
@@ -323,9 +330,10 @@ export function NetworkManagerModel() {
         if (obj) {
             const type = priv(obj).type;
 
-            if (signal == "PropertiesChanged") {
+            if (signal === "PropertiesChanged") {
                 push_refresh();
-                set_object_properties(obj, remove_signatures(args[0]));
+                const props = remove_signatures(args[0]);
+                set_object_properties(obj, props);
                 pop_refresh();
             } else if (type.signals && type.signals[signal])
                 type.signals[signal](obj, args);
@@ -392,6 +400,21 @@ export function NetworkManagerModel() {
             Object.keys(interfaces).forEach(iface => {
                 const props = interfaces[iface];
 
+                /* Capture connection failure reasons for devices
+                   NM transitions through PREPARE → CONFIG → NEED_AUTH → FAILED → DISCONNECTED very
+                   quickly, and React batches these updates, so the UI often misses the FAILED state.
+                   Store the failure reason here at the D-Bus event level so we can retrieve it later. */
+                if (path.includes("/Devices/") && props?.StateReason) {
+                    const obj = peek_object(path);
+                    if (obj) {
+                        const [state, reason] = props.StateReason;
+                        if (state === 120 && reason !== 0) {
+                            utils.debug("Captured", obj.Interface, "failure, reason:", reason);
+                            priv(obj).lastFailureReason = reason;
+                        }
+                    }
+                }
+
                 if (props)
                     interface_properties(path, iface, props);
                 else
@@ -422,63 +445,63 @@ export function NetworkManagerModel() {
     /* NetworkManager specific data conversions and utility functions.
      */
 
-    function ip4_address_from_nm(addr) {
-        return [utils.ip4_to_text(addr[0]),
-            utils.ip_prefix_to_text(addr[1]),
-            utils.ip4_to_text(addr[2], true)
-        ];
+    function ip_address_from_nm(addr) {
+        return {
+            address: addr.address.v,
+            prefix: utils.ip_prefix_to_text(addr.prefix.v)
+        };
     }
 
-    function ip4_address_to_nm(addr) {
-        return [utils.ip4_from_text(addr[0]),
-            utils.ip4_prefix_from_text(addr[1]),
-            utils.ip4_from_text(addr[2], true)
-        ];
+    function ip_address_to_nm(addr, ipv) {
+        const prefix = ipv === "ipv4" ? utils.ip4_prefix_from_text(addr.prefix) : utils.ip_prefix_from_text(addr.prefix);
+
+        if (!utils.validate_ip(addr.address)) {
+            throw cockpit.format(_("Invalid IP address: $0"), addr.address);
+        }
+
+        return {
+            address: { t: "s", v: addr.address },
+            prefix: { t: "u", v: prefix },
+        };
     }
 
-    function ip4_route_from_nm(addr) {
-        return [utils.ip4_to_text(addr[0]),
-            utils.ip_prefix_to_text(addr[1]),
-            utils.ip4_to_text(addr[2], true),
-            utils.ip_metric_to_text(addr[3])
-        ];
+    function route_from_nm(route) {
+        const metric = route.metric ? utils.ip_metric_to_text(route.metric.v) : "";
+        return {
+            dest: route.dest.v,
+            prefix: utils.ip_prefix_to_text(route.prefix.v),
+            next_hop: route["next-hop"]?.v ?? "",
+            metric,
+        };
     }
 
-    function ip4_route_to_nm(addr) {
-        return [utils.ip4_from_text(addr[0]),
-            utils.ip4_prefix_from_text(addr[1]),
-            utils.ip4_from_text(addr[2], true),
-            utils.ip_metric_from_text(addr[3])
-        ];
-    }
-    function ip6_address_from_nm(addr) {
-        return [utils.ip6_to_text(addr[0]),
-            utils.ip_prefix_to_text(addr[1]),
-            utils.ip6_to_text(addr[2], true)
-        ];
-    }
+    function route_to_nm(route, ipv) {
+        const prefix = ipv === "ipv4" ? utils.ip4_prefix_from_text(route.prefix) : utils.ip_prefix_from_text(route.prefix);
 
-    function ip6_address_to_nm(addr) {
-        return [utils.ip6_from_text(addr[0]),
-            parseInt(addr[1], 10) || 64,
-            utils.ip6_from_text(addr[2], true)
-        ];
-    }
+        if (!utils.validate_ip(route.dest)) {
+            throw cockpit.format(_("Invalid destination address: $0"), route.dest);
+        }
 
-    function ip6_route_from_nm(addr) {
-        return [utils.ip6_to_text(addr[0]),
-            utils.ip_prefix_to_text(addr[1]),
-            utils.ip6_to_text(addr[2], true),
-            utils.ip_metric_to_text(addr[3]),
-        ];
-    }
+        const route_nm = {
+            dest: { t: "s", v: route.dest },
+            prefix: { t: "u", v: prefix },
+        };
 
-    function ip6_route_to_nm(addr) {
-        return [utils.ip6_from_text(addr[0]),
-            utils.ip_prefix_from_text(addr[1]),
-            utils.ip6_from_text(addr[2], true),
-            utils.ip_metric_from_text(addr[3])
-        ];
+        // next-hop is an optional property
+        if (route.next_hop !== "") {
+            if (!utils.validate_ip(route.next_hop)) {
+                throw cockpit.format(_("Invalid gateway address: $0"), route.next_hop);
+            }
+
+            route_nm["next-hop"] = { t: "s", v: route.next_hop };
+        }
+
+        // metric is an optional property
+        if (route.metric !== "") {
+            route_nm.metric = { t: "u", v: utils.ip_metric_from_text(route.metric) };
+        }
+
+        return route_nm;
     }
 
     function settings_from_nm(settings) {
@@ -489,15 +512,20 @@ export function NetworkManagerModel() {
                 return def;
         }
 
-        function get_ip(first, addr_from_nm, route_from_nm, ip_to_text) {
+        function get_ip(first, ip_to_text) {
+            const dns_data = self.supports_dns_data
+                ? get(first, "dns-data", [])
+                : get(first, "dns", []).map(ip_to_text);
+
             return {
                 method: get(first, "method", "auto"),
                 ignore_auto_dns: get(first, "ignore-auto-dns", false),
                 ignore_auto_routes: get(first, "ignore-auto-routes", false),
-                addresses: get(first, "addresses", []).map(addr_from_nm),
-                dns: get(first, "dns", []).map(ip_to_text),
+                address_data: get(first, "address-data", []).map(ip_address_from_nm),
+                gateway: get(first, "gateway", ""),
+                dns_data,
                 dns_search: get(first, "dns-search", []),
-                routes: get(first, "routes", []).map(route_from_nm)
+                route_data: get(first, "route-data", []).map(route_from_nm),
             };
         }
 
@@ -509,16 +537,18 @@ export function NetworkManagerModel() {
                 timestamp: get("connection", "timestamp", 0),
                 id: get("connection", "id", _("Unknown")),
                 autoconnect: get("connection", "autoconnect", true),
+                autoconnect_priority: get("connection", "autoconnect-priority", 0),
                 autoconnect_members:
                                 get("connection", "autoconnect-slaves", -1),
                 member_type: get("connection", "slave-type"),
-                group: get("connection", "master")
+                group: get("connection", "master"),
+                multi_connect: get("connection", "multi-connect"),
             }
         };
 
         if (!settings.connection.master) {
-            result.ipv4 = get_ip("ipv4", ip4_address_from_nm, ip4_route_from_nm, utils.ip4_to_text);
-            result.ipv6 = get_ip("ipv6", ip6_address_from_nm, ip6_route_from_nm, utils.ip6_to_text);
+            result.ipv4 = get_ip("ipv4", utils.ip4_to_text);
+            result.ipv6 = get_ip("ipv6", utils.ip6_to_text);
         }
 
         if (settings["802-3-ethernet"]) {
@@ -553,7 +583,7 @@ export function NetworkManagerModel() {
             };
         }
 
-        if (settings["team-port"] || result.connection.member_type == "team") {
+        if (settings["team-port"] || result.connection.member_type === "team") {
             result.team_port = { config: JSON_parse_carefully(get("team-port", "config", "{}")), };
         }
 
@@ -569,7 +599,7 @@ export function NetworkManagerModel() {
             };
         }
 
-        if (settings["bridge-port"] || result.connection.member_type == "bridge") {
+        if (settings["bridge-port"] || result.connection.member_type === "bridge") {
             result.bridge_port = {
                 priority: get("bridge-port", "priority", 32),
                 path_cost: get("bridge-port", "path-cost", 100),
@@ -590,9 +620,16 @@ export function NetworkManagerModel() {
                 listen_port: get("wireguard", "listen-port", 0),
                 peers: get("wireguard", "peers", []).map(peer => ({
                     publicKey: peer['public-key'].v,
-                    endpoint: peer.endpoint?.v, // enpoint of a peer is optional
+                    endpoint: peer.endpoint?.v, // endpoint of a peer is optional
                     allowedIps: peer['allowed-ips']?.v
                 })),
+            };
+        }
+
+        if (settings["802-11-wireless"]) {
+            result["802-11-wireless"] = {
+                ssid: get("802-11-wireless", "ssid"),
+                mode: get("802-11-wireless", "mode"),
             };
         }
 
@@ -613,23 +650,46 @@ export function NetworkManagerModel() {
                 delete result[first][second];
         }
 
-        function set_ip(first, addrs_sig, addr_to_nm, routes_sig, route_to_nm, ips_sig, ip_from_text) {
+        function set_ip(first, dns_ip_sig, ip_from_text) {
             set(first, "method", 's', settings[first].method);
             set(first, "ignore-auto-dns", 'b', settings[first].ignore_auto_dns);
             set(first, "ignore-auto-routes", 'b', settings[first].ignore_auto_routes);
+            set(first, "addr-gen-mode", 'i', settings[first].addr_gen_mode);
 
-            const addresses = settings[first].addresses;
+            const addresses = settings[first].address_data;
             if (addresses)
-                set(first, "addresses", addrs_sig, addresses.map(addr_to_nm));
+                set(first, "address-data", "aa{sv}", addresses.map(addr => ip_address_to_nm(addr, first)));
 
-            const dns = settings[first].dns;
-            if (dns)
-                set(first, "dns", ips_sig, dns.map(ip_from_text));
+            const gateway = settings[first].gateway;
+            if (gateway && addresses.length > 0) {
+                if (!utils.validate_ip(gateway)) {
+                    throw cockpit.format(_("Invalid gateway address: $0"), gateway);
+                }
+                set(first, "gateway", "s", gateway);
+            } else {
+                // gateway cannot be set if there are no addresses
+                delete result[first].gateway;
+            }
+
+            const dns = settings[first].dns_data;
+            if (dns) {
+                const invalid = dns.find(addr => !utils.validate_ip(addr));
+                if (invalid) {
+                    throw cockpit.format(_("Invalid DNS address: $0"), invalid);
+                }
+
+                if (self.supports_dns_data) {
+                    set(first, "dns-data", "as", dns);
+                } else {
+                    set(first, "dns", dns_ip_sig, dns.map(addr => ip_from_text(addr)));
+                }
+            }
+
             set(first, "dns-search", 'as', settings[first].dns_search);
 
-            const routes = settings[first].routes;
+            const routes = settings[first].route_data;
             if (routes)
-                set(first, "routes", routes_sig, routes.map(route_to_nm));
+                set(first, "route-data", "aa{sv}", routes.map(route => route_to_nm(route, first)));
 
             // Never pass "address-labels" back to NetworkManager.  It
             // is documented as "internal only", but needs to somehow
@@ -637,24 +697,34 @@ export function NetworkManagerModel() {
             // we don't have to worry about that.
             //
             delete result[first]["address-labels"];
+
+            // Never pass "addresses", instead use "address-data" + "gateway"
+            delete result[first].addresses;
+            // Never pass "routes", instead use "route-data"
+            delete result[first].routes;
+            // Never pass "dns" if "dns-data" is supported
+            if (self.supports_dns_data)
+                delete result[first].dns;
         }
 
         set("connection", "id", 's', settings.connection.id);
         set("connection", "autoconnect", 'b', settings.connection.autoconnect);
+        set("connection", "autoconnect-priority", 'i', settings.connection.autoconnect_priority);
         set("connection", "autoconnect-slaves", 'i', settings.connection.autoconnect_members);
         set("connection", "uuid", 's', settings.connection.uuid);
         set("connection", "interface-name", 's', settings.connection.interface_name);
         set("connection", "type", 's', settings.connection.type);
         set("connection", "slave-type", 's', settings.connection.member_type);
         set("connection", "master", 's', settings.connection.group);
+        set("connection", "multi-connect", 'i', settings.connection.multi_connect);
 
         if (settings.ipv4)
-            set_ip("ipv4", 'aau', ip4_address_to_nm, 'aau', ip4_route_to_nm, 'au', utils.ip4_from_text);
+            set_ip("ipv4", 'au', utils.ip4_from_text);
         else
             delete result.ipv4;
 
         if (settings.ipv6)
-            set_ip("ipv6", 'a(ayuay)', ip6_address_to_nm, 'a(ayuayu)', ip6_route_to_nm, 'aay', utils.ip6_from_text);
+            set_ip("ipv6", 'aay', utils.ip6_from_text);
         else
             delete result.ipv6;
 
@@ -737,6 +807,20 @@ export function NetworkManagerModel() {
             delete result.wireguard;
         }
 
+        if (settings["802-11-wireless"]) {
+            set("802-11-wireless", "ssid", 'ay', settings["802-11-wireless"].ssid);
+            set("802-11-wireless", "mode", 's', settings["802-11-wireless"].mode);
+        } else {
+            delete result["802-11-wireless"];
+        }
+
+        if (settings["802-11-wireless-security"]) {
+            set("802-11-wireless-security", "key-mgmt", 's', settings["802-11-wireless-security"]["key-mgmt"]);
+            set("802-11-wireless-security", "psk", 's', settings["802-11-wireless-security"].psk);
+        } else {
+            delete result["802-11-wireless-security"];
+        }
+
         return result;
     }
 
@@ -813,6 +897,21 @@ export function NetworkManagerModel() {
         }
     }
 
+    function access_point_mode_to_text(mode) {
+        switch (mode) {
+        // NM_802_11_MODE_ADHOC
+        case 1: return _("Adhoc");
+        // NM_802_11_MODE_INFRA
+        case 2: return _("Infra");
+        // NM_802_11_MODE_AP
+        case 3: return _("AP");
+        // NM_802_11_MODE_MESH
+        case 4: return _("Mesh");
+        // subsumes NM_802_11_MODE_UNKNOWN
+        default: return _("Unknown");
+        }
+    }
+
     const connections_by_uuid = { };
 
     function set_settings(obj, settings) {
@@ -848,7 +947,7 @@ export function NetworkManagerModel() {
                     function snarf_prop(line, env, prop) {
                         const prefix = "E: " + env + "=";
                         if (line.indexOf(prefix) === 0) {
-                            props[prop] = line.substr(prefix.length);
+                            props[prop] = line.substring(prefix.length);
                         }
                     }
                     res.split('\n').forEach(function(line) {
@@ -881,7 +980,7 @@ export function NetworkManagerModel() {
         ],
 
         props: {
-            Addresses: { conv: conv_Array(ip4_address_from_nm), def: [] }
+            AddressData: { conv: conv_Array(ip_address_from_nm), def: [] }
         }
     };
 
@@ -891,8 +990,39 @@ export function NetworkManagerModel() {
         ],
 
         props: {
-            Addresses: { conv: conv_Array(ip6_address_from_nm), def: [] }
+            AddressData: { conv: conv_Array(ip_address_from_nm), def: [] }
         }
+    };
+
+    const type_AccessPoint = {
+        interfaces: [
+            "org.freedesktop.NetworkManager.AccessPoint"
+        ],
+
+        props: {
+            Flags: { def: 0 },
+            WpaFlags: { def: 0 },
+            RsnFlags: { def: 0 },
+            Ssid: { conv: utils.ssid_from_nm, def: "" },
+            Frequency: { def: 0 }, // MHz
+            HwAddress: { def: "" },
+            Mode: { conv: access_point_mode_to_text, def: "" },
+            MaxBitrate: { def: 0 }, // Kbit/s
+            Bandwidth: { def: 0 }, // MHz
+            Strength: { def: 0 },
+            LastSeen: { def: -1 }, // CLOCK_BOOTTIME seconds, -1 if never seen
+        },
+
+        exporters: [
+            function (obj) {
+                // Find connection for this SSID (undefined if none exists)
+                obj.Connection = (self.get_settings()?.Connections || []).find(con => {
+                    if (con.Settings?.["802-11-wireless"]?.ssid)
+                        return utils.ssid_from_nm(con.Settings["802-11-wireless"].ssid) === obj.Ssid;
+                    return false;
+                });
+            }
+        ]
     };
 
     const type_Connection = {
@@ -915,10 +1045,6 @@ export function NetworkManagerModel() {
         },
 
         prototype: {
-            copy_settings: function () {
-                return JSON.parse(JSON.stringify(this.Settings));
-            },
-
             apply_settings: function (settings) {
                 const self = this;
                 try {
@@ -973,7 +1099,7 @@ export function NetworkManagerModel() {
                 function check_con(con) {
                     const group_settings = connection_settings(con);
                     const my_settings = connection_settings(obj);
-                    if (group_settings.type == my_settings.member_type) {
+                    if (group_settings.type === my_settings.member_type) {
                         obj.Groups.push(con);
                         con.Members.push(obj);
                     }
@@ -1005,7 +1131,8 @@ export function NetworkManagerModel() {
         props: {
             Connection: { conv: conv_Object(type_Connection) },
             Ip4Config: { conv: conv_Object(type_Ipv4Config) },
-            Ip6Config: { conv: conv_Object(type_Ipv6Config) }
+            Ip6Config: { conv: conv_Object(type_Ipv6Config) },
+            State: { def: 0 }
             // See below for "Group"
         },
 
@@ -1026,7 +1153,8 @@ export function NetworkManagerModel() {
             "org.freedesktop.NetworkManager.Device.Bond",
             "org.freedesktop.NetworkManager.Device.Team",
             "org.freedesktop.NetworkManager.Device.Bridge",
-            "org.freedesktop.NetworkManager.Device.Vlan"
+            "org.freedesktop.NetworkManager.Device.Vlan",
+            "org.freedesktop.NetworkManager.Device.Wireless"
         ],
 
         props: {
@@ -1034,6 +1162,7 @@ export function NetworkManagerModel() {
             Interface: { },
             StateText: { prop: "State", conv: device_state_to_text, def: _("Unknown") },
             State: { },
+            StateReason: { def: [0, 0] }, // [state, reason] tuple
             HwAddress: { },
             AvailableConnections: { conv: conv_Array(conv_Object(type_Connection)), def: [] },
             ActiveConnection: { conv: conv_Object(type_ActiveConnection) },
@@ -1046,11 +1175,15 @@ export function NetworkManagerModel() {
             Carrier: { def: true },
             Speed: { },
             Managed: { def: false },
+            // WiFi-specific properties
+            AccessPoints: { conv: conv_Array(conv_Object(type_AccessPoint)), def: [] },
+            ActiveAccessPoint: { conv: conv_Object(type_AccessPoint) },
             // See below for "Members"
         },
 
         prototype: {
             activate: function(connection, specific_object) {
+                priv(this).lastFailureReason = undefined; // Clear stale failure reason from previous attempts
                 return call_object_method(get_object("/org/freedesktop/NetworkManager", type_Manager),
                                           "org.freedesktop.NetworkManager", "ActivateConnection",
                                           objpath(connection), objpath(this), objpath(specific_object))
@@ -1058,11 +1191,15 @@ export function NetworkManagerModel() {
             },
 
             activate_with_settings: function(settings, specific_object) {
+                priv(this).lastFailureReason = undefined; // Clear stale failure reason from previous attempts
                 try {
                     return call_object_method(get_object("/org/freedesktop/NetworkManager", type_Manager),
                                               "org.freedesktop.NetworkManager", "AddAndActivateConnection",
                                               settings_to_nm(settings), objpath(this), objpath(specific_object))
-                            .then(([path, active_connection]) => active_connection);
+                            .then(([path, active_connection_path]) => ({
+                                connection: get_object(path, type_Connection),
+                                active_connection: get_object(active_connection_path, type_ActiveConnection)
+                            }));
                 } catch (e) {
                     return Promise.reject(e);
                 }
@@ -1071,8 +1208,139 @@ export function NetworkManagerModel() {
             disconnect: function () {
                 return call_object_method(this, 'org.freedesktop.NetworkManager.Device', 'Disconnect')
                         .then(() => undefined);
+            },
+
+            // Request a WiFi scan to populate this.AccessPoints
+            request_scan: function() {
+                utils.debug("request_scan: requesting scan for", this.Interface);
+                call_object_method(this, 'org.freedesktop.NetworkManager.Device.Wireless', 'RequestScan', {})
+                        .catch(error => {
+                            // RequestScan can fail if a scan was recently done, that's OK
+                            console.warn("request_scan: scan failed for", this.Interface + ":", error.toString());
+                        });
+            },
+
+            // Get and clear the last connection failure reason
+            consume_failure_reason: function() {
+                const reason = priv(this).lastFailureReason;
+                priv(this).lastFailureReason = undefined;
+                return reason;
+            },
+
+            // Mark that a pending connection is being cancelled by the user
+            cancel_pending_connection: function() {
+                priv(this).connectionCancelled = true;
+            },
+
+            // Wait for a connection to complete
+            // For WiFi, pass expected_ssid to verify we connected to the right network
+            // Returns a Promise that resolves on success or cancel, rejects with {reason} on failure
+            wait_connection: function(expected_ssid) {
+                priv(this).connectionCancelled = false;
+                utils.debug("wait_connection: starting, iface:", this.Interface, "expected:", expected_ssid, "initial state:", this.State);
+                return new Promise((resolve, reject) => {
+                    let activationStarted = false;
+
+                    const cleanup = () => self.removeEventListener("changed", check);
+
+                    const check = () => {
+                        utils.debug("wait_connection check: state:", this.State, "ssid:", this.ActiveAccessPoint?.Ssid,
+                                    "activeConn:", !!this.ActiveConnection, "activationStarted:", activationStarted,
+                                    "lastFailureReason:", priv(this).lastFailureReason,
+                                    "connectionCancelled:", priv(this).connectionCancelled);
+
+                        // captured a failure?
+                        const reason = this.consume_failure_reason();
+                        if (reason) {
+                            cleanup();
+                            console.warn("wait_connection: connection failed for", this.Interface, "reason:", reason);
+                            const error = new Error("Connection failed");
+                            error.reason = reason;
+                            reject(error);
+                            return;
+                        }
+
+                        // https://networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMDeviceState
+                        switch (this.State) {
+                        case 100: // NM_DEVICE_STATE_ACTIVATED
+                            if (!expected_ssid || this.ActiveAccessPoint?.Ssid === expected_ssid) {
+                                utils.debug("wait_connection: success");
+                                cleanup();
+                                resolve();
+                            }
+                            break;
+
+                        case 30: // NM_DEVICE_STATE_DISCONNECTED; initial state, so wait for activation to start
+                        case 120: // NM_DEVICE_STATE_FAILED
+                            if (priv(this).connectionCancelled) {
+                                cleanup();
+                                utils.debug("wait_connection: cancelled by user");
+                                resolve();
+                            } else {
+                                // Disconnected/failed after
+                                // activation started means user
+                                // cancelled or failure without reason
+                                if (activationStarted && !this.ActiveConnection) {
+                                    cleanup();
+                                    console.warn("wait_connection: connection failed for", this.Interface, "without captured reason");
+                                    reject(new Error("Connection failed"));
+                                }
+                            }
+                            break;
+
+                        case 20: // NM_DEVICE_STATE_UNAVAILABLE
+                        case 110: // NM_DEVICE_STATE_DEACTIVATING
+                            break;
+
+                        // any other state means we're activating
+                        default:
+                            if (!activationStarted) {
+                                utils.debug("wait_connection: activation started");
+                                activationStarted = true;
+                            }
+                        }
+                    };
+
+                    self.addEventListener("changed", check);
+                    check(); // Check current state immediately in case already connected
+                });
             }
-        }
+        },
+
+        exporters: [
+            function (obj) {
+                if (obj.DeviceType === '802-11-wireless') {
+                    // When a hidden network (no SSID broadcast) has a saved connection, NetworkManager
+                    // duplicates it in AccessPoints: once without SSID (from the beacon), and once with
+                    // SSID (synthesized from the saved connection). Both have the same HwAddress (MAC).
+                    // We deduplicate by MAC first, preferring the one with a known connection
+                    const apByMac = new Map();
+                    (obj.AccessPoints || []).forEach(ap => {
+                        utils.debug(`AP: Ssid '${ap.Ssid}' HwAddress: ${ap.HwAddress} Strength: ${ap.Strength} hasConnection: ${!!ap.Connection}`);
+                        if (!apByMac.get(ap.HwAddress) || ap.Connection)
+                            apByMac.set(ap.HwAddress, ap);
+                    });
+
+                    // Deduplicate visible APs by SSID, keeping the strongest signal for each network.
+                    // Count remaining hidden APs (those without SSID after MAC deduplication).
+                    const apBySsid = new Map();
+                    let hiddenCount = 0;
+                    Array.from(apByMac.values()).forEach(ap => {
+                        if (ap.Ssid) {
+                            const existing = apBySsid.get(ap.Ssid);
+                            if (!existing || ap.Strength > existing.Strength) {
+                                apBySsid.set(ap.Ssid, ap);
+                            }
+                        } else {
+                            hiddenCount++;
+                        }
+                    });
+                    obj.visibleSsids = Array.from(apBySsid.values());
+                    obj.hiddenAPCount = hiddenCount;
+                    utils.debug("Device exporter:", obj.Interface, "has", obj.visibleSsids.length, "visible SSIDs and", obj.hiddenAPCount, "hidden APs");
+                }
+            }
+        ]
     };
 
     // The 'Interface' type does not correspond to any NetworkManager
@@ -1120,7 +1388,7 @@ export function NetworkManagerModel() {
 
                 if (obj.Device) {
                     obj.Device.AvailableConnections.forEach(function (con) {
-                        if (obj.Connections.indexOf(con) == -1)
+                        if (obj.Connections.indexOf(con) === -1)
                             obj.Connections.push(con);
                     });
                 }
@@ -1165,10 +1433,13 @@ export function NetworkManagerModel() {
 
         prototype: {
             add_connection: function (conf) {
+                // https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html
+                const NM_SETTINGS_ADD_CONNECTION2_FLAG_TO_DISK = 0x1;
+                const NM_SETTINGS_ADD_CONNECTION2_FLAG_BLOCK_AUTOCONNECT = 0x20;
                 return call_object_method(this,
                                           'org.freedesktop.NetworkManager.Settings',
-                                          'AddConnection',
-                                          settings_to_nm(conf, { }))
+                                          'AddConnection2',
+                                          settings_to_nm(conf, { }), NM_SETTINGS_ADD_CONNECTION2_FLAG_TO_DISK | NM_SETTINGS_ADD_CONNECTION2_FLAG_BLOCK_AUTOCONNECT, { })
                         .then(([path]) => get_object(path, type_Connection));
             }
         },
@@ -1184,7 +1455,7 @@ export function NetworkManagerModel() {
                         function add_to_interface(name) {
                             if (name) {
                                 const cons = get_interface(name)._NonDeviceConnections;
-                                if (cons.indexOf(con) == -1)
+                                if (cons.indexOf(con) === -1)
                                     cons.push(con);
                             }
                         }
@@ -1232,7 +1503,7 @@ export function NetworkManagerModel() {
                                           0)
                         .then(([checkpoint]) => checkpoint)
                         .catch(function (error) {
-                            if (error.name != "org.freedesktop.DBus.Error.UnknownMethod")
+                            if (error.name !== "org.freedesktop.DBus.Error.UnknownMethod")
                                 console.warn(error.message || error);
                         });
             },
@@ -1315,7 +1586,8 @@ export function NetworkManagerModel() {
         type_Ipv4Config,
         type_Ipv6Config,
         type_Connection,
-        type_ActiveConnection
+        type_ActiveConnection,
+        type_AccessPoint
     ]);
 
     get_object("/org/freedesktop/NetworkManager", type_Manager);
@@ -1339,7 +1611,7 @@ export function syn_click(model, fun) {
 
 export function is_managed(dev) {
     // Never let the user manage loopback devices, nothing good can come from that.
-    return dev.State != 10 && dev.DeviceType != "loopback" && dev.Interface != "lo";
+    return dev.State !== 10 && dev.DeviceType !== "loopback" && dev.Interface !== "lo";
 }
 
 function render_interface_link(iface) {
@@ -1352,12 +1624,12 @@ function render_interface_link(iface) {
 export function device_state_text(dev) {
     if (!dev)
         return _("Inactive");
-    if (dev.State == 100 && dev.Carrier === false)
+    if (dev.State === 100 && dev.Carrier === false)
         return _("No carrier");
     if (!is_managed(dev)) {
         if (!dev.ActiveConnection &&
-            (!dev.Ip4Config || dev.Ip4Config.Addresses.length === 0) &&
-            (!dev.Ip6Config || dev.Ip6Config.Addresses.length === 0))
+            (!dev.Ip4Config || dev.Ip4Config.AddressData.length === 0) &&
+            (!dev.Ip6Config || dev.Ip6Config.AddressData.length === 0))
             return _("Inactive");
     }
     return dev.StateText;
@@ -1387,8 +1659,8 @@ export function render_active_connection(dev, with_link, hide_link_local) {
 
     const ip4config = con ? con.Ip4Config : dev.Ip4Config;
     if (ip4config) {
-        ip4config.Addresses.forEach(function (a) {
-            parts.push(a[0] + "/" + a[1]);
+        ip4config.AddressData.forEach(function (a) {
+            parts.push(a.address + "/" + a.prefix);
         });
     }
 
@@ -1401,9 +1673,9 @@ export function render_active_connection(dev, with_link, hide_link_local) {
 
     const ip6config = con ? con.Ip6Config : dev.Ip6Config;
     if (ip6config) {
-        ip6config.Addresses.forEach(function (a) {
-            if (!(hide_link_local && is_ipv6_link_local(a[0])))
-                parts.push(a[0] + "/" + a[1]);
+        ip6config.AddressData.forEach(function (a) {
+            if (!(hide_link_local && is_ipv6_link_local(a.address)))
+                parts.push(a.address + "/" + a.prefix);
         });
     }
 
@@ -1422,7 +1694,7 @@ export function complete_settings(settings, device) {
     settings.connection.id = device.Interface;
     settings.connection.uuid = uuidv4();
 
-    if (device.DeviceType == 'ethernet') {
+    if (device.DeviceType === 'ethernet') {
         settings.connection.type = '802-3-ethernet';
         settings.ethernet = { };
     } else {
@@ -1438,6 +1710,8 @@ export function settings_applier(model, device, connection) {
      * them as a stand-alone object.  Otherwise, we
      * activate the device with the settings which causes
      * NM to fill in the type and other details.
+     * Non-persistent "Wired Connection" is a special case
+     * and we make a new connection instead.
      *
      * HACK - The activation is a hack, we would rather
      * just have NM fill in the details and not activate
@@ -1447,15 +1721,20 @@ export function settings_applier(model, device, connection) {
      * https://bugzilla.gnome.org/show_bug.cgi?id=775226
      */
 
+    const specialCon = utils.isNonPersistentMultiCon(connection);
+
     return function (settings) {
-        if (connection) {
+        if (connection && !specialCon) {
             return connection.apply_settings(settings);
-        } else if (settings.connection.type) {
+        } else if (settings.connection.type && !specialCon) {
             return model.get_settings().add_connection(settings);
+        } else if (device && specialCon) {
+            const newSettings = utils.createNewConnSettings(settings, device.Interface);
+            return device.activate_with_settings(newSettings);
         } else if (device) {
             return device.activate_with_settings(settings);
         } else {
-            cockpit.warn("No way to apply settings", connection, settings);
+            console.warn("No way to apply settings", connection, settings);
             return Promise.resolve();
         }
     };
@@ -1463,7 +1742,7 @@ export function settings_applier(model, device, connection) {
 
 export function choice_title(choices, choice, def) {
     for (let i = 0; i < choices.length; i++) {
-        if (choices[i].choice == choice)
+        if (choices[i].choice === choice)
             return choices[i].title;
     }
     return def;
@@ -1613,6 +1892,9 @@ export function with_checkpoint(model, modify, options) {
                     return;
                 }
 
+                // Signal that a checkpoint is active for anaconda-webui
+                window.sessionStorage.setItem("cockpit_has_checkpoint", "true");
+
                 show_curtain();
                 modify()
                         .then(function () {
@@ -1624,7 +1906,12 @@ export function with_checkpoint(model, modify, options) {
                                                 action: syn_click(model, modify)
                                             });
                                         })
-                                        .finally(hide_curtain);
+                                        .finally(function() {
+                                            hide_curtain();
+
+                                            // Clear checkpoint status when done
+                                            window.sessionStorage.setItem("cockpit_has_checkpoint", "false");
+                                        });
                             }, settle_time * 1000);
                         })
                         .catch(function () {
@@ -1644,6 +1931,9 @@ export function with_checkpoint(model, modify, options) {
                                 manager.checkpoint_rollback(cp);
                             else
                                 manager.checkpoint_destroy(cp);
+
+                            // Clear checkpoint status on failure
+                            window.sessionStorage.setItem("cockpit_has_checkpoint", "false");
                         });
             });
 }
@@ -1667,7 +1957,7 @@ export function connection_devices(con) {
 }
 
 export function is_interface_connection(iface, connection) {
-    return connection && connection.Interfaces.indexOf(iface) != -1;
+    return connection && connection.Interfaces.indexOf(iface) !== -1;
 }
 
 export function is_interesting_interface(iface) {
@@ -1707,10 +1997,7 @@ export function set_member(model, group_connection, group_settings, member_type,
         /* Turn the main_connection into a member for group.
          */
 
-        const group_iface = group_connection
-            ? group_connection.Interfaces[0].Name
-            : group_settings.connection.interface_name;
-
+        const group_iface = group_settings.connection.interface_name;
         if (!group_iface)
             return false;
 
@@ -1718,9 +2005,9 @@ export function set_member(model, group_connection, group_settings, member_type,
         if (main_connection) {
             member_settings = main_connection.Settings;
 
-            if (member_settings.connection.group == group_settings.connection.uuid ||
-                member_settings.connection.group == group_settings.connection.id ||
-                member_settings.connection.group == group_iface)
+            if (member_settings.connection.group === group_settings.connection.uuid ||
+                member_settings.connection.group === group_settings.connection.id ||
+                member_settings.connection.group === group_iface)
                 return Promise.resolve();
 
             member_settings.connection.member_type = member_type;
@@ -1744,10 +2031,12 @@ export function set_member(model, group_connection, group_settings, member_type,
         }
 
         return settings_applier(model, iface.Device, main_connection)(member_settings).then(function () {
-            // If the group already exists, activate or deactivate the member immediately so that
-            // the settings actually apply and the interface becomes a member.  Otherwise we
-            // activate it later when the group is created.
-            if (group_connection) {
+            // If the group already exists (with the correct name),
+            // activate or deactivate the member immediately so that
+            // the settings actually apply and the interface becomes a
+            // member.  Otherwise we activate it later when the group
+            // is created.
+            if (group_connection && group_connection.Interfaces[0].Name === group_iface) {
                 const group_dev = group_connection.Interfaces[0].Device;
                 if (group_dev && group_dev.ActiveConnection)
                     return main_connection.activate(iface.Device);
@@ -1759,7 +2048,7 @@ export function set_member(model, group_connection, group_settings, member_type,
         /* Free the main_connection from being a member if it is our member.  If there is
          * no main_connection, we don't need to do anything.
          */
-        if (main_connection && main_connection.Groups.indexOf(group_connection) != -1) {
+        if (main_connection && main_connection.Groups.indexOf(group_connection) !== -1) {
             free_member_connection(main_connection);
         }
     }
@@ -1788,7 +2077,7 @@ export function apply_group_member(choices, model, apply_group, group_connection
                     });
         }
 
-        if (active_settings.length == 1) {
+        if (active_settings.length === 1) {
             group_settings.ipv4 = JSON.parse(JSON.stringify(active_settings[0].ipv4));
             group_settings.ipv6 = JSON.parse(JSON.stringify(active_settings[0].ipv6));
         }
@@ -1815,6 +2104,25 @@ export function apply_group_member(choices, model, apply_group, group_connection
     return set_all_members().then(function () {
         return apply_group(group_settings);
     });
+}
+
+export function is_loopback(iface) {
+    return iface.Name === "lo" || (iface.Device && iface.Device.DeviceType === "loopback");
+}
+
+export function has_group(iface) {
+    return (
+        (iface.Device &&
+            iface.Device.ActiveConnection &&
+            iface.Device.ActiveConnection.Group &&
+            iface.Device.ActiveConnection.Group.Members.length > 0) ||
+        (iface.MainConnection && iface.MainConnection.Groups.length > 0)
+    );
+}
+
+export function is_wireless(iface) {
+    // NM_DEVICE_TYPE_WIFI
+    return iface.Device?.DeviceType === '802-11-wireless';
 }
 
 export function init() {

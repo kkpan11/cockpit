@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2014 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import * as utils from "./utils.js";
@@ -162,10 +148,10 @@ QUnit.test("ip4_prefix_from_text", function (assert) {
 
         " 128.0.0.0",
         "192.0.0.0 ",
-        "224. 0. 0.0",
-        "240. 0.0 .0",
+        "224.0.0.0",
+        "240.0.0.0",
         "248.0.0.0",
-        "252. 0.0.0",
+        "252.0.0.0",
         "254.0.0.0",
         "255.0.0.0",
 
@@ -217,7 +203,10 @@ QUnit.test("ip4_prefix_from_text invalids", function (assert) {
         "0.0.0.0.0",
         "1.2.3.4",
         "255.255.255.8",
-        "255.192.0.10"
+        "255.192.0.10",
+        "224. 0. 0.0",
+        "240. 0.0 .0",
+        "252. 0.0.0"
     ];
 
     assert_throws(assert, utils.ip4_prefix_from_text, checks);
@@ -227,7 +216,7 @@ QUnit.test("ip6_to/from_text", function (assert) {
     const checks = [
         [[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
-        "0:0:0:0:0:0:0:0"
+        "::"
         ],
         [[0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
             0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F],

@@ -1,8 +1,7 @@
-body.login-pf {
-    background: url("bg-plain.jpg") no-repeat 50% 0;
-    background-size: cover;
-    background-color: #101010;
-}
+/* SPDX-License-Identifier: LGPL-2.1-or-later */
+
+@import "anaconda-branding.css";
+@import "anaconda-branding-compat.css";
 
 #badge {
     inline-size: 225px;
@@ -12,15 +11,6 @@ body.login-pf {
     background-repeat: no-repeat;
 }
 
-#brand {
-    font-size: 18pt;
-    text-transform: uppercase;
-}
-
 #brand::before {
-    content: "${NAME} <b>${VARIANT}</b>";
-}
-
-#index-brand::before {
     content: "${NAME} <b>${VARIANT}</b>";
 }

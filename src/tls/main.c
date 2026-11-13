@@ -1,27 +1,15 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2019 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
 
 #include <argp.h>
 #include <err.h>
+#include <fcntl.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -106,30 +94,25 @@ main (int argc, char **argv)
   if (!runtimedir)
     errx (EXIT_FAILURE, "$RUNTIME_DIRECTORY environment variable must be set to a private directory");
 
-  server_init ("/run/cockpit/wsinstance", runtimedir, arguments.idle_timeout, arguments.port);
+  unsigned int max_connections = cockpit_conf_uint ("WebService", "MaxConcurrentConnections", 500, 10, UINT_MAX);
+
+  server_init ("/run/cockpit/wsinstance", runtimedir, arguments.idle_timeout, arguments.port, max_connections);
 
   if (!arguments.no_tls)
     {
-      char *error = NULL;
-
-      if (error)
-        errx (EXIT_FAILURE, "Could not locate server certificate: %s", error);
+      static const char cert_dir[] = "/run/cockpit/tls/server";
 
       if (cockpit_conf_bool ("WebService", "ClientCertAuthentication", false))
         client_cert_mode = GNUTLS_CERT_REQUEST;
 
       bool allow_unencrypted = cockpit_conf_bool ("WebService", "AllowUnencrypted", false);
 
-      connection_crypto_init ("/run/cockpit/tls/server/cert",
-                              "/run/cockpit/tls/server/key",
-                              allow_unencrypted, client_cert_mode);
+      int cert_dirfd = open (cert_dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+      if (cert_dirfd == -1)
+        err (EXIT_FAILURE, "open: %s", cert_dir);
 
-      /* There's absolutely no need to keep these around */
-      if (unlink ("/run/cockpit/tls/server/cert") != 0)
-        err (EXIT_FAILURE, "unlink: /run/cockpit/tls/server/cert");
-
-      if (unlink ("/run/cockpit/tls/server/key") != 0)
-        err (EXIT_FAILURE, "unlink: /run/cockpit/tls/server/key");
+      connection_crypto_init (cert_dirfd, allow_unencrypted, client_cert_mode);
+      close (cert_dirfd);
     }
 
   server_run ();

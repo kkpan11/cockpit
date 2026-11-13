@@ -1,21 +1,10 @@
-# This file is part of Cockpit.
 #
 # Copyright (C) 2023 Red Hat, Inc.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 
 import contextlib
+import os
 import socket
 
 
@@ -24,9 +13,8 @@ def install():
 
     # introduced in 3.9
     if not hasattr(socket, 'recv_fds'):
-        import array
-
         import _socket
+        import array
 
         def recv_fds(sock, bufsize, maxfds, flags=0):
             fds = array.array("i")
@@ -38,20 +26,40 @@ def install():
 
         socket.recv_fds = recv_fds
 
+    # introduced in 3.9
+    if not hasattr(os, 'waitstatus_to_exitcode'):
+        def waitstatus_to_exitcode(status: int) -> int:
+            if os.WIFEXITED(status):
+                return os.WEXITSTATUS(status)
+            elif os.WIFSIGNALED(status):
+                return -os.WTERMSIG(status)
+            else:
+                raise ValueError(f'Invalid wait status: {status}')
+
+        os.waitstatus_to_exitcode = waitstatus_to_exitcode
+
     # introduced in 3.7
     if not hasattr(contextlib, 'AsyncExitStack'):
         class AsyncExitStack:
             async def __aenter__(self):
                 self.cms = []
+                self.async_cms = []
                 return self
 
             async def enter_async_context(self, cm):
                 result = await cm.__aenter__()
+                self.async_cms.append(cm)
+                return result
+
+            def enter_context(self, cm):
+                result = cm.__enter__()
                 self.cms.append(cm)
                 return result
 
             async def __aexit__(self, exc_type, exc_value, traceback):
-                for cm in self.cms:
+                for cm in self.async_cms:
                     cm.__aexit__(exc_type, exc_value, traceback)
+                for cm in self.cms:
+                    cm.__exit__(exc_type, exc_value, traceback)
 
         contextlib.AsyncExitStack = AsyncExitStack

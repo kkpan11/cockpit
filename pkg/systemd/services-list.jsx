@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2010 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import React from "react";
@@ -32,7 +18,7 @@ import cockpit from "cockpit";
 
 const _ = cockpit.gettext;
 
-export const ServicesList = ({ units, isTimer, filtersRef }) => {
+export const ServicesList = ({ units, isTimer, onClearAllFilters }) => {
     let columns;
     if (!isTimer) {
         columns = [
@@ -55,7 +41,7 @@ export const ServicesList = ({ units, isTimer, filtersRef }) => {
                       rows={ units.map(unit => getServicesRow({ key: unit[0], isTimer, shortId: unit[0], ...unit[1] })) }
                       emptyComponent={<EmptyStatePanel icon={SearchIcon}
                                                        paragraph={_("No results match the filter criteria. Clear all filters to show results.")}
-                                                       action={<Button id="clear-all-filters" onClick={() => { filtersRef.current() }} isInline variant='link'>{_("Clear all filters")}</Button>}
+                                                       action={<Button id="clear-all-filters" onClick={onClearAllFilters} isInline variant='link'>{_("Clear all filters")}</Button>}
                                                        title={_("No matching results")} /> }
                       className="services-list" />
     );
@@ -70,7 +56,7 @@ const getServicesRow = ({ Id, shortId, AutomaticStartup, UnitFileState, LoadStat
 
     const enabled = UnitFileState && UnitFileState.includes("enabled");
     const disabled = UnitFileState && UnitFileState.includes("disabled");
-    const isStatic = UnitFileState && UnitFileState == "static";
+    const isStatic = UnitFileState && UnitFileState === "static";
     const masked = LoadState && LoadState.includes("masked");
     let unitFileState;
     if (enabled || disabled)
@@ -104,7 +90,7 @@ const getServicesRow = ({ Id, shortId, AutomaticStartup, UnitFileState, LoadStat
                                 <ThumbtackIcon className='service-thumbtack-icon-color' />
                             </Tooltip>}
                     </Flex>
-                    {props.Description != shortId && <div className='service-unit-description'>{props.Description}</div>}
+                    {props.Description !== shortId && <div className='service-unit-description'>{props.Description}</div>}
                 </div>
             )
         },

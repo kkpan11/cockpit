@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2019 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
@@ -24,6 +10,7 @@
 #include <assert.h>
 #include <err.h>
 #include <errno.h>
+#include <limits.h>
 #include <netinet/in.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -50,6 +37,8 @@ static struct {
   /* rw, protected by mutex */
   pthread_mutex_t connection_mutex;
   unsigned int connection_count;
+  unsigned int max_connection_count;
+  bool max_connection_warning_issued;
   int idle_timerfd;
   struct itimerspec idle_timeout;
 } server;
@@ -72,8 +61,9 @@ check_sd_listen_pid (void)
       return false;
     }
 
+  errno = 0;
   pid = strtol (pid_str, &endptr, 10);
-  if (pid <= 0 || *endptr != '\0')
+  if (pid <= 0 || *endptr != '\0' || errno != 0)
     errx (EXIT_FAILURE, "$LISTEN_PID contains invalid value '%s'", pid_str);
   if ((pid_t) pid != getpid ())
     {
@@ -146,6 +136,26 @@ handle_accept (int listen_fd)
         timerfd_settime (server.idle_timerfd, 0, &zero, NULL);
       }
 
+    if (server.connection_count >= server.max_connection_count)
+      {
+        if (!server.max_connection_warning_issued)
+          {
+            warnx ("too many connections");
+            server.max_connection_warning_issued = true;
+          }
+
+        pthread_mutex_unlock (&server.connection_mutex);
+
+        // Send a immediate RST to the client to immediately free up
+        // our resources associated with the socket.  This results in
+        // a "Connection reset" error on the other end, which is
+        // useful as well.
+        struct linger opt = { .l_onoff = 1, .l_linger = 0 };
+        setsockopt (fd, SOL_SOCKET, SO_LINGER, &opt, sizeof(opt));
+        close (fd);
+        return;
+      }
+
     server.connection_count++;
 
     debug (CONNECTION, "  -> server.connection_count is now %i", server.connection_count);
@@ -160,14 +170,19 @@ handle_accept (int listen_fd)
                           server_connection_thread_start_routine,
                           (void *) (uintptr_t) fd);
 
+  pthread_attr_destroy (&attr);
+
   if (r != 0)
     {
       errno = r;
       warn ("pthread_create() failed.  dropping connection");
       close (fd);
-    }
 
-  pthread_attr_destroy (&attr);
+      /* Decrement connection_count since thread was never created */
+      pthread_mutex_lock (&server.connection_mutex);
+      server.connection_count--;
+      pthread_mutex_unlock (&server.connection_mutex);
+    }
 }
 
 /***********************************
@@ -193,13 +208,15 @@ void
 server_init (const char *wsinstance_sockdir,
              const char *cert_session_dir,
              int idle_timeout,
-             uint16_t port)
+             uint16_t port,
+             unsigned int max_connection_count)
 {
   const char *env_listen_fds;
   struct epoll_event ev = { .events = EPOLLIN };
 
   assert (!server.initialized);
   server.initialized = true;
+  server.max_connection_count = max_connection_count;
   server.idle_timerfd = -1;
 
   connection_set_directories (wsinstance_sockdir, cert_session_dir);
@@ -211,9 +228,10 @@ server_init (const char *wsinstance_sockdir,
   if (env_listen_fds && check_sd_listen_pid ())
     {
       char *endptr = NULL;
+      errno = 0;
       unsigned long n = strtoul (env_listen_fds, &endptr, 10);
 
-      if (n < 1 || n > INT_MAX || *endptr != '\0')
+      if (n < 1 || n > INT_MAX || *endptr != '\0' || errno != 0)
         errx (EXIT_FAILURE, "Invalid $LISTEN_FDS value '%s'", env_listen_fds);
 
       server.first_listener = SD_LISTEN_FDS_START;
@@ -221,22 +239,26 @@ server_init (const char *wsinstance_sockdir,
     }
   else
     {
-      struct sockaddr_in sa_serv;
+      struct sockaddr_in6 sa_serv;
       int optval = 1;
 
       /* Listen to our port; on the command line and our API we just support one */
-      server.first_listener = socket (AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+      server.first_listener = socket (AF_INET6, SOCK_STREAM | SOCK_CLOEXEC, 0);
       if (server.first_listener < 0)
         err (EXIT_FAILURE, "failed to create server listening fd");
       server.last_listener = server.first_listener;
 
       memset (&sa_serv, '\0', sizeof (sa_serv));
-      sa_serv.sin_family = AF_INET;
-      sa_serv.sin_addr.s_addr = INADDR_ANY;
-      sa_serv.sin_port = htons (port);
+      sa_serv.sin6_family = AF_INET6;
+      sa_serv.sin6_addr = in6addr_any;
+      sa_serv.sin6_port = htons (port);
 
       if (setsockopt (server.first_listener, SOL_SOCKET, SO_REUSEADDR, (void *) &optval, sizeof (int)) < 0)
         err (EXIT_FAILURE, "failed to set socket option");
+      /* Allow both IPv4 and IPv6 connections on the same socket */
+      optval = 0;
+      if (setsockopt (server.first_listener, IPPROTO_IPV6, IPV6_V6ONLY, (void *) &optval, sizeof (int)) < 0)
+        err (EXIT_FAILURE, "failed to set IPV6_V6ONLY socket option");
       if (bind (server.first_listener, (struct sockaddr *) &sa_serv, sizeof (sa_serv)) < 0)
         err (EXIT_FAILURE, "failed to bind to port %hu", port);
       if (listen (server.first_listener, 1024) < 0)

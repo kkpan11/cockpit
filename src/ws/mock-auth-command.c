@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2016 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
@@ -35,47 +21,13 @@
 #include <unistd.h>
 #include <stdio.h>
 
+#include "src/session/session-utils.h"
+
 #define DEBUG 0
 #define EX 127
 
 static const char *auth_prefix = "\n{\"command\":\"authorize\",\"cookie\":\"xxx\"";
 static const char *auth_suffix = "\"}";
-
-static char *
-read_authorize_response (void)
-{
-  const char *auth_response = ",\"response\":\"";
-  size_t auth_response_size = 13;
-  size_t auth_prefix_size = strlen (auth_prefix);
-  size_t auth_suffix_size = strlen (auth_suffix);
-  unsigned char *message;
-  ssize_t len;
-
-  len = cockpit_frame_read (STDIN_FILENO, &message);
-  if (len < 0)
-    err (EX, "couldn't read authorize response");
-
-#if DEBUG
-  fprintf (stderr, "mock-auth-command < %.*s\n", (int)len, message);
-#endif
-  /*
-   * The authorize messages we receive always have an exact prefix and suffix:
-   *
-   * \n{"command":"authorize","cookie":"NNN","response":"...."}
-   */
-  if (len <= auth_prefix_size + auth_response_size + auth_suffix_size ||
-      memcmp (message, auth_prefix, auth_prefix_size) != 0 ||
-      memcmp (message + auth_prefix_size, auth_response, auth_response_size) != 0 ||
-      memcmp (message + (len - auth_suffix_size), auth_suffix, auth_suffix_size) != 0)
-    {
-      errx (EX, "didn't receive expected \"authorize\" message: %.*s", (int)len, message);
-    }
-
-  len -= auth_prefix_size + auth_response_size + auth_suffix_size;
-  memmove (message, message + auth_prefix_size + auth_response_size, len);
-  message[len] = '\0';
-  return (char *)message;
-}
 
 static void
 write_authorize_challenge (const char *data)
@@ -117,14 +69,14 @@ main (int argc,
 {
   int success = 0;
   int launch_bridge = 0;
-  char *message;
   const char *data = NULL;
   char *type;
 
   write_authorize_challenge ("*");
 
-  message = read_authorize_response ();
-  data = cockpit_authorize_type (message, &type);
+  char *message = read_authorize_response ("authorization");
+  char *response = get_authorize_key (message, "response", true);
+  data = cockpit_authorize_type (response, &type);
   assert (data != NULL);
 
   if (strcmp (data, "") == 0)
@@ -135,9 +87,11 @@ main (int argc,
     {
       write_message ("\n{\"command\":\"authorize\",\"response\": \"user me\"}");
       free (message);
+      free (response);
       write_authorize_challenge ("*");
-      message = read_authorize_response ();
-      if (!message || strcmp (message, "user me") != 0)
+      message = read_authorize_response ("no-cookie");
+      response = get_authorize_key (message, "response", true);
+      if (!response || strcmp (response, "user me") != 0)
         {
           write_init_message ("\"problem\": \"authentication-failed\"");
         }
@@ -254,8 +208,10 @@ main (int argc,
     {
       write_authorize_challenge ("X-Conversation conv dHlwZSB0d28=");
       free (message);
-      message = read_authorize_response ();
-      data = cockpit_authorize_type (message, NULL);
+      free (response);
+      message = read_authorize_response ("two-step");
+      response = get_authorize_key (message, "response", true);
+      data = cockpit_authorize_type (response, NULL);
       if (!data || strcmp (data, "conv dHdv") != 0)
         {
           write_init_message ("\"problem\": \"authentication-failed\"");
@@ -270,8 +226,10 @@ main (int argc,
     {
       write_authorize_challenge ("X-Conversation conv dHlwZSB0d28=");
       free (message);
-      message = read_authorize_response ();
-      data = cockpit_authorize_type (message, NULL);
+      free (response);
+      message = read_authorize_response ("three-step");
+      response = get_authorize_key (message, "response", true);
+      data = cockpit_authorize_type (response, NULL);
       if (!data || strcmp (data, "conv dHdv") != 0)
         {
           write_init_message ("\"problem\": \"authentication-failed\"");
@@ -280,8 +238,10 @@ main (int argc,
 
       write_authorize_challenge ("X-Conversation conv dHlwZSB0aHJlZQ==");
       free (message);
-      message = read_authorize_response ();
-      data = cockpit_authorize_type (message, NULL);
+      free (response);
+      message = read_authorize_response ("three-step");
+      response = get_authorize_key (message, "response", true);
+      data = cockpit_authorize_type (response, NULL);
       if (!data || strcmp (data, "conv dGhyZWU=") != 0)
         {
           write_init_message ("\"problem\": \"authentication-failed\"");
@@ -317,6 +277,7 @@ main (int argc,
     }
 
 out:
+  free (response);
   free (message);
   if (success)
     {

@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2020 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -23,7 +9,6 @@ import * as timeformat from "timeformat";
 
 import React from 'react';
 import { EmptyStatePanel } from "cockpit-components-empty-state.jsx";
-import { AbrtLogDetails } from "./abrtLog.jsx";
 import { ExclamationCircleIcon } from '@patternfly/react-icons';
 import { Breadcrumb, BreadcrumbItem } from "@patternfly/react-core/dist/esm/components/Breadcrumb/index.js";
 import { Button } from "@patternfly/react-core/dist/esm/components/Button/index.js";
@@ -31,6 +16,7 @@ import { Card, CardBody, CardHeader, CardTitle } from '@patternfly/react-core/di
 import { DescriptionList, DescriptionListDescription, DescriptionListGroup, DescriptionListTerm } from "@patternfly/react-core/dist/esm/components/DescriptionList/index.js";
 import { Page, PageBreadcrumb, PageSection } from "@patternfly/react-core/dist/esm/components/Page/index.js";
 import { Gallery, GalleryItem } from "@patternfly/react-core/dist/esm/layouts/Gallery/index.js";
+import { Title, TitleSizes } from "@patternfly/react-core/dist/esm/components/Title";
 
 const _ = cockpit.gettext;
 
@@ -38,7 +24,7 @@ const LogDetails = ({ entry }) => {
     const general = Object.keys(entry).filter(k => k !== 'MESSAGE');
     general.sort();
 
-    const id = entry.PROBLEM_BINARY || entry.UNIT || entry.SYSLOG_IDENTIFIER || "";
+    const id = entry.UNIT || entry.SYSLOG_IDENTIFIER || "";
     let service = entry.USER_UNIT || entry.COREDUMP_USER_UNIT || entry._SYSTEMD_USER_UNIT || "";
     const is_user = !!service;
     service = service || entry.UNIT || entry.COREDUMP_UNIT || entry._SYSTEMD_UNIT || "";
@@ -55,9 +41,11 @@ const LogDetails = ({ entry }) => {
 
     return (
         <GalleryItem>
-            <Card>
+            <Card isPlain>
                 <CardHeader actions={{ actions }}>
-                    <h2 id="entry-heading">{id}</h2>
+                    <Title id="entry-heading" headingLevel="h2" size={TitleSizes['3xl']}>
+                        {id}
+                    </Title>
                 </CardHeader>
                 <CardTitle>{journal.printable(entry.MESSAGE, "MESSAGE")}</CardTitle>
                 <CardBody>
@@ -65,7 +53,7 @@ const LogDetails = ({ entry }) => {
                         { general.map(key =>
                             <DescriptionListGroup key={key}>
                                 <DescriptionListTerm>{key}</DescriptionListTerm>
-                                <DescriptionListDescription>{journal.printable(entry[key], key)}</DescriptionListDescription>
+                                <DescriptionListDescription data-label={key}>{journal.printable(entry[key], key)}</DescriptionListDescription>
                             </DescriptionListGroup>
                         )}
                     </DescriptionList>
@@ -75,23 +63,6 @@ const LogDetails = ({ entry }) => {
     );
 };
 
-function get_problems(service) {
-    return service.wait()
-            .then(() => {
-                return service.GetProblems(0, {})
-                        .then(paths => {
-                            const proxies = paths.map(p => service.client.proxy("org.freedesktop.Problems2.Entry", p));
-                            return Promise.all(proxies.map(p => p.wait()))
-                                    .then(() => {
-                                        const result = { };
-                                        for (let i = 0; i < paths.length; i++)
-                                            result[paths[i]] = proxies[i];
-                                        return result;
-                                    });
-                        });
-            });
-}
-
 export class LogEntry extends React.Component {
     constructor(props) {
         super(props);
@@ -99,60 +70,21 @@ export class LogEntry extends React.Component {
             error: "",
             entry: null,
             loading: true,
-            problemPath: null,
-            abrtService: null,
         };
 
-        this.loadProblem = this.loadProblem.bind(this);
         this.goHome = this.goHome.bind(this);
-        this.problems_client = null;
-    }
-
-    loadProblem(entry) {
-        if (this.problems_client)
-            this.problems_client.close();
-        this.problems_client = cockpit.dbus('org.freedesktop.problems', { superuser: "try" });
-
-        const service = this.problems_client.proxy('org.freedesktop.Problems2', '/org/freedesktop/Problems2');
-        get_problems(service)
-                .then(problems => {
-                    const fields = [entry.PROBLEM_DIR, entry.PROBLEM_DUPHASH, entry.PROBLEM_UUID];
-                    let path = null;
-                    Object.keys(problems).some(pth => {
-                        const p = problems[pth];
-                        if (p && (fields.indexOf(p.ID) > 0 || fields.indexOf(p.UUID) || fields.indexOf(p.Duphash))) {
-                            path = p;
-                            return true;
-                        } else {
-                            return false;
-                        }
-                    });
-
-                    this.setState({ entry, loading: false, error: "", problemPath: path, abrtService: service });
-                })
-                .catch(err => this.setState({ entry, loading: false, error: err.toString() }));
     }
 
     componentDidMount() {
         const cursor = cockpit.location.path[0];
         journal.journalctl({ cursor, count: 1, follow: false })
                 .then(entries => {
-                    if (entries.length >= 1 && entries[0].__CURSOR == cursor) {
-                        if (entries[0].SYSLOG_IDENTIFIER === "abrt-notification" || entries[0]._SYSTEMD_UNIT === "abrt-notification")
-                            this.loadProblem(entries[0]);
-                        else
-                            this.setState({ entry: entries[0], loading: false, error: "" });
+                    if (entries.length >= 1 && entries[0].__CURSOR === cursor) {
+                        this.setState({ entry: entries[0], loading: false, error: "" });
                     } else
                         this.setState({ entry: null, loading: false, error: _("Journal entry not found") });
                 })
                 .catch(error => this.setState({ entry: null, loading: false, error }));
-    }
-
-    componentWillUnmount() {
-        if (this.problems_client) {
-            this.problems_client.close();
-            this.problems_client = null;
-        }
     }
 
     goHome(ev) {
@@ -175,29 +107,21 @@ export class LogEntry extends React.Component {
             const entry = this.state.entry;
             const date = timeformat.dateTimeSeconds(entry.__REALTIME_TIMESTAMP / 1000);
 
-            if (this.state.problemPath) {
-                breadcrumb = cockpit.format(_("$0: crash at $1"), entry.PROBLEM_BINARY, date);
-                content = <AbrtLogDetails problem={this.state.problemPath}
-                                          entry={entry}
-                                          service={this.state.abrtService}
-                                          reloadProblems={this.goHome} />;
-            } else {
-                breadcrumb = cockpit.format(_("Entry at $0"), date);
-                content = <LogDetails entry={entry} />;
-            }
+            breadcrumb = cockpit.format(_("Entry at $0"), date);
+            content = <LogDetails entry={entry} />;
         }
 
         return (
-            <Page id="log-details">
-                <PageBreadcrumb stickyOnBreakpoint={{ default: "top" }}>
+            <Page id="log-details" className="log-details pf-m-no-sidebar">
+                <PageBreadcrumb hasBodyWrapper={false} stickyOnBreakpoint={{ default: "top" }}>
                     <Breadcrumb>
-                        <BreadcrumbItem onClick={this.goHome} className="pf-v5-c-breadcrumb__link">{_("Logs")}</BreadcrumbItem>
+                        <BreadcrumbItem onClick={this.goHome} className="pf-v6-c-breadcrumb__link">{_("Logs")}</BreadcrumbItem>
                         <BreadcrumbItem isActive>
                             {breadcrumb}
                         </BreadcrumbItem>
                     </Breadcrumb>
                 </PageBreadcrumb>
-                <PageSection>
+                <PageSection hasBodyWrapper={false}>
                     <Gallery hasGutter>
                         {content}
                     </Gallery>

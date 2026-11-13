@@ -1,23 +1,17 @@
-import fs from "fs";
-import path from 'path';
-import _ from 'lodash';
-
-const srcdir = process.env.SRCDIR || '.';
-const libdir = path.resolve(srcdir, "pkg", "lib");
-
+// SPDX-License-Identifier: LGPL-2.1-or-later
+import fs from 'node:fs';
+import path from 'node:path';
 export const cockpitTestHtmlPlugin = ({ testFiles }) => ({
     name: 'CockpitTestHtmlPlugin',
     setup(build) {
         build.onEnd(async () => {
-            const data = fs.readFileSync(path.resolve(libdir, "qunit-template.html.in"), "utf8");
+            const data = fs.readFileSync(path.resolve(import.meta.dirname, "qunit-template.html.in"), "utf8");
             testFiles.forEach(file => {
                 const test = path.parse(file).name;
-                const output = _.template(data.toString())({
-                    title: test,
-                    builddir: file.split("/").map(() => "../").join(""),
-                    script: test + '.js',
-                });
-                const outdir = './qunit/' + path.dirname(file);
+                const output = data.toString()
+                        .replaceAll("%title%", test)
+                        .replaceAll("%script%", test + '.js');
+                const outdir = path.join(build.initialOptions.outdir, path.dirname(file));
                 const outfile = test + ".html";
 
                 fs.mkdirSync(outdir, { recursive: true });

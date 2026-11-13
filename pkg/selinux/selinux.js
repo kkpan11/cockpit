@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2016 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -23,7 +9,7 @@ import 'cockpit-dark-theme'; // once per page
 import React from "react";
 import { createRoot } from "react-dom/client";
 
-import '../lib/patternfly/patternfly-5-cockpit.scss';
+import '../lib/patternfly/patternfly-6-cockpit.scss';
 
 import * as troubleshootClient from "./setroubleshoot-client.js";
 import * as selinuxClient from "./selinux-client.js";
@@ -83,7 +69,7 @@ const initStore = function(rootElement) {
     const runFix = function(alertId, analysisId, fixId, runCommand) {
         let idx;
         for (idx = dataStore.entries.length - 1; idx >= 0; --idx) {
-            if (dataStore.entries[idx].key == alertId)
+            if (dataStore.entries[idx].key === alertId)
                 break;
         }
         if (idx < 0) {
@@ -129,11 +115,11 @@ const initStore = function(rootElement) {
      * This function will only be called if the backend functionality is actually present
      */
     const deleteAlert = function(alertId) {
-        return dataStore.client.capabilities.deleteAlert(alertId)
+        return dataStore.client.deleteAlert(alertId)
                 .then(() => {
                     let idx;
                     for (idx = dataStore.entries.length - 1; idx >= 0; --idx) {
-                        if (dataStore.entries[idx].key == alertId)
+                        if (dataStore.entries[idx].key === alertId)
                             break;
                     }
                     if (idx < 0)
@@ -155,7 +141,7 @@ const initStore = function(rootElement) {
     const render = function() {
         if (!dataStore.reactRoot)
             dataStore.reactRoot = createRoot(rootElement);
-        const enableDeleteAlert = ('capabilities' in dataStore.client && 'deleteAlert' in dataStore.client.capabilities);
+
         dataStore.reactRoot.render(React.createElement(SETroubleshootPage, {
             connected: dataStore.connected,
             connecting: dataStore.connecting,
@@ -163,7 +149,7 @@ const initStore = function(rootElement) {
             dismissError,
             entries: dataStore.entries,
             runFix,
-            deleteAlert: enableDeleteAlert ? deleteAlert : undefined,
+            deleteAlert,
             selinuxStatus: dataStore.selinuxStatus,
             selinuxStatusError: dataStore.selinuxStatusError,
             changeSelinuxMode: selinuxChangeMode,
@@ -182,7 +168,7 @@ const initStore = function(rootElement) {
         // we start at the back because that's where we push new entries
         // if we receive an alert multiple times, this is where it will be
         for (let idx = dataStore.entries.length - 1; idx >= 0; --idx) {
-            if (dataStore.entries[idx].key == localId) {
+            if (dataStore.entries[idx].key === localId) {
                 if (description === undefined || count === undefined) {
                     dataStore.entries[idx].details = details;
                     return;
@@ -213,7 +199,7 @@ const initStore = function(rootElement) {
      */
     const handleMultipleMessages = function(entries) {
         const detailPromises = [];
-        for (let idxEntry = 0; idxEntry != entries.length; ++idxEntry) {
+        for (let idxEntry = 0; idxEntry !== entries.length; ++idxEntry) {
             const entry = entries[idxEntry];
             maybeUpdateAlert(entry.localId, entry.summary, entry.reportCount, undefined);
             detailPromises.push(dataStore.getAlertDetails(entry.localId));
@@ -255,19 +241,14 @@ const initStore = function(rootElement) {
 
     dataStore.connectionTimeout = 5000;
 
-    function capablitiesChanged(capabilities) {
-        dataStore.capabilities = capabilities;
-        render();
-    }
-
     // try to connect
     dataStore.tryConnect = function() {
         if (dataStore.connecting === null) {
             dataStore.connecting = window.setTimeout(setErrorIfNotConnected, dataStore.connectionTimeout);
             render();
             // initialize our setroubleshootd client
-            dataStore.client.init(capablitiesChanged)
-                    .then(capablitiesChanged => {
+            dataStore.client.init()
+                    .then(() => {
                         dataStore.connected = true;
                         window.clearTimeout(dataStore.connecting);
                         dataStore.connecting = null;

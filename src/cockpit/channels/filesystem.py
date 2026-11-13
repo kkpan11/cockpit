@@ -1,19 +1,7 @@
-# This file is part of Cockpit.
 #
 # Copyright (C) 2022 Red Hat, Inc.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 
 import asyncio
 import contextlib
@@ -25,15 +13,17 @@ import grp
 import logging
 import os
 import pwd
-import random
+import re
 import stat
-from typing import Callable, Iterable
+import tempfile
+from pathlib import Path
+from typing import Callable, Generator, Iterable
 
 from cockpit._vendor.systemd_ctypes import Handle, PathWatch
 from cockpit._vendor.systemd_ctypes.inotify import Event as InotifyEvent
 from cockpit._vendor.systemd_ctypes.pathwatch import Listener as PathWatchListener
 
-from ..channel import Channel, ChannelError, GeneratorChannel
+from ..channel import AsyncChannel, Channel, ChannelError, GeneratorChannel
 from ..jsonutil import (
     JsonDict,
     JsonDocument,
@@ -41,7 +31,9 @@ from ..jsonutil import (
     JsonObject,
     get_bool,
     get_int,
+    get_object,
     get_str,
+    get_str_or_int,
     get_strv,
     json_merge_and_filter_patch,
 )
@@ -49,11 +41,17 @@ from ..jsonutil import (
 logger = logging.getLogger(__name__)
 
 
-def tag_from_stat(buf):
-    return f'1:{buf.st_ino}-{buf.st_mtime}'
+@functools.lru_cache()
+def my_umask() -> int:
+    match = re.search(r'^Umask:\s*0([0-7]*)$', Path('/proc/self/status').read_text(), re.M)
+    return (match and int(match.group(1), 8)) or 0o077
 
 
-def tag_from_path(path):
+def tag_from_stat(buf: os.stat_result) -> str:
+    return f'1:{buf.st_ino}-{buf.st_mtime}-{buf.st_mode:o}-{buf.st_uid}-{buf.st_gid}'
+
+
+def tag_from_path(path: 'int | str | Path') -> 'str | None':
     try:
         return tag_from_stat(os.stat(path))
     except FileNotFoundError:
@@ -62,17 +60,19 @@ def tag_from_path(path):
         return None
 
 
-def tag_from_fd(fd):
+def tag_from_fd(fd: int) -> 'str | None':
     try:
         return tag_from_stat(os.fstat(fd))
     except OSError:
         return None
 
 
+# DEPRECATED: https://github.com/cockpit-project/cockpit/pull/21055
+# as of 2024-09-30 there are no more users of this in any known project
 class FsListChannel(Channel):
     payload = 'fslist1'
 
-    def send_entry(self, event, entry):
+    def send_entry(self, event: str, entry: 'os.DirEntry[str]') -> None:
         if entry.is_symlink():
             mode = 'link'
         elif entry.is_file():
@@ -84,8 +84,8 @@ class FsListChannel(Channel):
 
         self.send_json(event=event, path=entry.name, type=mode)
 
-    def do_open(self, options):
-        path = options.get('path')
+    def do_open(self, options: 'JsonObject') -> None:
+        path = get_str(options, 'path')
         watch = options.get('watch', True)
 
         if watch:
@@ -112,20 +112,19 @@ class FsListChannel(Channel):
 class FsReadChannel(GeneratorChannel):
     payload = 'fsread1'
 
-    def do_yield_data(self, options: JsonObject) -> GeneratorChannel.DataGenerator:
+    def do_yield_data(self, options: JsonObject) -> Generator[bytes, None, JsonObject]:
         path = get_str(options, 'path')
-        binary = get_str(options, 'binary', None)
-        max_read_size = get_int(options, 'max_read_size', None)
+        max_read_size = get_int(options, 'max_read_size', 16 * 1024 * 1024)
 
         logger.debug('Opening file "%s" for reading', path)
 
         try:
             with open(path, 'rb') as filep:
                 buf = os.stat(filep.fileno())
-                if max_read_size is not None and buf.st_size > max_read_size:
+                if max_read_size != -1 and buf.st_size > max_read_size:
                     raise ChannelError('too-large')
 
-                if binary and stat.S_ISREG(buf.st_mode):
+                if self.is_binary and stat.S_ISREG(buf.st_mode):
                     self.ready(size_hint=buf.st_size)
                 else:
                     self.ready()
@@ -135,115 +134,199 @@ class FsReadChannel(GeneratorChannel):
                     if data == b'':
                         break
                     logger.debug('  ...sending %d bytes', len(data))
-                    if not binary:
-                        data = data.replace(b'\0', b'').decode('utf-8', errors='ignore').encode('utf-8')
+                    if not self.is_binary:
+                        data = data.replace(b'\0', b'').decode(errors='ignore').encode()
                     yield data
 
             return {'tag': tag_from_stat(buf)}
 
         except FileNotFoundError:
-            return {'tag': '-'}
+            # Using `yield` and `return {value}` generator, but GeneratorChannel does expect this
+            return {'tag': '-'}  # ruff: ignore[return-in-generator]
         except PermissionError as exc:
             raise ChannelError('access-denied') from exc
         except OSError as exc:
             raise ChannelError('internal-error', message=str(exc)) from exc
 
 
-class FsReplaceChannel(Channel):
-    payload = 'fsreplace1'
+class FSReplaceAttrs:
+    uid: 'int | None' = None
+    gid: 'int | None' = None
+    supported_attrs = {'user', 'group', 'mode'}
+    mode: 'int | None' = None
 
-    _path = None
-    _tag = None
-    _tempfile = None
-    _temppath = None
+    def __init__(self, value: JsonObject) -> None:
+        # Any unknown keys throw an error
+        unsupported_attrs = value.keys() - self.supported_attrs
+        if unsupported_attrs:
+            raise ChannelError('protocol-error',
+                               message=f'"attrs" contains unsupported key(s): {",".join(unsupported_attrs)}',
+                               unsupported_attrs=list(unsupported_attrs)) from None
 
-    def unlink_temppath(self):
-        try:
-            os.unlink(self._temppath)
-        except OSError:
-            pass  # might have been removed from outside
+        self.mode = get_int(value, 'mode', None)
+        user = get_str_or_int(value, 'user', None)
+        group = get_str_or_int(value, 'group', None)
 
-    def do_open(self, options):
-        self._path = options.get('path')
-        self._tag = options.get('tag')
-        self.ready()
+        if user is not None and group is None:
+            raise ChannelError('protocol-error', message='"group" attribute is empty while "user" is provided')
+        if group is not None and user is None:
+            raise ChannelError('protocol-error', message='"user" attribute is empty while "group" is provided')
 
-    def do_data(self, data):
-        if self._tempfile is None:
-            # keep this bounded, in case anything unexpected goes wrong
-            for _ in range(10):
-                suffix = ''.join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789_", k=6))
-                self._temppath = f'{self._path}.cockpit-tmp.{suffix}'
-                try:
-                    fd = os.open(self._temppath, os.O_CREAT | os.O_WRONLY | os.O_EXCL, 0o666)
-                    break
-                except FileExistsError:
-                    continue
-                except PermissionError as exc:
-                    raise ChannelError('access-denied') from exc
-                except FileNotFoundError as exc:
-                    # directory of path does not exist
-                    raise ChannelError('not-found') from exc
-                except OSError as exc:
-                    raise ChannelError('internal-error', message=str(exc)) from exc
-            else:
-                raise ChannelError('internal-error',
-                                   message=f"Could not find unique file name for replacing {self._path}")
-
+        if isinstance(user, str):
             try:
-                self._tempfile = os.fdopen(fd, 'wb')
-            except OSError:
-                # Should Not Happen™, but let's be safe and avoid fd leak
-                os.close(fd)
-                self.unlink_temppath()
-                raise
-
-        self._tempfile.write(data)
-
-    def do_done(self):
-        if self._tempfile is None:
-            try:
-                os.unlink(self._path)
-            # crash on other errors, as they are unexpected
-            except FileNotFoundError:
-                pass
+                self.uid = pwd.getpwnam(user).pw_uid
+            except KeyError:
+                raise ChannelError('not-found', message=f'uid not found for {user}') from None
         else:
-            self._tempfile.flush()
+            self.uid = user
 
-            if self._tag and self._tag != tag_from_path(self._path):
-                raise ChannelError('change-conflict')
-
+        if isinstance(group, str):
             try:
-                os.rename(self._temppath, self._path)
-            # ensure to not leave the temp file behind
-            except FileNotFoundError as exc:
-                self.unlink_temppath()
-                raise ChannelError('not-found', message=str(exc)) from exc
-            except IsADirectoryError as exc:
-                self.unlink_temppath()
-                # not ideal, but the closest code we have
-                raise ChannelError('access-denied', message=str(exc)) from exc
-            except OSError as exc:
-                self.unlink_temppath()
-                raise ChannelError('internal-error', message=str(exc)) from exc
-
-            self._tempfile.close()
-            self._tempfile = None
-
-        self.done()
-        self.close({'tag': tag_from_path(self._path)})
-
-    def do_close(self):
-        if self._tempfile is not None:
-            self._tempfile.close()
-            self.unlink_temppath()
-            self._tempfile = None
+                self.gid = grp.getgrnam(group).gr_gid
+            except KeyError:
+                raise ChannelError('not-found', message=f'gid not found for {group}') from None
+        else:
+            self.gid = group
 
 
-class FsWatchChannel(Channel):
+class FsReplaceChannel(AsyncChannel):
+    payload = 'fsreplace1'
+    capabilities = 'attrs',
+
+    def delete(self, path: str, tag: 'str | None') -> str:
+        if tag is not None and tag != tag_from_path(path):
+            raise ChannelError('change-conflict')
+        with contextlib.suppress(FileNotFoundError):  # delete is idempotent
+            os.unlink(path)
+        return '-'
+
+    async def set_contents(
+        self, path: str, tag: 'str | None', data: 'bytes | None', size: 'int | None',
+        attrs: 'FSReplaceAttrs | None'
+    ) -> 'str | None':
+        dirname, basename = os.path.split(path)
+        tmpname: str | None
+        fd, tmpname = tempfile.mkstemp(dir=dirname, prefix=f'.{basename}-')
+
+        def chown_if_required(fd: 'int', buf: 'os.stat_result | None' = None) -> None:
+            # Provided attrs are preferred over the existing file permissions
+            if attrs is not None and attrs.uid is not None and attrs.gid is not None:
+                os.fchown(fd, attrs.uid, attrs.gid)
+            elif buf is not None:
+                os.fchown(fd, buf.st_uid, buf.st_gid)
+
+        def apply_file_mode(fd: 'int', mode: 'int | None' = None) -> None:
+            if attrs is not None and attrs.mode is not None:
+                mode = attrs.mode
+            elif mode is None:
+                mode = 0o666 & ~my_umask()
+            os.fchmod(fd, mode)
+
+        try:
+            if size is not None:
+                logger.debug('fallocate(%s.tmp, %d)', path, size)
+                if size:  # posix_fallocate() of 0 bytes is EINVAL
+                    await self.in_thread(os.posix_fallocate, fd, 0, size)
+                self.ready()  # ...only after that worked
+
+            written = 0
+            while data is not None:
+                await self.in_thread(os.write, fd, data)
+                written += len(data)
+                data = await self.read()
+
+            if size is not None and written < size:
+                logger.debug('ftruncate(%s.tmp, %d)', path, written)
+                await self.in_thread(os.ftruncate, fd, written)
+
+            await self.in_thread(os.fdatasync, fd)
+
+            if tag is None:
+                # no preconditions about what currently exists or not
+                # calculate the file mode from the umask
+                apply_file_mode(fd)
+                chown_if_required(fd)
+                os.rename(tmpname, path)
+                tmpname = None
+
+            elif tag == '-':
+                # the file must not exist.  file mode from umask.
+                apply_file_mode(fd)
+                chown_if_required(fd)
+                os.link(tmpname, path)  # will fail if file exists
+
+            else:
+                # the file must exist with the given tag
+                path_fd = os.open(path, os.O_RDONLY)
+
+                try:
+                    buf = os.stat(path_fd)
+                    if tag != tag_from_stat(buf):
+                        raise ChannelError('change-conflict')
+                    # chown/chmod from the existing file permissions
+                    apply_file_mode(fd, stat.S_IMODE(buf.st_mode))
+                    chown_if_required(fd, buf)
+                    try:
+                        selinux_context = os.getxattr(path_fd, 'security.selinux')
+                        os.setxattr(fd, 'security.selinux', selinux_context)
+                        logger.debug("SELinux context '%s' set on '%s'", selinux_context, path)
+                    except OSError as exc:
+                        logger.exception("Error getting or setting SELinux context from original file: '%s'", exc)
+                finally:
+                    os.close(path_fd)
+
+                os.rename(tmpname, path)
+                tmpname = None
+
+        finally:
+            os.close(fd)
+            if tmpname is not None:
+                os.unlink(tmpname)
+
+        return tag_from_path(path)
+
+    async def run(self, options: JsonObject) -> JsonObject:
+        attrs = get_object(options, 'attrs', FSReplaceAttrs, None)
+        path = get_str(options, 'path')
+        size = get_int(options, 'size', None)
+        tag = get_str(options, 'tag', None)
+
+        try:
+            # In the `size` case, .set_contents() sends the ready only after
+            # it knows that the allocate was successful.  In the case without
+            # `size`, we need to send the ready() up front in order to
+            # receive the first frame and decide if we're creating or deleting.
+            if size is not None:
+                tag = await self.set_contents(path, tag, b'', size, attrs)
+            else:
+                self.ready()
+                data = await self.read()
+                # if we get EOF right away, that's a request to delete
+                if data is None:
+                    tag = self.delete(path, tag)
+                else:
+                    tag = await self.set_contents(path, tag, data, None, attrs)
+
+            self.done()
+            return {'tag': tag}
+
+        except FileNotFoundError as exc:
+            raise ChannelError('not-found') from exc
+        except FileExistsError as exc:
+            # that's from link() noticing that the target file already exists
+            raise ChannelError('change-conflict') from exc
+        except PermissionError as exc:
+            raise ChannelError('access-denied') from exc
+        except IsADirectoryError as exc:
+            # not ideal, but the closest code we have
+            raise ChannelError('access-denied', message=str(exc)) from exc
+        except OSError as exc:
+            raise ChannelError('internal-error', message=str(exc)) from exc
+
+
+class FsWatchChannel(Channel, PathWatchListener):
     payload = 'fswatch1'
-    _tag = None
-    _path = None
+    _tag: 'str | None' = None
     _watch = None
 
     # The C bridge doesn't send the initial event, and the JS calls read()
@@ -253,7 +336,7 @@ class FsWatchChannel(Channel):
     _active = False
 
     @staticmethod
-    def mask_to_event_and_type(mask):
+    def mask_to_event_and_type(mask: InotifyEvent) -> 'tuple[str, str | None]':
         if (InotifyEvent.CREATE or InotifyEvent.MOVED_TO) in mask:
             return 'created', 'directory' if InotifyEvent.ISDIR in mask else 'file'
         elif InotifyEvent.MOVED_FROM in mask or InotifyEvent.DELETE in mask or InotifyEvent.DELETE_SELF in mask:
@@ -265,7 +348,7 @@ class FsWatchChannel(Channel):
         else:
             return 'changed', None
 
-    def do_inotify_event(self, mask, _cookie, name):
+    def do_inotify_event(self, mask: InotifyEvent, _cookie: int, name: 'bytes | None') -> None:
         logger.debug("do_inotify_event(%s): mask %X name %s", self._path, mask, name)
         event, type_ = self.mask_to_event_and_type(mask)
         if name:
@@ -281,14 +364,14 @@ class FsWatchChannel(Channel):
             self._tag = tag
             self.send_json(event=event, path=self._path, tag=self._tag, type=type_)
 
-    def do_identity_changed(self, fd, err):
-        logger.debug("do_identity_changed(%s): fd %s, err %s", self._path, str(fd), err)
+    def do_identity_changed(self, fd: 'int | None', err: 'int | None') -> None:
+        logger.debug("do_identity_changed(%s): fd %s, err %s", self._path, fd, err)
         self._tag = tag_from_fd(fd) if fd else '-'
         if self._active:
             self.send_json(event='created' if fd else 'deleted', path=self._path, tag=self._tag)
 
-    def do_open(self, options):
-        self._path = options['path']
+    def do_open(self, options: JsonObject) -> None:
+        self._path = get_str(options, 'path')
         self._tag = None
 
         self._active = False
@@ -297,9 +380,10 @@ class FsWatchChannel(Channel):
 
         self.ready()
 
-    def do_close(self):
-        self._watch.close()
-        self._watch = None
+    def do_close(self) -> None:
+        if self._watch is not None:
+            self._watch.close()
+            self._watch = None
         self.close()
 
 
@@ -344,6 +428,16 @@ class FsInfoChannel(Channel, PathWatchListener):
             except KeyError:
                 return gid
 
+        def get_access(dir_fd: int, name: str, mode: int, *, follow_symlinks: bool = False) -> 'bool | None':
+            try:
+                if name:
+                    return os.access(name, mode, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+                else:
+                    # This is the given path for which systemd_ctypes has already resolved the symlink
+                    return os.access(f'/proc/self/fd/{dir_fd}', mode, follow_symlinks=True)
+            except OSError:
+                return None
+
         stat_types = {stat.S_IFREG: 'reg', stat.S_IFDIR: 'dir', stat.S_IFLNK: 'lnk', stat.S_IFCHR: 'chr',
                       stat.S_IFBLK: 'blk', stat.S_IFIFO: 'fifo', stat.S_IFSOCK: 'sock'}
         available_stat_getters = {
@@ -373,6 +467,10 @@ class FsInfoChannel(Channel, PathWatchListener):
                 with contextlib.suppress(OSError):
                     result['target'] = os.readlink(name, dir_fd=fd)
 
+            for (attr, mask) in [('r-ok', os.R_OK), ('w-ok', os.W_OK), ('x-ok', os.X_OK)]:
+                if attr in result:
+                    result[attr] = get_access(fd, name, mask, follow_symlinks=follow.value)
+
             return result
 
         return get_attrs
@@ -381,12 +479,12 @@ class FsInfoChannel(Channel, PathWatchListener):
         if reset:
             if set(self.current_value) & set(updates):
                 # if we have an overlap, we need to do a proper reset
-                self.send_json({name: None for name in self.current_value}, partial=True)
+                self.send_json(dict.fromkeys(self.current_value), partial=True)
                 self.current_value = {'partial': True}
                 updates.update(partial=None)
             else:
                 # otherwise there's no overlap: we can just remove the old keys
-                updates.update({key: None for key in self.current_value})
+                updates.update(dict.fromkeys(self.current_value))
 
         json_merge_and_filter_patch(self.current_value, updates)
         if updates:
@@ -405,11 +503,17 @@ class FsInfoChannel(Channel, PathWatchListener):
 
         if self.targets:
             info['targets'] = targets = {}
+            # 'targets' is used to report attributes about the ultimate target
+            # of symlinks, but only if this information would not already be
+            # reported.  As such, we exclude '.' and any path which would end
+            # up in 'entries' (if it existed).  '..' needs special treatment:
+            # it might be `.interesting()` but it won't be in 'entries', so
+            # it's always treated as a target.
             for name in {e.get('target') for e in entries.values() if isinstance(e, dict)}:
-                if isinstance(name, str) and ('/' in name or not self.interesting(name)):
-                    # if this target is a string that we wouldn't otherwise
-                    # report, then report it via our "targets" attribute.
-                    targets[name] = self.getattrs(self.fd, name, Follow.YES)
+                if isinstance(name, str) and name != '.':
+                    # exclude anything that would end up in 'entries'
+                    if (name == '..' or '/' in name or not self.interesting(name)):
+                        targets[name] = self.getattrs(self.fd, name, Follow.YES)
 
         self.send_update({'info': info}, reset=reset)
 
@@ -534,6 +638,7 @@ class FsInfoChannel(Channel, PathWatchListener):
             try:
                 fd = Handle.open(self.path, os.O_PATH if self.follow else os.O_PATH | os.O_NOFOLLOW)
             except OSError as exc:
+                assert exc.errno  # ruff: ignore[pytest-assert-in-except] - mypy thinks that errno can be None
                 self.report_error(exc.errno)
             else:
                 self.report_initial_state(fd)

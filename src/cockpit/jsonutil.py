@@ -1,22 +1,10 @@
-# This file is part of Cockpit.
 #
 # Copyright (C) 2023 Red Hat, Inc.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 
 from enum import Enum
-from typing import Callable, Dict, List, Mapping, Optional, Sequence, Type, TypeVar, Union
+from typing import Callable, Container, Dict, List, Mapping, Optional, Sequence, Type, TypeVar, Union
 
 JsonLiteral = Union[str, float, bool, None]
 
@@ -87,6 +75,15 @@ def get_str_or_none(obj: JsonObject, key: str, default: Optional[str]) -> Option
     return _get(obj, lambda v: None if v is None else typechecked(v, str), key, default)
 
 
+def get_str_or_int(obj: JsonObject, key: str, default: Optional[Union[str, int]]) -> Optional[Union[str, int]]:
+    def as_str_or_int(value: JsonValue) -> Union[str, int]:
+        if not isinstance(value, (str, int)):
+            raise JsonError(value, 'must be a string or integer')
+        return value
+
+    return _get(obj, as_str_or_int, key, default)
+
+
 def get_dict(obj: JsonObject, key: str, default: Union[DT, _Empty] = _empty) -> Union[DT, JsonObject]:
     return _get(obj, lambda v: typechecked(v, dict), key, default)
 
@@ -104,6 +101,18 @@ def get_strv(obj: JsonObject, key: str, default: Union[DT, _Empty] = _empty) -> 
     def as_strv(value: JsonValue) -> Sequence[str]:
         return tuple(typechecked(item, str) for item in typechecked(value, list))
     return _get(obj, as_strv, key, default)
+
+
+def get_enum(
+    obj: JsonObject, key: str, choices: Container[str], default: Union[DT, _Empty] = _empty
+) -> Union[DT, str]:
+    def as_choice(value: JsonValue) -> str:
+        # mypy can't do `__eq__()`-based type narrowing...
+        # https://github.com/python/mypy/issues/17101
+        if isinstance(value, str) and value in choices:
+            return value
+        raise JsonError(value, f'invalid value "{value}" not in {choices}')
+    return _get(obj, as_choice, key, default)
 
 
 def get_objv(obj: JsonObject, key: str, constructor: Callable[[JsonObject], T]) -> Union[DT, Sequence[T]]:

@@ -1,29 +1,17 @@
 #!/usr/bin/python3 -cimport os, sys; os.execv(os.path.dirname(sys.argv[1]) + "/../common/pywrap", sys.argv)
 
-# This file is part of Cockpit.
 #
 # Copyright (C) 2015 Red Hat, Inc.
-#
-# Cockpit is free software; you can redistribute it and/or modify it
-# under the terms of the GNU Lesser General Public License as published by
-# the Free Software Foundation; either version 2.1 of the License, or
-# (at your option) any later version.
-#
-# Cockpit is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-# Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: LGPL-2.1-or-later
 
+
+import dialoglib
 import testlib
 
 FP_SHA256 = "SHA256:iyVAl4Z8riL9Jg4fV9Wv/6cbqebdDtsBEMkojNLLYX8"
 KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEAkRTvQCSEZNPXpA5bP82ilQn3TMeQ6z2NO3O0UwY9z test-name"
 
 
-@testlib.skipDistroPackage()
 @testlib.nondestructive
 class TestKeys(testlib.MachineCase):
     def testAuthorizedKeys(self):
@@ -67,12 +55,13 @@ class TestKeys(testlib.MachineCase):
 
         # add good
         add_key(KEY, FP_SHA256, "test-name")
+        b.wait_count("#account-authorized-keys-list tr", 1)
 
         # remove key on mobile, on mobile we show a kebab menu
         b.set_layout("mobile")
-        b.click("#account-authorized-keys button.pf-v5-c-menu-toggle")
-        b.click("button.pf-v5-c-menu__item")
-        b.wait_js_func("ph_count_check", "#account-authorized-keys-list tr", 1)
+        b.click("#account-authorized-keys button.pf-v6-c-menu-toggle")
+        b.click("button.pf-v6-c-menu__item")
+        b.wait_count("#account-authorized-keys-list tr", 0)
         b.set_layout("desktop")
 
         # add good
@@ -119,19 +108,19 @@ class TestKeys(testlib.MachineCase):
         add_key(KEY, FP_SHA256, "test-name")
         check_perms()
 
-        b.wait_js_func("ph_count_check", "#account-authorized-keys-list tr", 1)
+        b.wait_count("#account-authorized-keys-list tr", 1)
 
         # Add invalid key directly
         m.write("/home/user/.ssh/authorized_keys", "\nbad\n", append=True)
         b.wait_in_text("#account-authorized-keys-list tbody:last-child", "Invalid key")
-        b.wait_js_func("ph_count_check", "#account-authorized-keys-list tr", 2)
+        b.wait_count("#account-authorized-keys-list tr", 2)
 
         # Removing the key
         b.click("#account-authorized-keys-list tbody:last-child button")
         b.wait_not_in_text("#account-authorized-keys", "Invalid key")
-        b.wait_js_func("ph_count_check", "#account-authorized-keys-list tr", 1)
+        b.wait_count("#account-authorized-keys-list tr", 1)
         data = m.execute("cat /home/user/.ssh/authorized_keys")
-        self.assertEqual(data, KEY + "\n\n")
+        self.assertEqual(data, KEY + "\n")
         # Permissions are still ok
         check_perms()
         b.logout()
@@ -149,6 +138,7 @@ class TestKeys(testlib.MachineCase):
 
     # Possible workaround - ssh as `admin` and just do `m.execute()`
     @testlib.skipBrowser("Firefox cannot do `cockpit.spawn`", "firefox")
+    @testlib.skipImage("TODO: fix for OpenSUSE", "opensuse-tumbleweed")
     def testPrivateKeys(self):
         b = self.browser
         m = self.machine
@@ -157,7 +147,7 @@ class TestKeys(testlib.MachineCase):
             return b.eval_js("cockpit.spawn([ '/bin/sh', '-c', 'ssh-add -l || true' ])")
 
         def toggleExpandedStateKey(identifier):
-            b.click(f"tr[data-name='{identifier}'] .pf-v5-c-table__toggle > button")
+            b.click(f"tr[data-name='{identifier}'] .pf-v6-c-table__toggle > button")
 
         def waitKeyPresent(identifier, present):
             if present:
@@ -170,7 +160,7 @@ class TestKeys(testlib.MachineCase):
             b.wait_visible(f"tr[data-name='{identifier}'][data-loaded={'true' if enabled else 'false'}]")
 
         def toggleKeyState(identifier):
-            b.click(f"tr[data-name='{identifier}'] .pf-v5-c-switch__input")
+            b.click(f"tr[data-name='{identifier}'] .pf-v6-c-switch__input")
 
         def selectTab(identifier, title):
             b.click(f"tr[data-name='{identifier}'] + tr li > button:contains('{title}')")
@@ -184,14 +174,14 @@ class TestKeys(testlib.MachineCase):
             else:
                 b.wait_not_visible(f"tr[data-name='{identifier}'] + tr")
 
-        def waitKeyDetail(identifier, dtype, value):
-            b.wait_in_text(f"tr[data-name='{identifier}'] + tr dt:contains({dtype}) + dd > div", value)
+        def waitKeyDetail(identifier: str, field: str, value: str) -> None:
+            b.wait_in_text(f"tr[data-name='{identifier}'] + tr .ct-listing-panel-body [data-name='{field}']", value)
 
-        def getKeyDetail(identifier, dtype):
-            return b.text(f"tr[data-name='{identifier}'] + tr dt:contains({dtype}) + dd > div")
+        def getKeyDetail(identifier: str, field: str) -> str:
+            return b.text(f"tr[data-name='{identifier}'] + tr .ct-listing-panel-body [data-name='{field}']")
 
         # Operating systems where auto loading doesn't work
-        auto_load = not m.ostree_image
+        auto_load = not m.ws_container
 
         if m.image == "arch":
             self.write_file("/etc/pam.d/cockpit", """
@@ -209,7 +199,7 @@ session    optional     pam_ssh_add.so
             "verify/files/ssh/id_ed25519",
             "verify/files/ssh/id_ed25519.pub"
         ], "/home/admin/.ssh/")
-        m.execute("chmod 600 /home/admin/.ssh/*")
+        m.execute("chmod 600 /home/admin/.ssh/id_*")
         m.execute("chown -R admin:admin /home/admin/.ssh")
 
         self.login_and_go()
@@ -230,13 +220,12 @@ session    optional     pam_ssh_add.so
         toggleExpandedStateKey('id_rsa')
         waitKeyRowExpanded('id_rsa', expanded=True)
         waitTabActive('id_rsa', 'Details')
-        waitKeyDetail('id_rsa', 'Comment', "test@test")
-        waitKeyDetail('id_rsa', 'Type', "RSA")
-        text = b.text("tr[data-name=id_rsa] + tr dt:contains(Fingerprint) + dd > div")
-        self.assertEqual(text, id_rsa[5:])
+        waitKeyDetail('id_rsa', 'comment', "test@test")
+        waitKeyDetail('id_rsa', 'type', "RSA")
+        self.assertEqual(getKeyDetail('id_rsa', 'fingerprint'), id_rsa[5:])
 
         selectTab('id_rsa', 'Public key')
-        b.wait_val("tr[data-name=id_rsa] + tr .pf-v5-c-clipboard-copy input",
+        b.wait_val("tr[data-name=id_rsa] + tr .pf-v6-c-clipboard-copy input",
                    "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDG4iipTovcMg0xn+089QLNKVGpP"
                    "2Pgq2duxHgAXre2XgA3dZL+kooioGFwBQSEjbWssKy82hKIN/W82/lQtL6krf7JQW"
                    "nT3LZwD5DPsvHFKhOLghbiFzSI0uEL4NFFcZOMo5tGLrM5LsZsaIkkv5QkAE0tHIy"
@@ -275,13 +264,15 @@ session    optional     pam_ssh_add.so
         b.set_input_text("#id_ed25519-old-password", "locked")
         b.set_input_text("#id_ed25519-new-password", "foobar")
         b.set_input_text("#id_ed25519-confirm-password", "foobar")
-        b.assert_pixels("#credentials-modal", "ssh-keys-dialog")
+        b.assert_pixels("#credentials-modal", "ssh-keys-dialog", chrome_hack_double_shots=True)
 
         b.click("#id_ed25519-change-password")
-        b.wait_visible('#credentials-modal .pf-v5-c-helper-text__item.pf-m-success')
+        b.wait_visible('#credentials-modal .pf-v6-c-helper-text__item.pf-m-success')
 
         # Log off and log back in, and we should have both loaded automatically
         if auto_load:
+            b.click("#credentials-modal button[aria-label=Close]")
+            b.wait_not_present("#credentials-modal")
             b.logout()
             b.login_and_go()
             keys = list_keys()
@@ -305,22 +296,22 @@ session    optional     pam_ssh_add.so
         b.wait_visible("#credential-keys")
         b.wait_not_present("#ssh-file-add")
         b.click("#ssh-file-add-custom")
-        b.set_file_autocomplete_val("#ssh-file-add-key", "/bad")
-        b.click("#ssh-file-add")
-        b.wait_text("#credentials-modal .pf-m-error > .pf-v5-c-helper-text__item-text", "Not a valid private key")
 
-        b.click("#credentials-modal .pf-v5-c-select__toggle-typeahead")
-        b.set_input_text("#credentials-modal .pf-v5-c-select__toggle-typeahead input", "/var/test/")
-        b.wait_in_text("#credentials-modal .pf-v5-c-select__menu-item.pf-m-disabled", "No such file or directory")
-        b.focus("#credentials-modal .pf-v5-c-select__toggle-typeahead input")
-        b.key_press("\b\b\b\b\b")
-        b.wait_visible("#credentials-modal .pf-v5-c-select__menu-item.directory:contains('/var/lib/')")
-        b.click("#credentials-modal .pf-v5-c-select__toggle-clear")
-        b.wait_val("#credentials-modal .pf-v5-c-select__toggle-typeahead input", "")
+        fc = dialoglib.FileChooserHelpers(b, ".file-chooser")
 
-        b.set_file_autocomplete_val("#ssh-file-add-key", "/tmp/new.rsa")
-        b.click("#ssh-file-add")
-        b.wait_not_present("#ssh-file-add")
+        # Should open in ~admin/.ssh
+        ssh_dir = m.execute("echo -n ~admin/.ssh")
+        fc.wait_path(ssh_dir)
+
+        # Select something that is not a private key
+        fc.set_path("id_rsa.pub")
+        b.click(fc.apply_button())
+        b.wait_in_text(fc.error(), "Not a valid private key")
+
+        # Select /tmp/new.rsa
+        fc.set_path("/tmp/new.rsa")
+        b.click(fc.apply_button())
+
         # OpenSSH 7.8 and up has a new default key format where
         # keys are marked as "agent_only", thereby limiting functionality
         keys = list_keys()
@@ -333,10 +324,10 @@ session    optional     pam_ssh_add.so
         toggleExpandedStateKey(new_key)
         waitKeyRowExpanded(new_key, expanded=True)
         waitTabActive(new_key, 'Details')
-        waitKeyDetail(new_key, 'Type', 'RSA')
-        self.assertNotEqual(getKeyDetail(new_key, 'Fingerprint'), "")
+        waitKeyDetail(new_key, 'type', 'RSA')
+        self.assertNotEqual(getKeyDetail(new_key, "fingerprint"), "")
         selectTab(new_key, 'Public key')
-        self.assertTrue(b.val(f"tr[data-name='{new_key}'] + tr .pf-v5-c-clipboard-copy input").startswith(new_pk))
+        self.assertTrue(b.val(f"tr[data-name='{new_key}'] + tr .pf-v6-c-clipboard-copy input").startswith(new_pk))
 
         # OpenSSH 7.8 and up has a new default key format where
         # keys are marked as "agent_only", thereby limiting functionality
@@ -349,16 +340,18 @@ session    optional     pam_ssh_add.so
         m.execute("chown admin:admin /tmp/new_with_passphrase.rsa")
         m.execute("rm /tmp/new_with_passphrase.rsa.pub")
 
-        b.wait_not_present("#ssh-file-add")
         b.click("#ssh-file-add-custom")
-        b.set_file_autocomplete_val("#ssh-file-add-key", "/tmp/new_with_passphrase.rsa")
-        b.click("#ssh-file-add")
+        fc.set_path("/tmp/new_with_passphrase.rsa")
+        b.click(fc.apply_button())
+
         b.wait_visible("h1:contains('Unlock key /tmp/new_with_passphrase.rsa')")
         b.set_input_text("#\\/tmp\\/new_with_passphrase\\.rsa-password", "foobar")
         b.click("button:contains('Unlock')")
         b.wait_not_present("h1:contains('Unlock key /tmp/new_with_passphrase.rsa')")
-        b.wait_not_present("#ssh-file-add")
-        b.wait_js_func("ph_count_check", "#credential-keys tbody", 4)
+        b.wait_count("#credential-keys tbody", 4)
+
+        b.click("#credentials-modal button[aria-label=Close]")
+        b.wait_not_present("#credentials-modal")
 
 
 if __name__ == '__main__':

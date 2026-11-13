@@ -1,4 +1,6 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 import cockpit from "cockpit";
+import { superuser } from "superuser";
 
 import lister from "./ssh-list-public-keys.sh";
 import adder from "./ssh-add-public-key.sh";
@@ -20,9 +22,9 @@ function AuthorizedKeys (user_name, home_dir) {
 
     function process_failure (ex) {
         self.keys = [];
-        if (ex.problem == "access-denied") {
+        if (ex.problem === "access-denied") {
             self.state = ex.problem;
-        } else if (ex.problem == "not-found") {
+        } else if (ex.problem === "not-found") {
             self.state = "ready";
         } else {
             self.state = "failed";
@@ -65,7 +67,7 @@ function AuthorizedKeys (user_name, home_dir) {
                             obj.size = match[1];
                             obj.fp = match[2];
                             obj.comment = match[3].trim();
-                            if (obj.comment == "authorized_keys" || obj.comment == "no comment")
+                            if (obj.comment === "authorized_keys" || obj.comment === "no comment")
                                 obj.comment = null;
                             obj.algorithm = match[4];
 
@@ -80,7 +82,7 @@ function AuthorizedKeys (user_name, home_dir) {
                     return keys;
                 })
                 .catch(ex => { // not-covered: OS error
-                    cockpit.warn("Failed to list public keys:", ex.toString()); // not-covered: OS error
+                    console.warn("Failed to list public keys:", ex.toString()); // not-covered: OS error
                     return []; // not-covered: OS error
                 });
     }
@@ -103,8 +105,17 @@ function AuthorizedKeys (user_name, home_dir) {
                 .then(keys => {
                     const obj = keys[0];
                     if (obj?.valid) {
+                        const ssh_adder = [
+                            ...(superuser.allowed ? ["runuser", "-u", user_name, "--"] : []),
+                            "/bin/sh",
+                            "-c",
+                            adder,
+                            "--",
+                            user_name,
+                            home_dir
+                        ];
                         return cockpit
-                                .script(adder, [user_name, home_dir], { superuser: "try", err: "message" })
+                                .spawn(ssh_adder, { superuser: superuser.allowed ? "require" : null, err: "message" })
                                 .input(obj.raw + "\n")
                                 // eslint-disable-next-line prefer-promise-reject-errors
                                 .catch(ex => Promise.reject(_("Error saving authorized keys: ") + ex)); // not-covered: OS error
@@ -114,12 +125,24 @@ function AuthorizedKeys (user_name, home_dir) {
                 });
     };
 
-    // don't use cockpit.file.modify() here, as that doesn't preserve permissions
-    // (https://github.com/cockpit-project/cockpit/issues/18033)
-    self.remove_key = key => cockpit.spawn(
-        ["sed", "-i", "\\!^" + key + "$!d", filename],
-        { superuser: "try", err: "message" }
-    );
+    self.remove_key = function(key) {
+        return file.modify(function(content) {
+            let lines = null;
+            const new_lines = [];
+
+            if (!content)
+                return null;
+
+            lines = content.trim().split('\n');
+            for (let i = 0; i < lines.length; i++) {
+                if (lines[i] === key)
+                    key = undefined;
+                else
+                    new_lines.push(lines[i]);
+            }
+            return new_lines.join("\n") || null;
+        });
+    };
 
     self.close = function() {
         if (watch)

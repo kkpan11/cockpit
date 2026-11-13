@@ -1,19 +1,7 @@
-# This file is part of Cockpit.
 #
 # Copyright (C) 2022 Red Hat, Inc.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 
 import getpass
 import logging
@@ -129,7 +117,7 @@ class SshPeer(Peer):
         except ferny.SshAuthenticationError as exc:
             logger.debug('authentication to host %s failed: %s', host, exc)
 
-            results = {method: 'not-provided' for method in exc.methods}
+            results = dict.fromkeys(exc.methods, "not-provided")
             if 'password' in results and self.password is not None:
                 if responder.password_attempts == 0:
                     results['password'] = 'not-tried'
@@ -228,6 +216,6 @@ class HostRoutingRule(RoutingRule):
 
         return self.remotes[key]
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         for peer in set(self.remotes.values()):
             peer.close()

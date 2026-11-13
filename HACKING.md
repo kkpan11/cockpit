@@ -17,7 +17,7 @@ remote, for example with
 
 ## Setting up development container
 
-The cockpit team maintains a [cockpit/tasks container](https://quay.io/repository/cockpit/tasks)
+The cockpit team maintains a [cockpit/tasks container](https://ghcr.io/cockpit-project/tasks)
 for both local development and CI. If you can install [toolbx](https://containertoolbx.org/) or
 [distrobox](https://distrobox.privatedns.org/) on your system, it is highly
 recommended to do that:
@@ -60,9 +60,14 @@ To re-create your development container from the latest image, run:
 ## Working on Cockpit's session pages
 
 Most contributors want to work on the web (HTML, JavaScript, CSS) parts of Cockpit.
+
+### Install Cockpit
+
 First, install Cockpit on your local machine as described in:
 
 <https://cockpit-project.org/running.html>
+
+### Build session pages
 
 Next, run this command from your top level Cockpit checkout directory, and make
 sure to run it as the same user that you'll use to log into Cockpit below.
@@ -70,19 +75,12 @@ sure to run it as the same user that you'll use to log into Cockpit below.
     mkdir -p ~/.local/share/
     ln -s $(pwd)/dist ~/.local/share/cockpit
 
-This will cause cockpit to read JavaScript, HTML, and CSS files directly from the
+This will cause Cockpit to read JavaScript, HTML, and CSS files directly from the
 locally built package output directory instead of using the system-installed Cockpit
 files.
 
-Now you can log into Cockpit on your local Linux machine at the following
-address. Use the same user and password that you used to log into your Linux
-desktop.
-
-<http://localhost:9090>
-
-After every change to the source files, bundles need to be rebuilt. The
-recommended and fastest way is to do that is using the "watch" mode (`-w` or
-`--watch`) on the page that you are working on. For example, if you want to
+The recommended way to build bundles is to use the "watch" mode
+(`-w` or`--watch`) on the page you are working on. For example, if you want to
 work on anything in [pkg/systemd](./pkg/systemd/), run:
 
     ./build.js -w systemd
@@ -94,8 +92,16 @@ pkg/lib/), you can also build all pages:
 
     ./build.js -w
 
-Reload cockpit in your browser after page is built. Press `Ctrl`-`C` to
-stop watch mode once you are done with changing the code.
+Now you can log into Cockpit on your local Linux machine at the following
+address, using the same username and password as your desktop login:
+
+<http://localhost:9090>
+
+Watch mode automatically rebuilds when source files are modified. Once it
+finishes building, refresh your browser to see the changes in Cockpit.
+Press `Ctrl-C` to stop watch mode when you are done changing the code.
+
+### Testing
 
 You often need to test code changes in a VM. You can set the `$RSYNC` env
 variable to copy the built page into the given SSH target's
@@ -106,12 +112,14 @@ one of these commands:
     RSYNC=c ./build.js -w kdump
     RSYNC=c ./build.js -w
 
+### Returning to system packages
+
 To make Cockpit use system packages again, instead of your checkout directory,
 remove the symlink with the following command and log back into Cockpit:
 
     rm ~/.local/share/cockpit
 
-## Working on the non-web parts of Cockpit
+## Building and unit tests
 
 Cockpit uses autotools, so there are familiar `./configure` script and
 Makefile targets.
@@ -149,21 +157,37 @@ which will output a URL to connect to with a browser, such as
 <http://localhost:8765/qunit/base1/test-dbus.html>. Adjust the path for different
 tests and inspect the results there.
 
-You can also run individual tests by specifying the `TESTS` environment
-variable:
+QUnit tests are run as part of a pytest test called `test_browser`.  You can
+run individual tests via `pytest -k`, like so:
 
-    make check TESTS=qunit/base1/test-chan.html
+    pytest -k test-fsinfo.html
+
+You can see JavaScript code coverage information for QUnit tests.  For a
+summary table:
+
+    pytest -k test_browser --js-cov
+
+And for detailed output on uncovered sections in a specific file, something
+like:
+
+    pytest -k test-fsinfo.html --js-cov-files='*/fsinfo.ts'
+
+Coverage information is gathered into the pytest tmpdir, regardless of which
+coverage-related commandline flags are given, so it's also possible to drill
+down after the fact — without re-running tests — using something like:
+
+    test/common/js_coverage.py -m '*/fsinfo.ts' /tmp/pytest-of-*/pytest-current/js-coverage/*
 
 There are also static code and syntax checks which you should run often:
 
-    test/static-code
+    test/common/static-code
 
 It is highly recommended to set up a git pre-push hook, to avoid pushing PRs
 that will fail on trivial errors:
 
     ln -s ../../tools/git-hook-pre-push .git/hooks/pre-push
 
-This calls `test/static-code` for each commit you're trying to push.
+This calls `test/common/static-code` for each commit you're trying to push.
 
 You can also set up a post-commit hook to do the same, after each commit:
 
@@ -179,45 +203,80 @@ git submodules:
 Refer to the [testing README](test/README.md) for details on running the Cockpit
 integration tests locally.
 
-## Python bridge
+## Bridge
 
-Most distro releases now ship a replacement for the C bridge written in Python.
-It resides in `src/cockpit` with most of its rules in `src/Makefile.am`.  This
-directory was chosen because it matches the standard so-called "src layout"
-convention for Python packages, where each package (`cockpit`) is a
+The Cockpit bridge is the initial program launched in a Cockpit Linux session:
+Its stdin/out is connected to the web socket (and thus to JavaScript in the
+[pages](pkg/)), where it speaks a [JSON protocol](doc/protocol.md) that
+multiplexes "channels" -- abstractions of operating system APIs that the pages
+use to implement their functionality. This protocol is translated into
+operating system calls such as opening or writing files, D-Bus calls, or HTTP
+queries. Think of the bridge as the moral equivalent of "bash" in a human SSH
+session.
+
+The bridge resides in `src/cockpit` with most of its rules in `src/Makefile.am`.
+This directory was chosen because it matches the standard so-called "src
+layout" convention for Python packages, where each package (`cockpit`) is a
 subdirectory of the `src` directory.
 
 ### Running the bridge
 
-The Python bridge can be used interactively on a local machine:
+The bridge can be used interactively on a local machine out of the source tree:
 
     PYTHONPATH=src python3 -m cockpit.bridge
 
 To make it easy to test out channels without having to write out messages
 manually, `cockpit.misc.print` can be used:
 
-    PYTHONPATH=src python3 -m cockpit.misc.print open fslist1 path=/etc watch=False | PYTHONPATH=src python3 -m cockpit.bridge
+    PYTHONPATH=src python3 -m cockpit.misc.print open fsinfo path=/etc 'attrs=["type", "entries"]' | PYTHONPATH=src python3 -m cockpit.bridge
 
 These shell aliases might be useful when experimenting with the protocol:
 
     alias cpy='PYTHONPATH=src python3 -m cockpit.bridge'
     alias cpf='PYTHONPATH=src python3 -m cockpit.misc.print'
 
-When working with the Python bridge on test images, note that `RHEL/CentOS 8`,
-`debian-stable`, and `ubuntu-2204` still use the C bridge. So if you want to
-explicitly have the Python bridge on those images use:
+You can then for example run a metrics channel:
 
-    ./test/image-prepare --python
+    cpf open metrics1 source=internal interval=1000 metrics='[{"name": "cpu.basic.user", "derive": "rate"}]' : wait | cpy
 
 To enable debug logging in journal on a test image, you can pass `--debug` to
 `image-prepare`. This will set `COCKPIT_DEBUG=all` to `/etc/environment`, if
 you are only interested channel debug messages change `all` to
 `cockpit.channel`.
 
-### Testing the Python bridge
+### Iterating on the bridge with the ws container
 
-There are a growing number of Python `unittest` tests being written to test
-parts of the new bridge code.  You can run these with `make pytest` or
+Our fedora-coreos and -bootc images use the [cockpit/ws container](https://quay.io/repository/cockpit/ws)
+instead of `cockpit-bridge.rpm`. You can do fast "edit bridge" → "run
+integration test" iterations by modifying `MachineCase.login_and_go()` to
+upload the local dev tree bridge code to the VM, then onwards into the running
+container, and bind-mount it into the correct path:
+
+```diff
+--- test/common/testlib.py
++++ test/common/testlib.py
+@@ -1933,6 +1933,14 @@ class MachineCase(unittest.TestCase):
+         if enable_root_login:
+             self.enable_root_login()
+         self.machine.start_cockpit(tls=tls)
++
++        m = self.machine
++        m.execute("umount /usr/lib/python3.14/site-packages/cockpit || true")
++        m.upload(["../src/cockpit"], "/tmp/")
++        m.execute("podman cp /tmp/cockpit ws:/tmp/")
++        m.execute("podman exec ws mount -o bind /tmp/cockpit /usr/lib/python3.14/site-packages/cockpit")
++
+         # first load after starting cockpit tends to take longer, due to on-demand service start
+         with self.browser.wait_timeout(30):
+             self.browser.login_and_go(path, user=user, password=password, host=host, superuser=superuser,
+```
+
+Replace `3.14` with the Python version du jour.
+
+### Testing the bridge
+
+There are a growing number of [pytest](https://docs.pytest.org) tests being written to test
+the bridge code.  You can run these with `make pytest` or
 `make pytest-cov`.  Those are both just rules to make sure that the
 `systemd_ctypes` submodule is checked out before running `pytest` from the
 source directory.
@@ -229,7 +288,7 @@ The tests require at least `pytest` 7.0.0 or higher to run.
 Cockpit uses [ESLint](https://eslint.org/) to automatically check JavaScript
 code style in `.js` and `.jsx` files.
 
-The linter is executed as part of `test/static-code`.
+The linter is executed as part of `test/common/static-code`.
 
 For developer convenience, the ESLint can be started explicitly by:
 
@@ -251,13 +310,13 @@ unused identifiers, and other JavaScript-related issues.
 Cockpit uses [Stylelint](https://stylelint.io/) to automatically check CSS code
 style in `.css` and `.scss` files.
 
-The linter is executed as part of `test/static-code`.
+The linter is executed as part of `test/common/static-code`.
 
 For developer convenience, the Stylelint can be started explicitly by:
 
     npm run stylelint
 
-But note that this only covers files in `pkg/`. `test/static-code` covers
+But note that this only covers files in `pkg/`. `test/common/static-code` covers
 *all* (S)CSS files tracked in git.
 
 Some rule violations can be automatically fixed by running:
@@ -270,23 +329,54 @@ During fast iterative development, you can also choose to not run stylelint, by
 running `./build.js` with the `-s`/`--no-stylelint` option. This speeds up the
 build and avoids build failures due to ill-formatted CSS or other issues.
 
+## Working on your local machine: systemd-sysext
+
+If you want to safely test your local changes directly on it, Cockpit supports
+installation as a [systemd-sysext](https://www.freedesktop.org/software/systemd/man/latest/systemd-sysext.html).
+This covers all parts of Cockpit (ws, tls, session, bridge, login page, systemd
+units, PAM configuration, and the session pages) except for the SELinux policy.
+It gets installed into `/run/extensions/`, so nothing ever hits the disk and
+this also works on read-only installations (CoreOS, OSTree, bootc).
+
+Just run:
+
+    tools/make-sysext
+
+This runs `./autogen.sh` if necessary, and then just re-`make`s your tree,
+re-installs it into `/run/extensions`, and reloads the sysext in systemd.
+Afterwards you can connect to http://localhost:9090 as usual.
+
+To remove this, reboot or run
+
+    tools/make-sysext stop
+
+**Attention**: This is not currently compatible with SELinux in enforcing mode.
+If you have that, you need to disable it:
+
+    sudo setenforce 0
+
 ## Working on your local machine: Web server
 
-To test changes to the login page or any other resources, you can bind-mount the
-build tree's `dist/static/` directory over the system one:
+If the above systemd-sysext approach does not work for you, you can also test
+changes with some bind mounts.
 
-    sudo mount -o bind dist/static/ /usr/share/cockpit/static/
+To test changes to the login page, you can bind-mount the build tree's
+`dist/` directory over the system one:
+
+    sudo mount -o bind dist /usr/share/cockpit
 
 Likewise, to test changes to the branding, use:
 
     sudo mount -o bind src/branding/ /usr/share/cockpit/branding/
+
+Do `mkdir dist/branding` if you run both of these commands at the same time.
 
 After that, run `systemctl stop cockpit.service` to ensure that the web server
 restarts on the next browser request.
 
 To make Cockpit use system-installed code again, umount the paths:
 
-    sudo umount /usr/share/cockpit/static/ /usr/share/cockpit/branding/
+    sudo umount /usr/share/cockpit /usr/share/cockpit/branding/
     systemctl stop cockpit.service
 
 Similarly, if you change `cockpit-ws` itself, you can make the system (systemd
@@ -421,35 +511,69 @@ following commands:
 Then run it with `Ctrl+R` when the browser is showing an empty tab, e.g.
 `about:newtab`. You may need to adjust the positions for your environment.
 
-## Debug logging of Cockpit processes
+## Adding a release note in PR
+
+Optional but highly quality of life feature we have relates to automatic
+release blog post generation.
+
+There is an automated release note process for PRs where any PRs that include
+a label `release-note` and contains a release note segment in the description
+will be used when generating the release blog post for https://cockpit-project.org.
+
+To create a release note you need a h2-header at the end of your PR description
+where everything underneath will be taken by the automation for the blog
+generation. It will also take any images and videos uploaded and add them to
+the blog post PR as well. For example:
+
+```md
+[...truncated PR description...]
+
+## Release note title
+
+Release note text that will be picked up by automation
+
+<img for release note>
+```
+
+You can see this in action in [this cockpit-machines
+PR](https://github.com/cockpit-project/cockpit-machines/pull/2268) where we
+have an h2-header together with text which in turn was taken by the
+automation and shown inside [the blog
+post](https://cockpit-project.org/blog/cockpit-347.html) for the release
+that included it.
+
+## Debug logging
 
 All messages from the various cockpit processes go to the journal and can be
 seen with commands like:
 
     sudo journalctl -f
 
-Much of Cockpit has verbose internal debug logging that can be enabled when
+Cockpit's web server has verbose internal debug logging that can be enabled when
 trying to track down a problem. To turn it on add a file to your system like
 this:
 
-    sudo mkdir -p /etc/systemd/system/cockpit.service.d
-    sudo sh -c 'printf "[Service]\nEnvironment=G_MESSAGES_DEBUG=cockpit-ws,cockpit-bridge\nUser=root\nGroup=\n" > /etc/systemd/system/cockpit.service.d/debug.conf'
+    sudo mkdir -p /etc/systemd/system/cockpit-wsinstance-http.service.d
+    sudo sh -c 'printf "[Service]\nEnvironment=G_MESSAGES_DEBUG=all\n" > /etc/systemd/system/cockpit-wsinstance-http.service.d/debug.conf'
     sudo systemctl daemon-reload
-    sudo systemctl restart cockpit
+    sudo systemctl stop cockpit
 
-In the above command you'll notice the string "cockpit-ws". This is a log
-domain. There are various log domains you can enable:
+Instead of `all`, you can also specify a log domain:
 
- * cockpit-bridge: Cockpit bridge detailed debug messages
  * cockpit-protocol: Very verbose low level traffic logging
  * cockpit-ws: Cockpit Web Service detailed debug messages
  * WebSocket: Verbose low level WebSocket logging
 
 To revert the above logging changes:
 
-    sudo rm /etc/systemd/system/cockpit.service.d/debug.conf
+    sudo rm /etc/systemd/system/cockpit-wsinstance-http.service.d/debug.conf
     sudo systemctl daemon-reload
-    sudo systemctl restart cockpit
+    sudo systemctl stop cockpit
+
+To debug HTTPS connections, replace `http` with `https@` in the above commands.
+
+The bridge runs in the user session, not in a systemd service. See "Running the
+bridge" section for how to enable debug logging.
 
 ## Debug logging in Javascript console
 
@@ -478,6 +602,20 @@ Cockpit log out, use something like:
 
     >> localStorage.debugging = "spawn"
 
+## Using React Developer Tools
+
+Cockpit uses React for the JavaScript frontend, [React Developer
+Tools](https://react.dev/learn/react-developer-tools) is a browser extension to
+inspect React components, edit props and state. Out of the box the developer
+tools do not work with Cockpit due to the pages being loaded in a separate
+iframe. A workaround is to load the page directly by embedding, for example for
+the system overview page:
+
+<http://localhost:9090/cockpit/@localhost/system/index.html>
+
+This loads the system overview as a standalone page allowing React Developer
+tools to inspect its state.
+
 ## Running Cockpit processes under a debugger
 
 You may want to run cockpit-ws under a debugger such as valgrind or gdb. You can
@@ -505,6 +643,39 @@ And you can run cockpit-ws and cockpit-bridge under valgrind like this:
 Note that cockpit-session and cockpit-bridge will run from the installed
 prefix, rather than your build tree.
 
+## Debug hard-to-grab elements
+
+In most cases, you can use the browser debugger to directly attach breakpoints
+to interesting elements. But that's not directly possible with e.g. popup menus
+or other elements which react to `mouseenter`/`mouseleave`. For these, run this
+in the developer console:
+
+```js
+setTimeout(() => { debugger }, 5000)
+```
+
+then do the mouse action (like hovering over an element) and wait until the
+timeout.
+
+## Start login session and web socket with curl
+
+For iterating on the login / web socket ←→ bridge integration, this command
+logs into our standard test VM (https://127.0.0.2:9091) and establishes the web
+socket connection and user session:
+
+```sh
+curl -ksS -D- -u admin:foobar --cookie-jar /tmp/cookie https://127.0.0.2:9091/cockpit/login --no-buffer -H"Connection: Upgrade" -H"Upgrade: websocket" -H"Host: 127.0.0.2:9091" -H"Origin: https://127.0.0.2:9091" -H"Sec-Websocket-Key: 3sc2c9IzwRUc3BlSIYwtSA==" -H"Sec-WebSocket-Version: 13" https://127.0.0.2:9091/cockpit/socket
+```
+
+It replies with a message like
+```
+{"csrf-token":"e3074fc5e06cb3804ad8c3463fc6727c67ac245dd3c39590e486644759a42818"}HTTP/1.1 101 Switching Protocols
+```
+
+which contains the session token. You can use the `--cookie-jar` to issue
+further authenticated HTTP requests. Note that as there is no browser attached,
+the session times out after some 10 seconds of inactivity.
+
 ## Manually installing the development dependencies
 
 _If at all possible, use the cockpit/tasks container with toolbox/distrobox as
@@ -525,7 +696,7 @@ For running tests, the following dependencies are required:
 
     sudo dnf install curl expect xz rpm-build chromium-headless dbus-daemon \
         libvirt-daemon-driver-storage-core libvirt-daemon-driver-qemu libvirt-client python3-libvirt \
-        python3-flake8 python3-pyyaml
+        python3-pyyaml
 
 For compiling the C parts, you will need the package build dependencies:
 

@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2013 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
@@ -22,9 +8,8 @@
 #include "cockpitauth.h"
 #include "cockpitws.h"
 
-#include "common/cockpitsystem.h"
-#include "common/cockpitwebserver.h"
-#include "common/cockpitwebrequest-private.h"
+#include "cockpitwebserver.h"
+#include "cockpitwebrequest-private.h"
 
 #include "testlib/cockpittest.h"
 
@@ -280,8 +265,8 @@ test_authenticate (TestCase *test,
   JsonObject *response;
   GError *error = NULL;
 
-  cockpit_setenv_check ("COCKPIT_TEST_KEEP_PATH", "1", TRUE);
-  cockpit_setenv_check ("COCKPIT_TEST_KEEP_KTAB", "1", TRUE);
+  cockpit_test_setenv ("COCKPIT_TEST_KEEP_PATH", "1");
+  cockpit_test_setenv ("COCKPIT_TEST_KEEP_KTAB", "1");
 
   if (!mock_kdc_available)
     {
@@ -454,12 +439,12 @@ mock_kdc_up (void)
   const gchar *value;
   g_hash_table_iter_init (&iter, mock_kdc.environ);
   while (g_hash_table_iter_next (&iter, (gpointer *)&name, (gpointer *)&value))
-    cockpit_setenv_check (name, value, TRUE);
+    cockpit_test_setenv (name, value);
 
   /* Explicitly tell server side of GSSAPI about our keytab */
   value = g_hash_table_lookup (mock_kdc.environ, "KRB5_KTNAME");
   if (value)
-    cockpit_setenv_check ("KRB5_KTNAME", value, TRUE);
+    cockpit_test_setenv ("KRB5_KTNAME", value);
 }
 
 static void

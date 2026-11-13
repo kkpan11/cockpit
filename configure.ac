@@ -1,19 +1,7 @@
-# This file is part of Cockpit.
 #
 # Copyright (C) 2013 Red Hat, Inc.
-#
-# Cockpit is free software; you can redistribute it and/or modify it
-# under the terms of the GNU Lesser General Public License as published by
-# the Free Software Foundation; either version 2.1 of the License, or
-# (at your option) any later version.
-#
-# Cockpit is distributed in the hope that it will be useful, but
-# WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-# Lesser General Public License for more details.
-#
-# You should have received a copy of the GNU Lesser General Public License
-# along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: LGPL-2.1-or-later
+
 
 m4_include([version.m4])
 AC_INIT([Cockpit],
@@ -38,9 +26,7 @@ AC_PROG_RANLIB
 # This is required to find the correct `ar` for cross-compiling
 AC_CHECK_TOOL(AR, ar)
 
-AC_CHECK_FUNCS(
-    closefrom
-)
+AC_CHECK_FUNCS(pidfd_getpid)
 
 AM_SILENT_RULES([yes])
 
@@ -61,27 +47,6 @@ AM_CONDITIONAL(SELINUX_POLICY_ENABLED, test "$enable_selinux_policy" != "no")
 AC_SUBST(SELINUX_POLICY_TYPE, [${enable_selinux_policy}])
 AC_MSG_RESULT($enable_selinux_policy)
 
-# --disable-polkit
-AC_MSG_CHECKING([whether to build polkit support])
-AC_ARG_ENABLE(polkit, AS_HELP_STRING([--disable-polkit], [Disable usage of polkit]))
-AM_CONDITIONAL(WITH_POLKIT, test "$enable_polkit" != 'no')
-if test "$enable_polkit" != 'no'; then
-  AC_DEFINE([WITH_POLKIT], 1, [Whether to build with polkit support])
-fi
-AC_MSG_RESULT(${enable_polkit:=yes})
-
-# --disable-ssh
-AC_MSG_CHECKING([whether to build cockpit-ssh])
-AC_ARG_ENABLE(ssh, AS_HELP_STRING([--disable-ssh], [Disable cockpit-ssh build and libssh dependency]))
-AM_CONDITIONAL(WITH_COCKPIT_SSH, test "$enable_ssh" != "no")
-AC_MSG_RESULT(${enable_ssh:=yes})
-
-# --enable-old-bridge
-AC_MSG_CHECKING([whether to install the old C cockpit-bridge])
-AC_ARG_ENABLE(old_bridge, AS_HELP_STRING([--enable-old-bridge], [Install old C cockpit-bridge]))
-AM_CONDITIONAL(WITH_OLD_BRIDGE, test "$enable_old_bridge" = "yes")
-AC_MSG_RESULT(${enable_old_bridge:=no})
-
 AC_SEARCH_LIBS([argp_parse], [argp])
 case "$ac_cv_search_argp_parse" in
     no) AC_MSG_FAILURE([failed to find argp_parse]) ;;
@@ -99,8 +64,8 @@ esac
 AC_SUBST([fts_LIBS])
 
 # pkg-config
-GLIB_API_VERSION="GLIB_VERSION_2_56"
-PKG_CHECK_MODULES(glib, [gio-2.0 >= 2.56 gio-unix-2.0])
+GLIB_API_VERSION="GLIB_VERSION_2_68"
+PKG_CHECK_MODULES(glib, [gio-2.0 >= 2.68 gio-unix-2.0])
 glib_CFLAGS="${glib_CFLAGS} -DGLIB_VERSION_MIN_REQUIRED=$GLIB_API_VERSION"
 glib_CFLAGS="${glib_CFLAGS} -DGLIB_VERSION_MAX_ALLOWED=$GLIB_API_VERSION"
 
@@ -108,17 +73,6 @@ PKG_CHECK_MODULES(libsystemd, [libsystemd >= 235])
 PKG_CHECK_MODULES(json_glib, [json-glib-1.0 >= 1.4])
 PKG_CHECK_MODULES(gnutls, [gnutls >= 3.6.0])
 PKG_CHECK_MODULES(krb5, [krb5-gssapi >= 1.11 krb5 >= 1.11])
-if test "$enable_polkit" != "no"; then
-  PKG_CHECK_MODULES(polkit, [polkit-agent-1 >= 0.105])
-fi
-if test "$enable_ssh" != "no"; then
-  PKG_CHECK_MODULES(libssh, [libssh >= 0.8.5])
-  old_CFLAGS=$CFLAGS; CFLAGS=$libssh_CFLAGS
-  old_LIBS=$LIBS; LIBS=$libssh_LIBS
-  AC_CHECK_FUNCS(ssh_userauth_publickey_auto_get_current_identity)
-  CFLAGS=$old_CFLAGS
-  LIBS=$old_LIBS
-fi
 
 # pam
 AC_CHECK_HEADER([security/pam_appl.h], ,
@@ -143,42 +97,6 @@ AC_CHECK_LIB(crypt, crypt_r, [ true ],
   [AC_MSG_ERROR([Couldn't find crypt library. Try installing glibc-devel])]
 )
 COCKPIT_WS_LIBS="$COCKPIT_WS_LIBS -lcrypt"
-
-# pcp
-AC_MSG_CHECKING([whether to build with PCP])
-AC_ARG_ENABLE(pcp, AS_HELP_STRING([--disable-pcp], [Disable usage of PCP]))
-
-if test "$enable_pcp" = "no"; then
-  AC_MSG_RESULT($enable_pcp)
-
-else
-  if test "$enable_pcp" = ""; then
-    disable_msg="(perhaps --disable-pcp)"
-  fi
-
-  enable_pcp="yes"
-  AC_MSG_RESULT($enable_pcp)
-
-  AC_CHECK_HEADER([pcp/pmapi.h], ,
-    [AC_MSG_ERROR([Couldn't find pcp headers $disable_msg])]
-  )
-  AC_CHECK_HEADERS([pcp/import.h pcp/pmda.h], ,
-    [AC_MSG_ERROR([Couldn't find pcp headers $disable_msg])],
-    [#include <pcp/pmapi.h>]
-  )
-  AC_CHECK_LIB(pcp, pmNewContext, [ true ],
-    [AC_MSG_ERROR([Couldn't find pcp library $disable_msg])]
-  )
-  AC_CHECK_LIB(pcp_pmda, pmdaCacheLookup, [ true ],
-    [AC_MSG_ERROR([Couldn't find pcp_pmda library $disable_msg])]
-  )
-  AC_CHECK_LIB(pcp_import, pmiStart, [ true ],
-    [AC_MSG_ERROR([Couldn't find pcp_import library $disable_msg])]
-  )
-  COCKPIT_PCP_LIBS="$COCKPIT_PCP_LIBS -lpcp"
-fi
-
-AM_CONDITIONAL([ENABLE_PCP], [test "$enable_pcp" = "yes"])
 
 # systemd
 AC_ARG_WITH([systemdunitdir], [AS_HELP_STRING([--with-systemdunitdir=DIR],
@@ -230,62 +148,6 @@ fi
 AM_CONDITIONAL(WITH_ASAN, test "$enable_asan" = "yes")
 AC_MSG_RESULT($asan_status)
 
-# User and group for running cockpit web server (cockpit-tls or -ws in customized setups)
-
-AC_ARG_WITH(cockpit_user,
-	    AS_HELP_STRING([--with-cockpit-user=<user>],
-			   [User for running cockpit (root)]
-                          )
-           )
-AC_ARG_WITH(cockpit_group,
-	    AS_HELP_STRING([--with-cockpit-group=<group>],
-			   [Group for running cockpit]
-                          )
-           )
-if test -z "$with_cockpit_user"; then
-    COCKPIT_USER=root
-    COCKPIT_GROUP=
-else
-    COCKPIT_USER=$with_cockpit_user
-    if test -z "$with_cockpit_group"; then
-        COCKPIT_GROUP=$with_cockpit_user
-    else
-	COCKPIT_GROUP=$with_cockpit_group
-    fi
-fi
-
-AC_SUBST(COCKPIT_USER)
-AC_SUBST(COCKPIT_GROUP)
-
-# User for running cockpit-ws instances from cockpit-tls
-
-AC_ARG_WITH(cockpit_ws_instance_user,
-	    AS_HELP_STRING([--with-cockpit-ws-instance-user=<user>],
-			   [User for running cockpit-ws instances from cockpit-tls (root)]
-                          )
-           )
-AC_ARG_WITH(cockpit_ws_instance_group,
-	    AS_HELP_STRING([--with-cockpit-ws-instance-group=<group>],
-			   [Group for running cockpit-ws instances from cockpit-tls]
-                          )
-           )
-if test -z "$with_cockpit_ws_instance_user"; then
-    if test "$COCKPIT_USER" != "root"; then
-        AC_MSG_ERROR([--with-cockpit-ws-instance-user is required when setting --with-cockpit-user])
-    fi
-    COCKPIT_WSINSTANCE_USER=root
-else
-    COCKPIT_WSINSTANCE_USER=$with_cockpit_ws_instance_user
-    if test -z "$with_cockpit_ws_instance_group"; then
-        COCKPIT_WSINSTANCE_GROUP=$with_cockpit_ws_instance_user
-    else
-        COCKPIT_WSINSTANCE_GROUP=$with_cockpit_ws_instance_group
-    fi
-fi
-
-AC_SUBST(COCKPIT_WSINSTANCE_USER)
-AC_SUBST(COCKPIT_WSINSTANCE_GROUP)
-
 # admin users group
 AC_ARG_WITH([admin-group],
             [AS_HELP_STRING([--with-admin-group=GROUP],
@@ -316,7 +178,7 @@ AC_ARG_WITH([default-session-path],
                  # "/bin" is symlinked to "/usr/bin".  We use the
                  # normal Arch PATH which omits "sbin" and "/bin" for
                  # those reasons.  Otherwise "pkexec" will find
-                 # cockpit-bridge in "/usr/sbin" and our rule wont
+                 # cockpit-bridge in "/usr/sbin" and our rule won't
                  # match.
                  default_session_path=/usr/local/sbin:/usr/local/bin:/usr/bin
               else
@@ -335,31 +197,44 @@ AC_ARG_ENABLE(doc,
              )
 
 if test "$enable_doc" = "no"; then
-        AC_MSG_RESULT($enable_doc)
+  AC_MSG_RESULT($enable_doc)
 
 else
-        if test "$enable_doc" = ""; then
-                disable_msg="(perhaps --disable-doc)"
-        fi
+  if test "$enable_doc" = ""; then
+    disable_msg="(perhaps --disable-doc)"
+  fi
 
-        enable_doc="yes"
-        AC_MSG_RESULT($enable_doc)
+  enable_doc="yes"
+  AC_MSG_RESULT($enable_doc)
 
-        AC_PATH_PROG([XSLTPROC], [xsltproc], [no])
-        if test "$XSLTPROC" = "no"; then
-                AC_MSG_ERROR([the xsltproc command was not found $disable_msg])
-        fi
+  has_asciidoctor="no"
+  AC_MSG_RESULT($has_asciidoctor)
 
-        AC_PATH_PROG([XMLTO], [xmlto], [no])
-        if test "$XMLTO" = "no"; then
-                AC_MSG_ERROR([the xmlto command was not found $disable_msg])
-        fi
+  AC_PATH_PROG([ASCIIDOCTOR], [asciidoctor], [no])
+  if test "$ASCIIDOCTOR" != "no"; then
+    has_asciidoctor="yes"
+    AC_SUBST(ASCIIDOCTOR)
+  fi
 
-        AC_SUBST(XSLTPROC)
-        AC_SUBST(XMLTO)
 fi
 
 AM_CONDITIONAL([ENABLE_DOC], [test "$enable_doc" = "yes"])
+AM_CONDITIONAL([HAS_ASCIIDOCTOR], [test "$has_asciidoctor" = "yes"])
+
+# Default for AllowMultiHost
+
+AC_MSG_CHECKING([for AllowMultiHost default])
+AC_ARG_ENABLE(multihost,
+              AS_HELP_STRING([--enable-multihost],
+                             [Set AllowMultiHost to true by default]),
+              [], [enable_multihost=no])
+AC_MSG_RESULT($enable_multihost)
+if test "$enable_multihost" = "no"; then
+   multihost_def=0
+else
+   multihost_def=1
+fi
+AC_DEFINE_UNQUOTED(ALLOW_MULTIHOST_DEFAULT, [$multihost_def], [default for AllowMultiHost configuration setting])
 
 # cockpit-client
 AC_MSG_CHECKING([whether to install cockpit-client])
@@ -368,10 +243,6 @@ AC_ARG_ENABLE([cockpit-client],
               [], [enable_cockpit_client=no])
 AC_MSG_RESULT($enable_cockpit_client)
 AM_CONDITIONAL([ENABLE_COCKPIT_CLIENT], [test "$enable_cockpit_client" = "yes"])
-
-if test "$enable_cockpit_client" = "yes" && test "$enable_old_bridge" = "yes"; then
-        AC_MSG_ERROR([--enable-cockpit-client conflicts with --enable-old-bridge])
-fi
 
 # Debug
 
@@ -448,7 +319,6 @@ AC_SUBST(PAM_LIBS)
 
 AC_CONFIG_FILES([
 Makefile
-doc/guide/version
 src/tls/cockpit-certificate-helper
 src/ws/cockpit-desktop
 ])
@@ -477,24 +347,19 @@ echo "
         cflags:                     ${CFLAGS}
         cppflags:                   ${CPPFLAGS}
 
-        cockpit-ws user:            ${COCKPIT_USER}
-        cockpit-ws group:           ${COCKPIT_GROUP}
-        cockpit-ws instance user:   ${COCKPIT_WSINSTANCE_USER}
-        cockpit-ws instance group:  ${COCKPIT_WSINSTANCE_GROUP}
         admin group:                ${admin_group}
         cockpit-session PATH:       ${default_session_path}
 
         Building docs:              ${enable_doc}
+        Has asciidoctor:            ${has_asciidoctor}
+
         Debug mode:                 ${debug_status}
         Node environment:           ${NODE_ENV}
         With coverage:              ${enable_coverage}
         With address sanitizer:     ${asan_status}
-        With PCP:                   ${enable_pcp}
-        With polkit:                ${enable_polkit}
         SELinux Policy:             ${enable_selinux_policy}
 
         cockpit-client:             ${enable_cockpit_client}
-        cockpit-ssh:                ${enable_ssh}
 
         ssh-add:                    ${SSH_ADD}
         ssh-agent:                  ${SSH_AGENT}

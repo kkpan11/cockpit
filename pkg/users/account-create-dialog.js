@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2020 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from 'cockpit';
@@ -115,7 +101,7 @@ function AccountCreateBody({ state, errors, change, shells }) {
                        isChecked={!locked} onChange={(_, checked) => change("locked", !checked)}
                        description={
                            <Checkbox id="accounts-create-force-password-change"
-                                     className="pf-v5-u-mb-xs"
+                                     className="pf-v6-u-mb-xs"
                                      label={_("Require password change on first login")}
                                      isChecked={change_passw_force} onChange={(_event, checked) => change("change_passw_force", checked)} />
                        } />
@@ -156,7 +142,7 @@ function validate_username(username, accounts) {
     }
 
     for (let k = 0; k < accounts.length; k++) {
-        if (accounts[k].name == username)
+        if (accounts[k].name === username)
             return _("This user name already exists");
     }
 
@@ -235,7 +221,7 @@ function suggest_username(realname) {
 
         for (let k = 0; k < str.length;) {
             if (!is_valid_char_name(str[k]))
-                str = str.substr(0, k) + str.substr(k + 1);
+                str = str.substring(0, k) + str.substring(k + 1);
             else
                 k++;
         }
@@ -286,7 +272,6 @@ export function account_create_dialog(accounts, min_uid, max_uid, shells) {
 
     function get_defaults() {
         return cockpit.spawn(["useradd", "-D"], { superuser: "require", err: "message" })
-                .catch(e => console.warn("Could not get useradd defaults: ", e.message))
                 .then(defaults => {
                     let shell = "";
                     let base_home_dir = null;
@@ -300,6 +285,7 @@ export function account_create_dialog(accounts, min_uid, max_uid, shells) {
                     change("shell", shell);
                     change("base_home_dir", base_home_dir);
                 })
+                .catch(e => console.warn("Could not get useradd defaults: ", e.message))
                 .finally(() => change("dialogLoading", false));
     }
 
@@ -307,38 +293,38 @@ export function account_create_dialog(accounts, min_uid, max_uid, shells) {
         state[field] = value;
         errors = { };
 
-        if (field == "user_name") {
+        if (field === "user_name") {
             user_name_dirty = true;
             if (!state.home_dir_dirty)
                 state.home_dir = get_default_home_dir(state.base_home_dir, value);
         }
 
-        if (!user_name_dirty && field == "real_name") {
+        if (!user_name_dirty && field === "real_name") {
             const suggested_username = suggest_username(state.real_name);
             state.user_name = suggested_username;
             if (!state.home_dir_dirty)
                 state.home_dir = get_default_home_dir(state.base_home_dir, suggested_username);
         }
 
-        if (state.password != old_password) {
+        if (state.password !== old_password) {
             state.confirm_weak = false;
             old_password = state.password;
         }
 
-        if (field == "change_passw_force")
+        if (field === "change_passw_force")
             state.locked = false;
 
         // Once password and confirm password are the same length, validate them after each keystroke
-        if (field == "password_confirm" && value.length >= state.password.length)
+        if (field === "password_confirm" && value.length >= state.password.length)
             state.password_confirm_dirty = true;
 
-        if (field == "locked")
+        if (field === "locked")
             state.change_passw_force = false;
 
-        if (field == "uid")
+        if (field === "uid")
             state.uid_exists = false;
 
-        if (field == "home_dir") {
+        if (field === "home_dir") {
             state.home_dir_dirty = true;
             state.home_dir_exists = false;
             state.home_dir_is_file = false;

@@ -1,19 +1,7 @@
-# This file is part of Cockpit.
 #
 # Copyright (C) 2022 Red Hat, Inc.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 
 # Missing stuff compared to the C bridge that we should probably add:
 #
@@ -117,7 +105,7 @@ class InterfaceCache:
         self.cache = {}
         self.old = set()  # Interfaces already returned by get_interface_if_new
 
-    def inject(self, interfaces):
+    def inject(self, interfaces) -> None:
         self.cache.update(interfaces)
 
     async def introspect_path(self, bus, destination, object_path):
@@ -184,7 +172,7 @@ class DBusChannel(Channel):
                 self.send_json(owner=owner)
 
         def handler(message):
-            name, old, new = message.get_body()
+            _name, _old, new = message.get_body()
             send_owner(owner=new if new != "" else None)
         self.add_signal_handler(handler,
                                 sender='org.freedesktop.DBus',
@@ -255,7 +243,7 @@ class DBusChannel(Channel):
         self.watch_processing_lock = asyncio.Lock()
 
         if self.name is not None:
-            async def get_ready():
+            async def get_ready() -> None:
                 async with self.watch_processing_lock:
                     await self.setup_name_owner_tracking()
                     if self.owner:
@@ -308,7 +296,7 @@ class DBusChannel(Channel):
 
         timeout = message.get('timeout')
         if timeout is not None:
-            # sd_bus timeout is µs, cockpit API timeout is ms
+            # sd_bus timeout is μs, cockpit API timeout is ms
             timeout *= 1000
         else:
             # sd_bus has no "indefinite" timeout, so use MAX_UINT64
@@ -350,7 +338,7 @@ class DBusChannel(Channel):
                 self.send_json(
                     reply=[reply.get_body()], id=cookie,
                     flags="<" if flags is not None else None,
-                    type=reply.get_signature(True))  # noqa: FBT003
+                    type=reply.get_signature(True))  # ruff: ignore[boolean-positional-value-in-call]
         except BusError as error:
             # actually, should send the fields from the message body
             self.send_json(error=[error.name, [error.message]], id=cookie)
@@ -399,7 +387,7 @@ class DBusChannel(Channel):
                 (path, interfaces) = message.get_body()
                 logger.debug('interfaces removed %s %s', path, interfaces)
                 async with self.watch_processing_lock:
-                    notify = {path: {name: None for name in interfaces}}
+                    notify = {path: dict.fromkeys(interfaces)}
                     self.send_json(notify=notify)
 
         self.add_async_signal_handler(handler,
@@ -432,7 +420,7 @@ class DBusChannel(Channel):
                                                                   'ss', name, inv)
                     except BusError as exc:
                         logger.debug('failed to fetch property %s.%s on %s %s: %s',
-                                     name, inv, self.name, path, str(exc))
+                                     name, inv, self.name, path, exc)
                         continue
                     props[inv] = reply
                 notify = {}

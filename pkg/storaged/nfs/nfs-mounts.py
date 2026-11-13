@@ -1,4 +1,5 @@
 #! /usr/bin/python3
+# SPDX-License-Identifier: LGPL-2.1-or-later
 
 # nfs-mounts   --  Monitor and manage NFS mounts
 #
@@ -36,11 +37,11 @@ class Watcher:
 
 
 def field_escape(field):
-    return field.replace("\\", "\\134").replace(" ", "\\040").replace("\t", "\\011")
+    return field.replace("\\", r"\134").replace(" ", r"\040").replace("\t", r"\011")
 
 
 def field_unescape(field):
-    return re.sub("\\\\([0-7]{1,3})", lambda m: chr(int(m.group(1), 8)), field)
+    return re.sub(r"\\([0-7]{1,3})", lambda m: chr(int(m.group(1), 8)), field)
 
 
 def parse_tab(name):
@@ -50,7 +51,7 @@ def parse_tab(name):
             sline = line.strip()
             if sline == "" or sline[0] == "#":
                 continue
-            fields = list(map(field_unescape, re.split("[ \t]+", sline)))
+            fields = list(map(field_unescape, re.split(r"[ \t]+", sline)))
             if len(fields) > 2 and ":" in fields[0] and fields[2].startswith("nfs"):
                 entries.append(fields)
     return entries
@@ -75,7 +76,7 @@ def modify_tab(name, modify):
         if sline == "" or sline[0] == "#":
             new_lines.append(line)
         else:
-            fields = list(map(field_unescape, re.split("[ \t]+", sline)))
+            fields = list(map(field_unescape, re.split(r"[ \t]+", sline)))
             if len(fields) > 0 and ":" in fields[0]:
                 new_fields = modify(fields)
                 if new_fields:
@@ -139,16 +140,16 @@ def monitor():
     process_fstab()
     report()
     fstab_watcher = Watcher("/etc/fstab")
-    mtab_file = open("/proc/self/mounts", "r")
-    while True:
-        (r, w, x) = select.select([fstab_watcher.inotify.fd], [], [mtab_file])
-        if mtab_file in x:
-            process_mtab()
-            report()
-        if fstab_watcher.inotify.fd in r:
-            fstab_watcher.process()
-            process_fstab()
-            report()
+    with open("/proc/self/mounts", "r") as mtab_file:
+        while True:
+            r, _w, x = select.select([fstab_watcher.inotify.fd], [], [mtab_file])
+            if mtab_file in x:
+                process_mtab()
+                report()
+            if fstab_watcher.inotify.fd in r:
+                fstab_watcher.process()
+                process_fstab()
+                report()
 
 
 def mkdir_if_necessary(path):

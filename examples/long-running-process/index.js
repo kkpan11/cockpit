@@ -3,7 +3,7 @@
 import { LongRunningProcess, ProcessState } from './long-running-process.js';
 
 // DOM objects
-let state, command, run_button, output;
+let state, command, runArgs, run_button, output;
 
 // default shell command for the long-running process to run
 const default_command = "date; for i in `seq 30`; do echo $i; sleep 1; done";
@@ -40,8 +40,8 @@ function update(process) {
         showJournal(process.serviceName, "--since=@" + Math.floor(process.startTimestamp / 1000000));
         break;
     case ProcessState.FAILED:
-        run_button.setAttribute("disabled", "");
-        run_button.textContent = "Start";
+        run_button.removeAttribute("disabled");
+        run_button.textContent = "Reset";
         // Show the whole journal of this boot
         showJournal(process.serviceName, "--boot");
         break;
@@ -54,6 +54,7 @@ function update(process) {
 cockpit.transport.wait(() => {
     state = document.getElementById("state");
     command = document.getElementById("command");
+    runArgs = document.getElementById("sysrun-args");
     run_button = document.getElementById("run");
     output = document.getElementById("output");
 
@@ -74,11 +75,16 @@ cockpit.transport.wait(() => {
     run_button.addEventListener("click", () => {
         if (process.state === ProcessState.RUNNING)
             process.terminate();
-        else
-            process.run(["/bin/sh", "-ec", command.value])
+        else if (process.state === ProcessState.FAILED)
+            process.reset();
+        else {
+            // Split string and filter out empty array values
+            const runArgsList = runArgs.value.split(" ").filter(i => i);
+            process.run(["/bin/sh", "-ec", command.value], {}, runArgsList)
                     .catch(ex => {
                         state.textContent = "Error: " + ex.toString();
                         run_button.setAttribute("disabled", "");
                     });
+        }
     });
 });

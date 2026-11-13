@@ -1,20 +1,6 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2023 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 import cockpit from "cockpit";
@@ -27,7 +13,7 @@ import { DescriptionList, DescriptionListDescription, DescriptionListGroup, Desc
 
 import { block_short_name, get_active_usage, teardown_active_usage, fmt_size, decode_filename, reload_systemd } from "../utils.js";
 import {
-    dialog_open, SizeSlider, BlockingMessage, TeardownMessage, init_active_usage_processes
+    dialog_open, SizeSlider, BlockingMessage, TeardownMessage, init_teardown_usage
 } from "../dialog.jsx";
 import { StorageButton, StorageOnOff } from "../storage-controls.jsx";
 
@@ -68,7 +54,7 @@ export function make_legacy_vdo_page(parent, vdo, backing_block, next_card) {
                     }
                 },
                 Inits: [
-                    init_active_usage_processes(client, usage)
+                    init_teardown_usage(client, usage)
                 ]
             });
         } else {
@@ -130,7 +116,7 @@ export function make_legacy_vdo_page(parent, vdo, backing_block, next_card) {
                 }
             },
             Inits: [
-                init_active_usage_processes(client, usage)
+                init_teardown_usage(client, usage)
             ]
         });
     }
@@ -184,7 +170,7 @@ class VDODetails extends React.Component {
         }
 
         if (path)
-            this.poll_process = cockpit.spawn([client.legacy_vdo_overlay.python, "--", "-", path], { superuser: true })
+            this.poll_process = cockpit.spawn([client.legacy_vdo_overlay.python, "--", "-", path], { superuser: "require" })
                     .input(inotify_py + vdo_monitor_py)
                     .stream((data) => {
                         buf += data;
@@ -221,7 +207,7 @@ class VDODetails extends React.Component {
 
         if (vdo.broken) {
             return (
-                <Card>
+                <Card isPlain>
                     <Alert variant='danger' isInline
                            title={_("The creation of this VDO device did not finish and the device can't be used.")}
                            actionClose={<StorageButton onClick={force_delete}>
@@ -260,10 +246,10 @@ class VDODetails extends React.Component {
                     action: function (vals) {
                         if (vals.lsize > vdo.logical_size)
                             return vdo.grow_logical(vals.lsize).then(() => {
-                                if (block && block.IdUsage == "filesystem")
+                                if (block && block.IdUsage === "filesystem")
                                     return cockpit.spawn(["fsadm", "resize",
                                         decode_filename(block.Device)],
-                                                         { superuser: true, err: "message" });
+                                                         { superuser: "require", err: "message" });
                             });
                     }
                 }
@@ -271,7 +257,7 @@ class VDODetails extends React.Component {
         }
 
         function fmt_perc(num) {
-            if (num || num == 0)
+            if (num || num === 0)
                 return num + "%";
             else
                 return "--";

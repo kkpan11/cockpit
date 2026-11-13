@@ -1,27 +1,11 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2014 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #include "config.h"
 
 #include "cockpitconf.h"
-
-#include "cockpitsystem.h"
 
 #include "testlib/cockpittest.h"
 
@@ -33,7 +17,7 @@ extern const gchar *cockpit_config_file;
 static void
 test_get_strings (void)
 {
-  cockpit_config_file = SRCDIR "/src/ws/mock-config/cockpit/cockpit.conf";
+  cockpit_config_file = SRCDIR "/src/common/mock-config/cockpit/cockpit.conf";
 
   g_assert_null (cockpit_conf_string ("bad-section", "value"));
   g_assert_null (cockpit_conf_string ("Section1", "value"));
@@ -52,7 +36,7 @@ test_get_strings (void)
 static void
 test_get_bool (void)
 {
-  cockpit_config_file = SRCDIR "/src/ws/mock-config/cockpit/cockpit.conf";
+  cockpit_config_file = SRCDIR "/src/common/mock-config/cockpit/cockpit.conf";
 
   g_assert_true (cockpit_conf_bool ("bad-section", "value", TRUE));
   g_assert_false (cockpit_conf_bool ("bad-section", "value", FALSE));
@@ -71,7 +55,7 @@ test_get_bool (void)
 static void
 test_get_uint (void)
 {
-  cockpit_config_file = SRCDIR "/src/ws/mock-config/cockpit/cockpit.conf";
+  cockpit_config_file = SRCDIR "/src/common/mock-config/cockpit/cockpit.conf";
 
   g_assert_cmpuint (cockpit_conf_uint ("bad-section", "value", 1, 999, 0), ==,  1);
   g_assert_cmpuint (cockpit_conf_uint ("Section2", "missing", 1, 999, 0), ==,  1);
@@ -89,7 +73,7 @@ test_get_strvs (void)
 {
   const gchar * const *list = NULL;
 
-  cockpit_config_file = SRCDIR "/src/ws/mock-config/cockpit/cockpit.conf";
+  cockpit_config_file = SRCDIR "/src/common/mock-config/cockpit/cockpit.conf";
 
   g_assert_null (cockpit_conf_strv ("bad-section", "value", ' '));
   g_assert_null (cockpit_conf_strv ("Section1", "value", ' '));
@@ -135,11 +119,20 @@ test_get_strvs (void)
 static void
 test_load_dir (void)
 {
-  cockpit_setenv_check("XDG_CONFIG_DIRS", "/does-not-exist:" SRCDIR "/src/ws/mock-config", TRUE);
+  const char * const *dirs;
+
+  cockpit_test_setenv ("XDG_CONFIG_DIRS", "/does-not-exist:" SRCDIR "/src/common/mock-config");
   cockpit_config_file = "cockpit.conf";
 
   g_assert_cmpstr (cockpit_conf_string ("Section2", "value1"), ==, "string");
-  g_assert_cmpstr (cockpit_conf_get_dirs ()[1], ==, SRCDIR "/src/ws/mock-config");
+
+  dirs = cockpit_conf_get_dirs ();
+  /* PACKAGE_SYSCONF_DIR is always first, even when XDG_CONFIG_DIRS is set */
+  g_assert_cmpstr (dirs[0], ==, PACKAGE_SYSCONF_DIR);
+  g_assert_cmpstr (dirs[1], ==, "/does-not-exist");
+  g_assert_cmpstr (dirs[2], ==, SRCDIR "/src/common/mock-config");
+  g_assert_null (dirs[3]);
+
   cockpit_conf_cleanup ();
 }
 

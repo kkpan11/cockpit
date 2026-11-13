@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: LGPL-2.1-or-later
 import gzip
 import json
 import os
@@ -51,11 +52,11 @@ class Watcher:
 
         def handler(mask, name):
             if ((mask & IN_CREATE or mask & IN_MOVED_TO) and
-                    cur_wait and name == cur_wait):
+                    cur_wait_name and name == cur_wait_name):
                 reset()
             elif mask & (IN_DELETE_SELF | IN_MOVE_SELF):
                 reset()
-            elif not cur_wait and len(name) > 0:
+            elif not cur_wait_name and len(name) > 0:
                 if mask & (IN_CLOSE_WRITE | IN_MOVED_TO | IN_DELETE | IN_MOVED_FROM):
                     callback(os.path.join(path, name))
 
@@ -64,14 +65,21 @@ class Watcher:
             self.watch_directory(path, callback)
 
         cur_path = path
-        cur_wait = None
+        cur_wait_path = None
+        cur_wait_name = None
         while not os.path.exists(cur_path):
-            cur_wait = os.path.basename(cur_path)
+            cur_wait_path = cur_path
+            cur_wait_name = os.path.basename(cur_wait_path)
             cur_path = os.path.dirname(cur_path)
 
         self.__add_watch(cur_path, events, handler)
 
-        if not cur_wait:
+        if cur_wait_path and os.path.exists(cur_wait_path):
+            # Directory was created between our check and the watch setup
+            reset()
+            return
+
+        if not cur_wait_name:
             for f in os.listdir(cur_path):
                 callback(os.path.join(cur_path, f))
 
@@ -91,10 +99,24 @@ def attr_lang(elt):
 
 
 def element(xml, tag):
-    if lang:
-        for elt in xml.iter(tag):
-            if attr_lang(elt) == lang:
-                return elt
+    """Get an XML element from the DOM tag
+
+    Retrieves the element with the matching language or by best effort
+    - If element has the selected language (or language selection is none), return it
+    - If the selected language can't be found, use empty language as a fallback
+    - If no elements are found with empty language attribute, use first element found
+    """
+
+    empty_lang = None
+    for elt in xml.iter(tag):
+        language = attr_lang(elt)
+        if language == lang:
+            return elt
+        elif language is None and empty_lang is None:
+            empty_lang = elt
+
+    if empty_lang is not None:
+        return empty_lang
     return xml.find(tag)
 
 
@@ -163,6 +185,17 @@ def convert_local_icon(xml):
     return None
 
 
+def convert_stock_icon(xml):
+    icon = xml.text
+
+    def try_size(size: str, extension: str):
+        path = os.path.join("/usr/share/icons/hicolor", size, "apps", f"{icon}.{extension}")
+        return path if os.path.exists(path) else None
+
+    return (try_size("64x64", "svg") or try_size("64x64", "png") or
+            try_size("128x128", "svg") or try_size("128x128", "png"))
+
+
 def find_and_convert_icon(directory, origin, xml):
     if xml is None:
         return None
@@ -177,6 +210,8 @@ def find_and_convert_icon(directory, origin, xml):
             return convert_remote_icon(icon)
         elif icon.attrib['type'] == 'local':
             return convert_local_icon(icon)
+        elif icon.attrib['type'] == 'stock':
+            return convert_stock_icon(icon)
 
     return None
 

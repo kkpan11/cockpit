@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 import cockpit from "cockpit";
 
 /* SERVICE MANAGEMENT API
@@ -106,8 +107,8 @@ function with_systemd_manager(done) {
         wait_valid(systemd_manager, () => {
             systemd_manager.Subscribe()
                     .catch(error => {
-                        if (error.name != "org.freedesktop.systemd1.AlreadySubscribed" &&
-                        error.name != "org.freedesktop.DBus.Error.FileExists")
+                        if (error.name !== "org.freedesktop.systemd1.AlreadySubscribed" &&
+                        error.name !== "org.freedesktop.DBus.Error.FileExists")
                             console.warn("Subscribing to systemd signals failed", error);
                     });
         });
@@ -136,34 +137,35 @@ export function proxy(name, kind) {
 
     cockpit.event_target(self);
 
-    let unit, details;
+    let unit;
+    let details;
     let wait_promise_resolve;
     const wait_promise = new Promise(resolve => { wait_promise_resolve = resolve });
 
-    if (name.indexOf(".") == -1)
+    if (name.indexOf(".") === -1)
         name = name + ".service";
     if (kind === undefined)
         kind = "Service";
 
     function update_from_unit() {
-        self.exists = (unit.LoadState != "not-found" || unit.ActiveState != "inactive");
+        self.exists = (unit.LoadState !== "not-found" || unit.ActiveState !== "inactive");
 
-        if (unit.ActiveState == "activating")
+        if (unit.ActiveState === "activating")
             self.state = "starting";
-        else if (unit.ActiveState == "deactivating")
+        else if (unit.ActiveState === "deactivating")
             self.state = "stopping";
-        else if (unit.ActiveState == "active" || unit.ActiveState == "reloading")
+        else if (unit.ActiveState === "active" || unit.ActiveState === "reloading")
             self.state = "running";
-        else if (unit.ActiveState == "failed")
+        else if (unit.ActiveState === "failed")
             self.state = "failed";
-        else if (unit.ActiveState == "inactive" && self.exists)
+        else if (unit.ActiveState === "inactive" && self.exists)
             self.state = "stopped";
         else
             self.state = undefined;
 
-        if (unit.UnitFileState == "enabled" || unit.UnitFileState == "linked")
+        if (unit.UnitFileState === "enabled" || unit.UnitFileState === "linked")
             self.enabled = true;
-        else if (unit.UnitFileState == "disabled" || unit.UnitFileState == "masked")
+        else if (unit.UnitFileState === "disabled" || unit.UnitFileState === "masked")
             self.enabled = false;
         else
             self.enabled = undefined;
@@ -219,11 +221,11 @@ export function proxy(name, kind) {
     }
 
     function on_job_new_removed_refresh(event, number, path, unit_id, result) {
-        if (unit_id == name)
+        if (unit_id === name)
             refresh();
     }
 
-    /* HACK - https://bugs.freedesktop.org/show_bug.cgi?id=69575
+    /* HACK - https://github.com/systemd/systemd/issues/570#issuecomment-125334529
      *
      * We need to explicitly get new property values when getting
      * a UnitNew signal since UnitNew doesn't carry them.
@@ -276,7 +278,7 @@ export function proxy(name, kind) {
             const subscription = dbus.subscribe(
                 { interface: "org.freedesktop.systemd1.Manager", member: "JobRemoved" },
                 (_path, _iface, _signal, [_number, path, _unit_id, result]) => {
-                    if (path == pending_job_path) {
+                    if (path === pending_job_path) {
                         subscription.remove();
                         dbus.close();
                         refresh().then(() => {
@@ -290,9 +292,9 @@ export function proxy(name, kind) {
 
             call_manager(dbus, method, args)
                     .then(([path]) => { pending_job_path = path })
-                    .catch(() => {
+                    .catch(ex => {
                         dbus.close();
-                        reject();
+                        reject(ex);
                     });
         });
     }

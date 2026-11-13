@@ -1,23 +1,11 @@
-# This file is part of Cockpit.
 #
 # Copyright (C) 2023 Red Hat, Inc.
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 
 import logging
 import lzma
-from typing import List, Sequence, Tuple
+from typing import Sequence, Tuple
 
 from cockpit._vendor import ferny
 from cockpit._vendor.bei import beipack
@@ -58,7 +46,7 @@ class BridgeBeibootHelper(ferny.InteractionHandler):
         self.payload = payload
         self.steps = (('boot_xz', (filename, len(payload), tuple(args))),)
 
-    async def run_command(self, command: str, args: Tuple, fds: List[int], stderr: str) -> None:
+    async def run_command(self, command: str, args: 'tuple[object, ...]', fds: 'list[int]', stderr: str) -> None:
         logger.debug('Got ferny request %s %s %s %s', command, args, fds, stderr)
         if command == 'beiboot.provide':
             try:

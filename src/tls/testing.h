@@ -1,23 +1,12 @@
 /*
- * This file is part of Cockpit.
- *
  * Copyright (C) 2019 Red Hat, Inc.
- *
- * Cockpit is free software; you can redistribute it and/or modify it
- * under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation; either version 2.1 of the License, or
- * (at your option) any later version.
- *
- * Cockpit is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with Cockpit; If not, see <http://www.gnu.org/licenses/>.
+ * SPDX-License-Identifier: LGPL-2.1-or-later
  */
 
 #pragma once
 
-#define CLIENT_CERT_FINGERPRINT "64b541b74b5c45cac5842677ff22619c0bed9b2bf8e91f65b1379141df0cba17"
-#define ALTERNATE_FINGERPRINT "8206a4f89a4ed1e734190a13c0b6a403b01ace0599f4bcb291884d000a5c9ec7"
+/* Fingerprints for src/tls/ca/. Updated by generate.sh. */
+
+#define CLIENT_CERT_FINGERPRINT "04dc21d2a71e587c2e3ec37c05733058deac3c40a5fe50efd5974b139a0036d8"
+#define CLIENT_EXPIRED_FINGERPRINT "ca9a10b154c599bcd12a8e7a8b0bdec4a0fe8e823e66a0b5f9cba83354f3f907"
+#define ALTERNATE_FINGERPRINT "63ce8ee22c3c050f1f234b5ac7e96789d95cdd4fb97aa8f8acd0916b8cef2e24"

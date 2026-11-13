@@ -14,130 +14,55 @@ if [ -d .git ]; then
     ./tools/node-modules checkout
 fi
 
-. /run/host/usr/lib/os-release
-export TEST_OS="${ID}-${VERSION_ID/./-}"
-
-if [ "${TEST_OS#centos-}" != "$TEST_OS" ]; then
-    TEST_OS="${TEST_OS}-stream"
-fi
-
 TEST_ALLOW_JOURNAL_MESSAGES=""
 
 # HACK: CI hits this selinux denial. Unrelated to our tests.
 TEST_ALLOW_JOURNAL_MESSAGES=".*Permission denied:.*/var/cache/app-info/xmls.*"
-
-# HACK: occasional failure, annoyingly hard to debug
-if [ "${TEST_OS#centos-8}" != "$TEST_OS" ]; then
-    TEST_ALLOW_JOURNAL_MESSAGES="${TEST_ALLOW_JOURNAL_MESSAGES},couldn't create runtime dir: /run/user/1001: Permission denied"
-fi
-
-# HACK: https://github.com/systemd/systemd/issues/24150
-if [ "$ID" = "fedora" ]; then
-       TEST_ALLOW_JOURNAL_MESSAGES="${TEST_ALLOW_JOURNAL_MESSAGES},Journal file /var/log/journal/*/user-1000@*.journal corrupted, ignoring file .*"
-fi
 
 export TEST_ALLOW_JOURNAL_MESSAGES
 
 # Chromium sometimes gets OOM killed on testing farm
 export TEST_BROWSER=firefox
 
-# We only have one VM and tests should take at most one hour. So run those tests which exercise external API
-# (and thus are useful for reverse dependency testing and gating), and exclude those which test cockpit-internal
-# functionality to upstream CI. We also need to leave out some which make too strict assumptions about the testbed.
-TESTS=""
-EXCLUDES=""
-RC=0
-
 # make it easy to check in logs
 echo "TEST_ALLOW_JOURNAL_MESSAGES: ${TEST_ALLOW_JOURNAL_MESSAGES:-}"
 echo "TEST_AUDIT_NO_SELINUX: ${TEST_AUDIT_NO_SELINUX:-}"
 
-if [ "$PLAN" = "optional" ]; then
-    TESTS="$TESTS
-           TestAutoUpdates
-           TestUpdates
-           TestStorage
-           "
+EXCLUDES=""
 
-    # Testing Farm machines often have pending restarts/reboot
-    EXCLUDES="$EXCLUDES TestUpdates.testBasic TestUpdates.testFailServiceRestart TestUpdates.testKpatch"
-
-    # FIXME: creation dialog hangs forever
-    EXCLUDES="$EXCLUDES TestStorageISCSI.testISCSI"
-
-    # These don't test more external APIs
-    EXCLUDES="$EXCLUDES
-              TestAutoUpdates.testBasic
-              TestAutoUpdates.testPrivilegeChange
-
-              TestStorageAnaconda.testBasic
-
-              TestStorageBtrfs.testNothingMounted
-
-              TestStorageFormat.testAtBoot
-              TestStorageFormat.testFormatCancel
-              TestStorageFormat.testFormatTooSmall
-              TestStorageFormat.testFormatTypes
-
-              TestStorageHidden.testHiddenRaid
-              TestStorageHidden.testHiddenSnap
-              TestStorageHiddenLuks.test
-
-              TestStorageMounting.testAtBoot
-              TestStorageMounting.testBadOption
-              TestStorageMounting.testFirstMount
-              TestStorageMounting.testMounting
-              TestStorageMounting.testMountingHelp
-              TestStorageMounting.testNeverAuto
-              TestStorageMountingLUKS.testEncryptedMountingHelp
-              TestStorageMountingLUKS.testDuplicateMountPoints
-              TestStorageMountingLUKS.testNeverAuto
-
-              TestStorageIgnored.testIgnored
-              TestStoragePackagesNFS.testNfsMissingPackages
-              TestStoragePartitions.testSizeSlider
-              TestStorageStratis.testAlerts
-              TestStorageUnused.testUnused
-
-              TestUpdates.testUnprivileged
-              TestUpdates.testPackageKitCrash
-              TestUpdates.testNoPackageKit
-              TestUpdates.testInfoTruncation
-              "
-
-    # RHEL test machines have a lot of junk mounted on /mnt
-    if [ "${TEST_OS#rhel-}" != "$TEST_OS" ]; then
-        EXCLUDES="$EXCLUDES
-            TestStorageNfs.testNfsBusy
-            TestStorageNfs.testNfsClient
-            TestStorageNfs.testNfsMountWithoutDiscovery
-            "
-    fi
-fi
-
-if [ "$PLAN" = "basic" ]; then
+# We only have one VM per plan and tests should take at most one hour. So run those tests which exercise external API
+# (and thus are useful for reverse dependency testing and gating), and exclude those which test cockpit-internal
+# functionality to upstream CI. We also need to leave out some which make too strict assumptions about the testbed.
+if [ "$PLAN" = "main" ]; then
     # Don't run TestPages, TestPackages, and TestTerminal at all -- not testing external APIs
-    TESTS="$TESTS
-        TestAccounts
-        TestKdump
-        TestJournal
-        TestLogin
-        TestServices
-        TestSOS
-        TestSystemInfo
-        TestTuned
-        "
+    TESTS="TestAutoUpdates
+           TestAccounts
+           TestBonding
+           TestBridge
+           TestFirewall
+           TestJournal
+           TestKdump
+           TestLogin
+           TestNetworking
+           TestSOS
+           TestServices
+           TestSystemInfo
+           TestTeam
+           TestTuned
+           TestUpdates
+           "
 
     # PCI devices list is not predictable
     EXCLUDES="$EXCLUDES TestSystemInfo.testHardwareInfo"
 
-    if [ "${TEST_OS#rhel-8}" != "$TEST_OS" ] || [ "${TEST_OS#centos-8}" != "$TEST_OS" ]; then
-        # no cockpit-tests package in RHEL 8
-        EXCLUDES="$EXCLUDES TestLogin.testSELinuxRestrictedUser"
+    # TODO: investigate failure
+    if [ "$TEST_OS" = "centos-10" ]; then
+        EXCLUDES="$EXCLUDES TestLogin.testClientCertAuthentication"
+    fi
 
-        # fails to start second browser, timing out on http://127.0.0.1:{cdp_port}/json/list
-        # impossible to debug without access to the infra
-        EXCLUDES="$EXCLUDES TestAccounts.testUserPasswords"
+    # TODO: our /usr/local/ bind mount isn't "visible" to systemd
+    if [ "${TEST_OS%bootc}" != "$TEST_OS" ]; then
+        EXCLUDES="$EXCLUDES TestServices.testTimer"
     fi
 
     # These don't test more external APIs
@@ -147,15 +72,36 @@ if [ "$PLAN" = "basic" ]; then
               TestAccounts.testRootLogin
               TestAccounts.testUnprivileged
 
+              TestAutoUpdates.testBasic
+              TestAutoUpdates.testPrivilegeChange
+
+              TestBonding.testActive
+              TestBonding.testAmbiguousMember
+              TestBonding.testNonDefaultSettings
+
+              TestFirewall.testAddCustomServices
+              TestFirewall.testNetworkingPage
+
               TestLogin.testConversation
               TestLogin.testExpired
               TestLogin.testFailingWebsocket
               TestLogin.testFailingWebsocketSafari
               TestLogin.testFailingWebsocketSafariNoCA
               TestLogin.testLogging
+              TestLogin.testNFSHomeDir
+              TestLogin.testSSH
               TestLogin.testRaw
               TestLogin.testServer
+              TestLogin.testSELinuxRestrictedUser
               TestLogin.testUnsupportedBrowser
+
+              TestNetworkingBasic.testIpHelper
+              TestNetworkingBasic.testNoService
+              TestNetworkingCheckpoints.testCheckpoint
+              TestNetworkingCheckpoints.testCheckpointSlowRollback
+              TestNetworkingCheckpoints.testCheckpointSessionStorageEventSuccess
+              TestNetworkingCheckpoints.testCheckpointSessionStorageEventRollback
+              TestNetworkingUnmanaged.testUnmanaged
 
               TestSOS.testWithUrlRoot
               TestSOS.testCancel
@@ -163,11 +109,9 @@ if [ "$PLAN" = "basic" ]; then
 
               TestSystemInfo.testInsightsStatus
               TestSystemInfo.testMotd
+              TestSystemInfo.testOverview
               TestSystemInfo.testShutdownStatus
 
-              TestJournal.testAbrtDelete
-              TestJournal.testAbrtReportNoReportd
-              TestJournal.testAbrtReportCancel
               TestJournal.testBinary
               TestJournal.testNoMessage
 
@@ -183,33 +127,113 @@ if [ "$PLAN" = "basic" ]; then
               TestServices.testResetFailed
               TestServices.testTransientUnits
               TestServices.testUnprivileged
+              TestServices.testQuadlets
+
+              TestUpdates.testUnprivileged
+              TestUpdates.testPackageKitCrash
+              TestUpdates.testNoPackageKit
+              TestUpdates.testInfoTruncation
+              "
+
+    # Testing Farm machines often have pending restarts/reboot
+    EXCLUDES="$EXCLUDES
+              TestUpdates.testBasic
+              TestUpdates.testBasicTZFullHour
+              TestUpdates.testBasicTZHalfHour
+              TestUpdates.testDnfRestart
+              TestUpdates.testFailServiceRestart
+              TestUpdates.testKpatch
+              "
+
+    # FIXME: TestingFarm will fix their auto-reboot ansible
+    # https://gitlab.com/testing-farm/profiles/-/merge_requests/92
+    EXCLUDES="$EXCLUDES
+              TestNetworkingWifi.testHidden
+              TestNetworkingWifi.testWifi
               "
 fi
 
-if [ "$PLAN" = "network" ]; then
-    TESTS="$TESTS
-        TestBonding
-        TestBridge
-        TestFirewall
-        TestNetworking
-        TestTeam
-        "
+if [ "$PLAN" = "storage-basic" ]; then
+    TESTS="TestStorageBasic
+           TestStorageBtrfs
+           TestStorageMdRaid
+           TestStorageMounting
+           TestStorageMountingLUKS
+           TestStorageMsDOS
+           TestStorageNfs
+           TestStoragePartitions
+           TestStorageRaid
+           TestStorageStratis
+           TestStorageUnrecognized
+           TestStorageUsed
+           TestStorageswap
+           "
 
     # These don't test more external APIs
     EXCLUDES="$EXCLUDES
-              TestBonding.testActive
-              TestBonding.testAmbiguousMember
-              TestBonding.testNonDefaultSettings
+              TestStorageAnaconda.testBasic
 
-              TestFirewall.testAddCustomServices
-              TestFirewall.testNetworkingPage
+              TestStorageBtrfs.testNothingMounted
 
-              TestNetworkingBasic.testIpHelper
-              TestNetworkingBasic.testNoService
-              TestNetworkingUnmanaged.testUnmanaged
+              TestStorageMounting.testAtBoot
+              TestStorageMounting.testBadOption
+              TestStorageMounting.testFirstMount
+              TestStorageMounting.testMounting
+              TestStorageMounting.testMountingHelp
+              TestStorageMounting.testNeverAuto
+              TestStorageMountingLUKS.testEncryptedMountingHelp
+              TestStorageMountingLUKS.testDuplicateMountPoints
+              TestStorageMountingLUKS.testNeverAuto
+
+              TestStoragePartitions.testSizeSlider
+              TestStorageStratis.testAlerts
               "
+
+    # RHEL test machines have a lot of junk mounted on /mnt
+    if [ "${TEST_OS#rhel-}" != "$TEST_OS" ]; then
+        EXCLUDES="$EXCLUDES
+            TestStorageNfs.testNfsBusy
+            TestStorageNfs.testNfsClient
+            TestStorageNfs.testNfsMountWithoutDiscovery
+            "
+    fi
+
+    if [ "$TEST_OS" = "centos-9-bootc" ]; then
+        # FIXME: pcp is installed, but not working on CentOS 9 (10 is fine)
+        # warn: PM_ERR_NOPMNS PMNS not accessible <pcp.pmapi.c_uint_Array_1 object at 0x...>
+        EXCLUDES="$EXCLUDES
+                  TestStorageswap.testBasic
+                  TestStorageswap.testEncrypted
+                  "
+    fi
 fi
 
+if [ "$PLAN" = "storage-extra" ]; then
+    TESTS="TestStorageAnaconda
+           TestStorageLuks
+           TestStorageMountingLUKS
+           TestStorageLvm
+           "
+
+    # These don't test more external APIs
+    EXCLUDES="$EXCLUDES
+              TestStorageAnaconda.testBasic
+              TestStorageAnaconda.testStratis
+
+              TestStorageMountingLUKS.testEncryptedMountingHelp
+              TestStorageMountingLUKS.testDuplicateMountPoints
+              TestStorageMountingLUKS.testNeverAuto
+
+              TestStorageLuks.testClevisTPM
+              "
+
+    if [ "$TEST_OS" = "centos-10-bootc" ]; then
+        # FIXME: targetcli fails with code 255 and no error message; needs investigation
+        EXCLUDES="$EXCLUDES
+                  TestStorageLvm2.testDegradation
+                  "
+    fi
+fi
 
 exclude_options=""
 for t in $EXCLUDES; do
@@ -217,6 +241,7 @@ for t in $EXCLUDES; do
 done
 
 GATEWAY="$(python3 -c 'import socket; print(socket.gethostbyname("_gateway"))')"
+RC=0
 ./test/common/run-tests \
     --test-dir test/verify \
     --nondestructive \

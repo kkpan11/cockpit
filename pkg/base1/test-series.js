@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: LGPL-2.1-or-later
 import cockpit from "cockpit";
 import QUnit from "qunit-tests";
 
@@ -480,7 +481,7 @@ QUnit.test("test", function (assert) {
 
         assert.equal(count, fetched.length, "fetched " + count);
 
-        if (count == 5) {
+        if (count === 5) {
             grid.close();
             done();
         }
